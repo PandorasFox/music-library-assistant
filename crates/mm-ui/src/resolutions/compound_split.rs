@@ -392,9 +392,7 @@ impl ModalButtons for CompoundSplitButton {
 
     fn protocol_binding(&self, ctx: &Self::Context) -> ProtocolBinding {
         let make_key = |tag_name: String, cluster_index: usize| -> DecisionKey {
-            if ctx.zone == Zone::Inbox {
-                DecisionKey::CompoundSplitInbox { tag_name, cluster_index }
-            } else if ctx.safe_mode {
+            if ctx.safe_mode {
                 DecisionKey::CompoundSplitSafe { tag_name, cluster_index }
             } else {
                 DecisionKey::CompoundSplitReview { tag_name, cluster_index }

@@ -10,9 +10,7 @@ mod packing_ops;
 use rusqlite::params;
 
 use crate::db::Database;
-use crate::meta::signals::data::MovedFileSignal;
 use crate::meta::signals::registry;
-use crate::meta::signals::store::CorpusSignalStore;
 
 use super::DbWriteOp;
 
@@ -99,41 +97,8 @@ where
 
 
 // ============================================================================
-// Inbox / Dirty / Library Operations
+// Dirty / Library Operations
 // ============================================================================
-
-/// Execute DropInboxFileState: cascade-drop all inbox state for an inode.
-///
-/// Called when DeriveInboxSignals detects an inode that was indexed as inbox
-/// but is no longer observed on disk. Cleans up:
-/// - inbox_tags rows
-/// - files table entry (zone='inbox' only)
-/// - Per-inode inbox signals: FileInInbox, InboxUnindexed, InboxHealthy, InboxCorpusMatch
-/// - MovedFile signal (inbox->X moves become disappear+reappear instead)
-///
-/// Does NOT touch audio_info (corpus may reference same inode after mv)
-/// or corpus signals (FileInCorpus, HealthyFile, etc.).
-fn execute_drop_inbox_file_state(db: &Database, inode: i64) -> anyhow::Result<()> {
-
-    let conn = db.conn();
-
-    // Delete inbox tags for this inode
-    conn.execute("DELETE FROM inbox_tags WHERE inode = ?1", params![inode])?;
-
-    // Delete inbox file entry (only zone='inbox', not corpus)
-    conn.execute(
-        "DELETE FROM files WHERE zone = 'inbox' AND inode = ?1",
-        params![inode],
-    )?;
-
-    // Clear per-inode inbox signals
-    registry::clear_inbox_signals(conn, inode);
-
-    // Clear MovedFile — inbox->X moves become disappear+reappear
-    let _ = MovedFileSignal::clear_by_inode(conn, inode);
-
-    Ok(())
-}
 
 /// Execute ClearDirtyInode: remove dirty flag after successful computation.
 fn execute_clear_dirty_inode(
@@ -495,12 +460,6 @@ pub(super) fn execute_signal_op(db: &Database, op: &DbWriteOp) {
         DbWriteOp::SetNeedsDiskFlush { path, value } => {
             with_retry("set_needs_disk_flush", path, || {
                 index_ops::execute_set_needs_disk_flush(db, path, *value)
-            });
-        }
-
-        DbWriteOp::DropInboxFileState { inode } => {
-            with_retry("drop_inbox_file_state", &inode.to_string(), || {
-                execute_drop_inbox_file_state(db, *inode)
             });
         }
 

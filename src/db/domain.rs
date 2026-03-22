@@ -118,7 +118,7 @@ macro_rules! impl_domain_query {
 
 use crate::meta::views::{
     DeployStatus, EditHistoryData, EditHistoryExportRow, ExternalMatchesData,
-    InboxOverviewData, InsightsData, MovedFileInfo, OobFile,
+    InsightsData, MovedFileInfo, OobFile,
 };
 
 use crate::db::modal_loaders;
@@ -130,9 +130,9 @@ use mm_meta::views::health_modals::{
     SubparDuplicateModalData,
 };
 use mm_meta::views::review_match::{
-    InboxCorpusMatchModalData, ManualReviewData, RecordingDetail, RecordingSummary,
+    ManualReviewData, RecordingDetail, RecordingSummary,
 };
-use mm_meta::views::startup_organize::{IntakeConfirmationState, InboxDirectory};
+use mm_meta::views::startup_organize::IntakeConfirmationState;
 use mm_meta::views::canonicity_compound::{
     CompoundSplitResolutionData, TagCanonicityResolutionData,
 };
@@ -143,10 +143,6 @@ use mm_meta::views::canonicity_compound::{
 
 impl_domain_query! {
     GetInsights => InsightsData, db.get_insights_data()
-}
-
-impl_domain_query! {
-    GetInboxOverview => InboxOverviewData, db.get_inbox_overview_data()
 }
 
 impl_domain_query! {
@@ -362,14 +358,6 @@ impl_domain_query! {
 }
 
 impl_domain_query! {
-    GetInboxCorpusMatchData => InboxCorpusMatchModalData, |s, db| {
-        modal_loaders::load_inbox_corpus_match_data(db, s.bitrate_fuzz_percent)
-            .ok()
-            .unwrap_or_default()
-    }
-}
-
-impl_domain_query! {
     GetDeployData => DeployModalData, |s, db| {
         modal_loaders::load_deploy_data(db, s.config.as_ref())
             .unwrap_or_default()
@@ -502,16 +490,7 @@ impl_domain_query! {
 
 impl_domain_query! {
     GetIntakeConfirmation => Option<IntakeConfirmationState>, |s, db| {
-        match s.zone {
-            Some(crate::db::types::Zone::Corpus) => {
-                modal_loaders::gather_intake_zone::<crate::zones::CorpusZone>(db, s.source)
-            }
-            Some(crate::db::types::Zone::Inbox) => {
-                modal_loaders::gather_intake_zone::<crate::zones::InboxZone>(db, s.source)
-            }
-            Some(_) => None,
-            None => modal_loaders::gather_intake_startup(db),
-        }
+        modal_loaders::gather_intake_zone::<crate::zones::CorpusZone>(db, s.source)
     }
 }
 
@@ -699,19 +678,6 @@ fn load_tag_editor_files(
                 (files_in_dir, selected_idx)
             }
         }
-    }
-}
-
-impl_domain_query! {
-    GetInboxOrganizeData => Vec<InboxDirectory>, |s, db| {
-        let files = db.get_organizable_inbox_files().unwrap_or_default();
-        if files.is_empty() {
-            return Vec::new();
-        }
-        let inbox_dir = s.config.inbox_dir();
-        let granularity = s.config.opinions.inbox_organize.directory_granularity;
-        let resolver = mm_meta::paths::PathResolver::from_config(&s.config);
-        mm_meta::views::startup_organize::group_into_directories(&files, &inbox_dir, granularity, &resolver)
     }
 }
 
@@ -1032,7 +998,6 @@ macro_rules! dispatch_domain_query_impl {
 
 dispatch_domain_query_impl! {
     GetInsights,
-    GetInboxOverview,
     GetDeployStatus,
     GetEditHistory,
     GetExternalMatches,
@@ -1051,7 +1016,6 @@ dispatch_domain_query_impl! {
     GetDirectoryClusterData,
     GetReleaseOverlapData,
     GetLosslessRemuxData,
-    GetInboxCorpusMatchData,
     GetDeployData,
     GetManualReviewData,
     GetCorpusTags,
@@ -1067,7 +1031,6 @@ dispatch_domain_query_impl! {
     GetRecordingBatchData,
     GetReleaseStagingData,
     GetTagEditorFiles,
-    GetInboxOrganizeData,
     GetFileTagValues,
     GetDirectoryListing,
     SearchCorpusFiles,
@@ -1101,14 +1064,6 @@ mod tests {
         let read_db = ReadOnlyDb::new(&db);
         let result = GetInsights.execute(&read_db);
         assert_eq!(result.bucket_corpus.files_in_corpus, 0);
-    }
-
-    #[test]
-    fn get_inbox_overview_empty_db() {
-        let db = test_db();
-        let read_db = ReadOnlyDb::new(&db);
-        let result = GetInboxOverview.execute(&read_db);
-        assert_eq!(result.file_in_inbox, 0);
     }
 
     #[test]
@@ -1292,14 +1247,6 @@ mod tests {
     }
 
     #[test]
-    fn get_inbox_corpus_match_data_empty_db() {
-        let db = test_db();
-        let read_db = ReadOnlyDb::new(&db);
-        let result = GetInboxCorpusMatchData { bitrate_fuzz_percent: 5.0 }.execute(&read_db);
-        assert!(result.entries.is_empty());
-    }
-
-    #[test]
     fn get_manual_review_data_empty_db() {
         let db = test_db();
         let read_db = ReadOnlyDb::new(&db);
@@ -1406,7 +1353,6 @@ mod tests {
 
         // Summary queries
         t!(serde_json::to_string(&GetInsights.execute(&read_db)));
-        t!(serde_json::to_string(&GetInboxOverview.execute(&read_db)));
         t!(serde_json::to_string(&GetDeployStatus.execute(&read_db)));
         t!(serde_json::to_string(&GetEditHistory.execute(&read_db)));
         // GetExternalMatches is intercepted in dispatch — test via dispatch with no config.
@@ -1435,7 +1381,6 @@ mod tests {
         t!(serde_json::to_string(&GetDirectoryClusterData.execute(&read_db)));
         t!(serde_json::to_string(&GetReleaseOverlapData.execute(&read_db)));
         t!(serde_json::to_string(&GetLosslessRemuxData.execute(&read_db)));
-        t!(serde_json::to_string(&GetInboxCorpusMatchData { bitrate_fuzz_percent: 5.0 }.execute(&read_db)));
         t!(serde_json::to_string(&GetManualReviewData {
             kind: mm_meta::views::review_match::ReviewKind::RedundantDuplicate,
         }.execute(&read_db)));
@@ -1481,37 +1426,12 @@ mod tests {
     }
 
     #[test]
-    fn get_tag_canonicity_resolution_inbox_empty_db() {
-        let db = test_db();
-        let read_db = ReadOnlyDb::new(&db);
-        let result = GetTagCanonicityResolution {
-            tag_name: "ARTIST".to_string(),
-            filter_existing_canonicals: false,
-            zone: mm_meta::db_types::Zone::Inbox,
-        }.execute(&read_db);
-        assert_eq!(result.tag_name, "ARTIST");
-        assert!(result.clusters.is_empty());
-    }
-
-    #[test]
     fn get_compound_split_resolution_corpus_empty_db() {
         let db = test_db();
         let read_db = ReadOnlyDb::new(&db);
         let result = GetCompoundSplitResolution {
             tag_name: "ARTIST".to_string(),
             zone: mm_meta::db_types::Zone::Corpus,
-            safe_only: false,
-        }.execute(&read_db);
-        assert!(result.groups.is_empty());
-    }
-
-    #[test]
-    fn get_compound_split_resolution_inbox_empty_db() {
-        let db = test_db();
-        let read_db = ReadOnlyDb::new(&db);
-        let result = GetCompoundSplitResolution {
-            tag_name: "GENRE".to_string(),
-            zone: mm_meta::db_types::Zone::Inbox,
             safe_only: false,
         }.execute(&read_db);
         assert!(result.groups.is_empty());

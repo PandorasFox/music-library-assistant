@@ -195,7 +195,7 @@ impl Diffable for HashSet<String> {
 use crate::config::{
     AlbumArtOpinions, CanonicalizationOpinions, CreditRoutingConfig, DebugOpinions,
     DiscExtractionOpinions, DuplicateAnalysisOpinions, ExternalMatchingConfig,
-    HealthDetectionOpinions, InboxOrganizeGranularity, InboxOrganizeOpinions, Opinions,
+    HealthDetectionOpinions, Opinions,
     PackingWeights, PerformanceOpinions, QualityResolutionOpinions, RelationRouting,
     ReleasePackingOpinions, SidecarDeployMode, SourceDir, StartupOpinions, StartupView,
     TagSplittingOpinions,
@@ -205,12 +205,6 @@ use crate::config::PathTagSchema;
 // --- Enums (leaf-level, use Debug formatting) ---
 
 impl Diffable for StartupView {
-    fn diff_against(&self, other: &Self, prefix: &str, out: &mut Vec<DiffEntry>) {
-        diff_leaf(self, other, prefix, out);
-    }
-}
-
-impl Diffable for InboxOrganizeGranularity {
     fn diff_against(&self, other: &Self, prefix: &str, out: &mut Vec<DiffEntry>) {
         diff_leaf(self, other, prefix, out);
     }
@@ -238,7 +232,10 @@ impl Diffable for RelationRouting {
 
 // --- Structs ---
 
-impl_diffable_struct!(QualityResolutionOpinions { inbox_bitrate_fuzz_percent });
+// QualityResolutionOpinions has no fields — always equal.
+impl Diffable for QualityResolutionOpinions {
+    fn diff_against(&self, _other: &Self, _prefix: &str, _out: &mut Vec<DiffEntry>) {}
+}
 impl_diffable_struct!(CanonicalizationOpinions { strip_album_format_suffixes });
 impl_diffable_struct!(StartupOpinions { force_check_all_files_at_startup, vacuum_threshold, default_view });
 impl_diffable_struct!(HealthDetectionOpinions { required_tags, album_artist_only_required_if_compilation, single_album_suffix });
@@ -252,7 +249,6 @@ impl_diffable_struct!(ReleasePackingOpinions {
     singles_before_incompletes, allow_resolve_knots_with_discographies,
     low_confidence_max_acoustid_ratio, low_confidence_max_album_match,
 });
-impl_diffable_struct!(InboxOrganizeOpinions { directory_granularity });
 impl_diffable_struct!(CreditRoutingConfig { routing, feat_format });
 impl_diffable_struct!(ExternalMatchingConfig {
     acoustid_api_key, requests_per_second, mb_requests_per_second, mb_base_url,
@@ -269,7 +265,7 @@ impl Diffable for DebugOpinions {
 impl_diffable_struct!(Opinions {
     quality_resolution, canonicalization, startup,
     health_detection, performance, tag_splitting, duplicate_analysis, release_packing,
-    inbox_organize, leave_transactions_open, external_matching, disc_extraction,
+    leave_transactions_open, external_matching, disc_extraction,
     album_art, debug, watcher_poll_interval_secs, session_lifetime_days,
 });
 

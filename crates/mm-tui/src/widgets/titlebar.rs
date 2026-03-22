@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn test_lateral_view_cycling() {
-        // Test forward cycling without transactions: Config → Search → Files → Health → Inbox → Deploy → History → ExternalMatches → Config
+        // Test forward cycling without transactions: Config → Search → Files → Health → Deploy → History → ExternalMatches → Config
         let view = LateralView::Config;
         assert_eq!(view.next(false), LateralView::Search);
         assert_eq!(view.next(false).next(false), LateralView::Files);
@@ -199,19 +199,10 @@ mod tests {
         );
         assert_eq!(
             view.next(false).next(false).next(false).next(false),
-            LateralView::Inbox
-        );
-        assert_eq!(
-            view.next(false)
-                .next(false)
-                .next(false)
-                .next(false)
-                .next(false),
             LateralView::Deploy
         );
         assert_eq!(
             view.next(false)
-                .next(false)
                 .next(false)
                 .next(false)
                 .next(false)
@@ -224,13 +215,11 @@ mod tests {
                 .next(false)
                 .next(false)
                 .next(false)
-                .next(false)
                 .next(false),
             LateralView::ExternalMatches
         );
         assert_eq!(
             view.next(false)
-                .next(false)
                 .next(false)
                 .next(false)
                 .next(false)
@@ -249,12 +238,12 @@ mod tests {
             LateralView::History
         );
 
-        // Test forward cycling with transactions: Health → Transaction → Inbox
+        // Test forward cycling with transactions: Health → Transaction → Deploy
         assert_eq!(LateralView::Health.next(true), LateralView::Transaction);
-        assert_eq!(LateralView::Transaction.next(true), LateralView::Inbox);
+        assert_eq!(LateralView::Transaction.next(true), LateralView::Deploy);
 
-        // Test backward cycling with transactions: Inbox → Transaction → Health
-        assert_eq!(LateralView::Inbox.prev(true), LateralView::Transaction);
+        // Test backward cycling with transactions: Deploy → Transaction → Health
+        assert_eq!(LateralView::Deploy.prev(true), LateralView::Transaction);
         assert_eq!(LateralView::Transaction.prev(true), LateralView::Health);
     }
 

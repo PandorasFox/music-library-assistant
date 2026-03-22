@@ -255,30 +255,6 @@ pub struct DirectoryBreakdownEntry {
 }
 
 // ============================================================================
-// Inbox Overview Data Types
-// ============================================================================
-
-/// Aggregate overview data for the inbox view.
-/// Computed at cache refresh time, never in render.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct InboxOverviewData {
-    /// Total files present in inbox
-    pub file_in_inbox: usize,
-    /// Files with fingerprint match against corpus
-    pub corpus_match: usize,
-    /// Files not yet indexed
-    pub unindexed: usize,
-    /// Inbox tag values differing from corpus canonical spellings
-    pub tag_canonicity: usize,
-    /// Inbox files missing required tags
-    pub missing_tags: usize,
-    /// Inbox files with compound tag values
-    pub compound_tags: usize,
-    /// Healthy inbox files eligible for organizing into corpus
-    pub organizable: usize,
-}
-
-// ============================================================================
 // Deploy Modal Data Types
 // ============================================================================
 
@@ -486,51 +462,6 @@ pub struct OobFile {
     pub bucket: ConflictBucket,
     /// Tag mismatches from the signal (empty for MtimeOnly bucket).
     pub mismatches: Vec<TagMismatchEntry>,
-}
-
-// ============================================================================
-// Inbox Corpus Match Resolution Types
-// ============================================================================
-
-/// Classification of an inbox file relative to its corpus matches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum MatchClassification {
-    /// Inbox copy is better quality than all corpus matches
-    Better,
-    /// Same quality tier as best corpus match — safe to stash
-    Equivalent,
-    /// Inbox copy is lower quality — safe to stash
-    Subpar,
-}
-
-impl From<crate::signals::data::CorpusMatchQuality> for MatchClassification {
-    fn from(q: crate::signals::data::CorpusMatchQuality) -> Self {
-        use crate::signals::data::CorpusMatchQuality;
-        match q {
-            CorpusMatchQuality::Better => Self::Better,
-            CorpusMatchQuality::Equivalent => Self::Equivalent,
-            CorpusMatchQuality::Subpar => Self::Subpar,
-        }
-    }
-}
-
-/// Detail about a single corpus file matching an inbox file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CorpusMatchDetail {
-    pub _corpus_inode: i64,
-    pub corpus_path: String,
-    pub corpus_quality: String,
-    pub similarity: f64,
-}
-
-/// An inbox file with corpus fingerprint matches and quality classification.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InboxCorpusMatchEntry {
-    pub inbox_inode: i64,
-    pub inbox_path: String,
-    pub inbox_quality: String,
-    pub corpus_matches: Vec<CorpusMatchDetail>,
-    pub classification: MatchClassification,
 }
 
 /// Deploy status for the Deploy view and titlebar indicator.

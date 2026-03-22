@@ -42,17 +42,6 @@ pub enum Computation {
     /// Orchestrator that spawns global corpus derivation and library walks.
     ScheduleSecondLevelDerivations,
 
-    /// Derive inbox signals via global inode set comparison.
-    ///
-    /// Compares observed disk inodes vs inbox-indexed inodes:
-    /// - disk_only (disk - indexed) → InboxUnindexed signals
-    /// - both (disk ∩ indexed) → InboxHealthy signals
-    DeriveInboxSignals {
-        /// Inbox inodes observed on disk (inode → enriched metadata).
-        /// Populated by the FS watcher's initial scan and steady-state events.
-        observed_inodes: HashMap<i64, ObservedInodeMeta>,
-    },
-
     /// Derive corpus signals via global inode set comparison.
     ///
     /// Single-pass global comparison of observed disk inodes vs indexed inodes:
@@ -103,7 +92,6 @@ impl Computation {
     pub fn label(&self) -> &'static str {
         match self {
             Computation::ScheduleSecondLevelDerivations => "Scheduling signal derivations",
-            Computation::DeriveInboxSignals { .. } => "Deriving inbox signals",
             Computation::DeriveCorpusSignals { .. } => "Deriving corpus signals",
             Computation::UpdateCorpusFileSignals { .. } => "Updating corpus file signals",
             Computation::UpdateLibraryFileSignals { .. } => "Updating library file signals",

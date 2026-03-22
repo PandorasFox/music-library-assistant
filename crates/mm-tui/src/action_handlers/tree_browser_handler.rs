@@ -52,7 +52,7 @@ impl App {
     /// Open a dir config panel for the given absolute corpus directory path.
     fn open_dir_config_panel(&mut self, abs_path: std::path::PathBuf) {
         let config = self.config();
-        let corpus_dir = config.corpus_dir();
+        let corpus_dir = config.storage_root.clone();
 
         let relative = match abs_path.strip_prefix(&corpus_dir) {
             Ok(r) => r.to_path_buf(),

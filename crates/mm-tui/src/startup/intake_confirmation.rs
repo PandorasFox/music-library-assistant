@@ -20,8 +20,6 @@ pub use mm_meta::views::startup_organize::{
     DirectoryGroup, IntakeConfirmationState, IntakeSource, UnindexedFileEntry,
 };
 
-use mm_meta::db_types::Zone;
-
 /// Action returned from handling input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntakeConfirmationAction {
@@ -35,26 +33,11 @@ pub enum IntakeConfirmationAction {
 
 /// Compute total number of lines in the file list display.
 fn total_list_lines(state: &IntakeConfirmationState) -> usize {
-    let group_lines: usize = state
+    state
         .grouped_files
         .iter()
         .map(|g| 1 + g.filenames.len()) // 1 for directory header + files
-        .sum();
-    if state.multi_zone {
-        // Add 2 lines per zone section header (label + blank separator)
-        let zone_count = {
-            let mut zones = Vec::new();
-            for g in &state.grouped_files {
-                if zones.last() != Some(&g.zone) {
-                    zones.push(g.zone);
-                }
-            }
-            zones.len()
-        };
-        group_lines + zone_count * 2
-    } else {
-        group_lines
-    }
+        .sum()
 }
 
 /// Handle semantic input action for intake confirmation.
@@ -139,26 +122,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &IntakeConfirmationState) {
 
     // Build file list lines with directory grouping
     let mut list_lines: Vec<Line> = Vec::new();
-    let mut last_zone: Option<Zone> = None;
     for group in &state.grouped_files {
-        // Zone section header in multi-zone mode
-        if state.multi_zone && last_zone != Some(group.zone) {
-            if last_zone.is_some() {
-                list_lines.push(Line::from("")); // separator between zones
-            }
-            let zone_label = match group.zone {
-                Zone::Corpus => "--- Corpus ---",
-                Zone::Inbox => "--- Inbox ---",
-                _ => "---",
-            };
-            list_lines.push(Line::from(Span::styled(
-                zone_label,
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            )));
-            last_zone = Some(group.zone);
-        }
         // Directory header
         list_lines.push(Line::from(Span::styled(
             format!("{}/", group.display_path),

@@ -246,9 +246,6 @@ impl SignalWriteSender {
     // =========================================================================
 
     /// Index an audio file (files + audio_info + corpus_tags).
-    ///
-    /// For corpus files, tags go to corpus_tags table.
-    /// For inbox files, tags go to inbox_tags table.
     pub fn index_audio_file(
         &self,
         path: &str,
@@ -483,20 +480,6 @@ impl SignalWriteSender {
             path: path.to_string(),
             value,
         });
-    }
-
-    // =========================================================================
-    // Inbox State Operations (Awakening phase cascade cleanup)
-    // =========================================================================
-
-    /// Drop all inbox state for an inode no longer observed on disk in inbox.
-    ///
-    /// Cascade-deletes inbox_tags, files (zone='inbox'), and all per-inode
-    /// inbox signals (FileInInbox, InboxUnindexed, InboxHealthy, InboxCorpusMatch)
-    /// plus MovedFile. Does NOT touch audio_info or corpus signals.
-    pub fn drop_inbox_file_state(&self, inode: i64, _witness: &impl SignalWitness) {
-        self.mark_enqueued();
-        let _ = self.tx.send(DbWriteOp::DropInboxFileState { inode });
     }
 
     // =========================================================================

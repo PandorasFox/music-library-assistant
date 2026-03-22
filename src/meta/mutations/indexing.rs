@@ -298,7 +298,7 @@ impl_mutation_executor!(
 /// Index a track from extracted metadata (internal helper).
 ///
 /// Inserts or updates a track in the database from extracted metadata.
-/// Tags are stored in corpus_tags table (or inbox_tags for inbox files).
+/// Tags are stored in corpus_tags table.
 ///
 /// Routes write through signal_sender (fire-and-forget).
 fn index_track_from_metadata(

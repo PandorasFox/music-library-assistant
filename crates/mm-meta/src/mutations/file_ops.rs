@@ -37,29 +37,6 @@ pub struct LibraryMoveMutation {
     pub destination: PathBuf,
 }
 
-/// Move an inbox file into the corpus.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct InboxToCorpusMutation {
-    pub inode: i64,
-    pub inbox_path: PathBuf,
-    pub corpus_path: PathBuf,
-}
-
-/// A tracked audio file within an inbox directory being emplaced.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct InboxDirTrackedFile {
-    pub inode: i64,
-    pub corpus_path: PathBuf,
-}
-
-/// Move an entire inbox directory into the corpus.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct InboxDirToCorpusMutation {
-    pub inbox_dir_path: PathBuf,
-    pub corpus_dir_path: PathBuf,
-    pub tracked_files: Vec<InboxDirTrackedFile>,
-}
-
 // ============================================================================
 // diff_entries implementations
 // ============================================================================
@@ -100,30 +77,3 @@ impl LibraryMoveMutation {
     }
 }
 
-impl InboxToCorpusMutation {
-    pub fn diff_entries(&self) -> Vec<DiffEntry> {
-        vec![DiffEntry::new(
-            "path",
-            self.inbox_path.display(),
-            self.corpus_path.display(),
-        )]
-    }
-}
-
-impl InboxDirToCorpusMutation {
-    pub fn diff_entries(&self) -> Vec<DiffEntry> {
-        let mut entries = vec![DiffEntry::new(
-            "directory",
-            self.inbox_dir_path.display(),
-            self.corpus_dir_path.display(),
-        )];
-        for f in &self.tracked_files {
-            entries.push(DiffEntry::new(
-                format!("[{}]", f.inode),
-                "",
-                f.corpus_path.display(),
-            ));
-        }
-        entries
-    }
-}

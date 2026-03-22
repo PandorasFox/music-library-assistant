@@ -29,10 +29,6 @@ pub fn intake_index() -> DecisionKey {
     DecisionKey::IntakeIndex
 }
 
-pub fn inbox_organize() -> DecisionKey {
-    DecisionKey::InboxOrganize
-}
-
 pub fn jettison_edit_history() -> DecisionKey {
     DecisionKey::JettisonEditHistory
 }

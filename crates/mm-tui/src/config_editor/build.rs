@@ -8,8 +8,8 @@ use super::types::*;
 use mm_meta::config::{
     AlbumArtOpinions, CanonicalizationOpinions, Config, DiscExtractionOpinions,
     DuplicateAnalysisOpinions, ExternalMatchingConfig, HealthDetectionOpinions,
-    InboxOrganizeGranularity, InboxOrganizeOpinions, Opinions, PackingWeights, PerformanceOpinions,
-    QualityResolutionOpinions, ReleasePackingOpinions, SidecarDeployMode, StartupOpinions,
+    Opinions, PackingWeights, PerformanceOpinions,
+    ReleasePackingOpinions, SidecarDeployMode, StartupOpinions,
     StartupView, TagSplittingOpinions,
 };
 
@@ -45,13 +45,7 @@ config_enum_map!(StartupView, StartupView::Health, [
     StartupView::Health => "Health",
     StartupView::Search => "Search",
     StartupView::Browser => "Browser",
-    StartupView::Inbox => "Inbox",
     StartupView::ExternalMatches => "Ext Matches",
-]);
-
-config_enum_map!(InboxOrganizeGranularity, InboxOrganizeGranularity::Leaf, [
-    InboxOrganizeGranularity::Leaf => "Leaf",
-    InboxOrganizeGranularity::TopLevel => "TopLevel",
 ]);
 
 config_enum_map!(SidecarDeployMode, SidecarDeployMode::PrimaryCover, [
@@ -341,11 +335,6 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                 "Deploy sidecar cover images alongside audio files to libraries",
                 &["TODO"], AlbumArtOpinions::KDL_SIDECAR_DEPLOY),
         ]},
-        ConfigGroup { name: "Quality Resolution", collapsed: false, fields: vec![
-            cf!(float, quality_resolution.inbox_bitrate_fuzz_percent, "Inbox bitrate fuzz percent",
-                "Inbox-to-corpus bitrate tolerance for equivalence",
-                &["TODO"], QualityResolutionOpinions::KDL_BITRATE_FUZZ),
-        ]},
         ConfigGroup { name: "Canonicalization", collapsed: false, fields: vec![
             cf!(bool, canonicalization.strip_album_format_suffixes, "Strip album format suffixes",
                 "Normalize EP/LP suffixes during album collision detection",
@@ -361,11 +350,6 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
             cf!(string, health_detection.single_album_suffix, "Single album suffix",
                 "Suffix appended when tagging as single",
                 &["TODO"], HealthDetectionOpinions::KDL_SINGLE_ALBUM_SUFFIX),
-        ]},
-        ConfigGroup { name: "Inbox Organize", collapsed: false, fields: vec![
-            cf!(enum InboxOrganizeGranularity, inbox_organize.directory_granularity, "Directory granularity",
-                "How to group inbox directories for organize workflow",
-                &["TODO"], InboxOrganizeOpinions::KDL_DIR_GRANULARITY),
         ]},
         ConfigGroup { name: "Advanced", collapsed: false, fields: vec![
             cf!(bool, leave_transactions_open, "Leave transactions open",
@@ -415,8 +399,9 @@ mod tests {
 
     fn test_config() -> Config {
         Config {
-            root: "/tmp/test".into(),
-            legacy_enabled: false,
+            storage_root: "/tmp/test".into(),
+            libraries_root: None,
+            stash_root: None,
             source_dirs: vec![],
             opinions: mm_meta::config::Opinions::default(),
         }
@@ -432,10 +417,6 @@ mod tests {
         assert_eq!(
             rebuilt.opinions.startup.default_view,
             config.opinions.startup.default_view
-        );
-        assert_eq!(
-            rebuilt.opinions.quality_resolution.inbox_bitrate_fuzz_percent,
-            config.opinions.quality_resolution.inbox_bitrate_fuzz_percent
         );
         assert_eq!(
             rebuilt.opinions.duplicate_analysis.fingerprint_similarity_threshold,

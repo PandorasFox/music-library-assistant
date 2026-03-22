@@ -125,7 +125,6 @@ impl App {
 
         self.query(mm_meta::domain_queries::GetIntakeConfirmation {
                 source: startup::IntakeSource::Startup,
-                zone: None,
             })
     }
 

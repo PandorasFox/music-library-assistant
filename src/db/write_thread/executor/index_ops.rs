@@ -189,12 +189,7 @@ pub(super) fn execute_index_audio_file(
 ) -> anyhow::Result<()> {
     let scanned_at = current_unix_secs();
 
-    // Determine which tag table to use based on zone
-    let tag_table = if file_data.zone == "inbox" {
-        "inbox_tags"
-    } else {
-        "corpus_tags"
-    };
+    let tag_table = "corpus_tags";
 
     // Wrap all operations in a single transaction
     let tx = db.conn().unchecked_transaction()?;
@@ -289,7 +284,7 @@ pub(super) fn execute_drop_from_index(db: &Database, path: &str) -> anyhow::Resu
         params![inode],
     )?;
 
-    // Delete the file entry (audio_info, corpus_tags/inbox_tags cascade automatically)
+    // Delete the file entry (audio_info, corpus_tags cascade automatically)
     db.conn()
         .execute("DELETE FROM files WHERE path = ?1", params![path])?;
 

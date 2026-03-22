@@ -114,11 +114,6 @@ fn config_recomputation_scope(old: &Config, new: &Config) -> RecomputationScope 
         scope |= RecomputationScope::FILES;
     }
 
-    // INBOX: fields that affect inbox computations
-    if o.inbox_organize != n.inbox_organize {
-        scope |= RecomputationScope::INBOX;
-    }
-
     // These fields are runtime policy — no content re-analysis needed:
     // startup.*, performance.*, leave_transactions_open, quality_resolution.*
 

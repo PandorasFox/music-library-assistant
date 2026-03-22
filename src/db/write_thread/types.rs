@@ -33,7 +33,7 @@ impl SignalWitness for MutationExecutionWitness {}
 #[derive(Debug, Clone)]
 pub struct FileData {
     pub inode: i64,
-    pub zone: String, // 'corpus', 'library', 'inbox'
+    pub zone: String, // 'corpus', 'library'
     pub _is_dir: bool,
     pub mtime_secs: i64,
     pub mtime_nanos: i64,

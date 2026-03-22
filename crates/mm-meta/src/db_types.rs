@@ -14,8 +14,6 @@ pub enum Zone {
     Corpus,
     /// File is in a library (deployment target)
     Library,
-    /// File is in the inbox (pending triage)
-    Inbox,
 }
 
 impl Zone {
@@ -23,7 +21,6 @@ impl Zone {
         match self {
             Self::Corpus => "corpus",
             Self::Library => "library",
-            Self::Inbox => "inbox",
         }
     }
 
@@ -32,7 +29,6 @@ impl Zone {
         match s {
             "corpus" => Some(Self::Corpus),
             "library" => Some(Self::Library),
-            "inbox" => Some(Self::Inbox),
             _ => None,
         }
     }
@@ -41,7 +37,6 @@ impl Zone {
     pub fn tag_table(&self) -> Option<&'static str> {
         match self {
             Self::Corpus => Some("corpus_tags"),
-            Self::Inbox => Some("inbox_tags"),
             Self::Library => None,
         }
     }
@@ -116,7 +111,7 @@ impl AudioFile {
 
 /// A single tag associated with an audio file.
 ///
-/// Stored in corpus_tags or inbox_tags tables.
+/// Stored in corpus_tags table.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioTag {
     pub inode: i64,

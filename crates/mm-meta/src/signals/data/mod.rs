@@ -28,11 +28,9 @@ pub(crate) use impl_as_str;
 // ============================================================================
 
 mod deploy;
-mod inbox;
 mod release_packing;
 
 pub use deploy::*;
-pub use inbox::*;
 pub use release_packing::*;
 
 // ============================================================================

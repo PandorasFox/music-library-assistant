@@ -12,9 +12,8 @@
 //!
 //! ## Computations
 //!
-//! - `ScheduleSecondLevelDerivations` - Orchestrator: spawns global corpus/inbox derivation
+//! - `ScheduleSecondLevelDerivations` - Orchestrator: spawns global corpus derivation
 //! - `DeriveCorpusSignals` - Global inode comparison for corpus signals
-//! - `DeriveInboxSignals` - Global inode comparison for inbox signals
 //! - `UpdateCorpusFileSignals` - Lightweight per-file corpus signal update (post-mutation)
 //! - `UpdateLibraryFileSignals` - Lightweight per-file library signal update (post-mutation)
 //! - `WalkLibrary` - Enumerate library directories for scanning
@@ -38,11 +37,6 @@ impl DerivationExecute for Computation {
             Computation::ScheduleSecondLevelDerivations => {
                 execute_schedule_second_level_derivations(ctx.read_db, ctx.witness)
             }
-            Computation::DeriveInboxSignals { observed_inodes } => execute_derive_inbox_signals(
-                ctx.read_db,
-                observed_inodes.clone(),
-                ctx.witness,
-            ),
             Computation::DeriveCorpusSignals { observed_inodes } => execute_derive_corpus_signals(
                 ctx.read_db,
                 observed_inodes.clone(),

@@ -66,10 +66,7 @@ impl Database {
 
     signal_query!(by_key, get_tag_canonicity_signal, crate::meta::signals::data::TagCanonicitySignal);
     signal_query!(by_key, get_inconsistent_album_artist_signal, crate::meta::signals::data::InconsistentAlbumArtistSignal);
-    signal_query!(by_key, get_inbox_tag_canonicity_signal, crate::meta::signals::data::InboxTagCanonicitySignal);
-
     signal_query!(by_inode, get_compound_tag_signal, crate::meta::signals::data::CompoundTagSignal);
-    signal_query!(by_inode, get_inbox_compound_tag_signal, crate::meta::signals::data::InboxCompoundTagSignal);
 
     /// Get compound tag signal groups aggregated by (tag_name, compound_value).
     ///
@@ -98,17 +95,6 @@ impl Database {
             }
             true
         })
-    }
-
-    /// Get inbox compound tag signal groups aggregated by (tag_name, compound_value).
-    ///
-    /// Simplified version for inbox zone: no safe_only or tag_filter (inbox is small).
-    /// Groups where the compound value has been marked canonical are excluded.
-    pub fn get_inbox_compound_signal_groups(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::CompoundGroup>> {
-        // Table name is a hardcoded literal, not user input — safe for direct interpolation.
-        self.collect_compound_groups("signal_inbox_compound_tag", |_| true)
     }
 
     /// Shared accumulator for compound tag signal grouping.
@@ -264,89 +250,6 @@ impl Database {
             .query_map(params![], |row| row.get(0))?
             .collect::<rusqlite::Result<Vec<String>>>()?;
         Ok(results)
-    }
-
-    // ========================================================================
-    // Inbox Organizable Queries
-    // ========================================================================
-
-    /// Get inbox files eligible for organizing into the corpus.
-    ///
-    /// "Organizable" = has InboxHealthySignal AND:
-    /// - has NO InboxCorpusMatchSignal, OR
-    /// - has InboxCorpusMatchSignal classified as 'better' (inbox is higher quality)
-    ///   AND is NOT referenced by InboxTagCanonicitySignal.
-    ///
-    /// Tag canonicity exclusion is done in Rust because inbox_inodes are
-    /// stored in a bincode BLOB.
-    pub fn get_organizable_inbox_files(&self) -> Result<Vec<(i64, String)>> {
-        use crate::meta::signals::data::InboxTagCanonicityData;
-
-        // Step 1: Get healthy inodes that either have no corpus match,
-        // or have a corpus match classified as 'better' (inbox outranks corpus)
-        let mut stmt = self.conn.prepare(
-            "SELECT h.inode, h.path FROM signal_inbox_healthy h
-             WHERE h.inode NOT IN (
-                 SELECT inode FROM signal_inbox_corpus_match
-                 WHERE classification != 'better'
-             )",
-        )?;
-        let candidates: Vec<(i64, String)> = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-
-        // Step 2: Load tag canonicity inodes from bincode blobs
-        let mut tag_canon_inodes = std::collections::HashSet::new();
-        let mut canon_stmt = self
-            .conn
-            .prepare("SELECT data FROM signal_inbox_tag_canonicity")?;
-        let blobs: Vec<Vec<u8>> = canon_stmt
-            .query_map([], |row| row.get(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-
-        for blob in blobs {
-            if let Ok(data) = bincode::deserialize::<InboxTagCanonicityData>(&blob) {
-                for inode in &data.inbox_inodes {
-                    tag_canon_inodes.insert(*inode);
-                }
-            }
-        }
-
-        // Step 3: Filter out tag canonicity inodes
-        let result = if tag_canon_inodes.is_empty() {
-            candidates
-        } else {
-            candidates
-                .into_iter()
-                .filter(|(inode, _)| !tag_canon_inodes.contains(inode))
-                .collect()
-        };
-
-        Ok(result)
-    }
-
-    /// Count inbox files eligible for organizing into the corpus.
-    pub fn get_organizable_inbox_count(&self) -> Result<usize> {
-        self.get_organizable_inbox_files().map(|v| v.len())
-    }
-
-    // ========================================================================
-    // Inbox Overview Data
-    // ========================================================================
-
-    /// Get InboxOverviewData for the Inbox view.
-    ///
-    /// Computes signal counts via typed table counts. Called by UiReadCache.
-    pub fn get_inbox_overview_data(&self) -> Result<crate::meta::views::InboxOverviewData> {
-        Ok(crate::meta::views::InboxOverviewData {
-            file_in_inbox: self.count_signal_type("file_in_inbox")?,
-            corpus_match: self.count_signal_type("inbox_corpus_match")?,
-            unindexed: self.count_signal_type("inbox_unindexed")?,
-            tag_canonicity: self.count_signal_type("inbox_tag_canonicity")?,
-            missing_tags: self.count_signal_type("inbox_missing_tag")?,
-            compound_tags: self.count_signal_type("inbox_compound_tag")?,
-            organizable: self.get_organizable_inbox_count().unwrap_or(0),
-        })
     }
 
     // ========================================================================

@@ -229,7 +229,7 @@ pub struct CorpusBrowserVariant {
     // -- Marker lookup data (String relative paths for DirectoryBrowser) --
     /// Configured deployment source directories (relative paths within archive root).
     deploy_source_dirs: Vec<String>,
-    /// Primary zone directories (relative paths: corpus root, inbox, stash).
+    /// Primary zone directories (relative paths: corpus root, stash).
     primary_zone_dirs: Vec<String>,
     /// Files with release packing matches (relative paths), refreshed on computations_generation bump.
     packing_file_paths: HashSet<String>,

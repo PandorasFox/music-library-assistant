@@ -267,14 +267,6 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
             | Mutation::ApplyBatchDirConfigEdits(_)
             | Mutation::ExportEditHistory(_)
             | Mutation::ClearEditHistory(_) => {}
-
-            Mutation::InboxToCorpus(ref m) => {
-                inodes.insert(m.inode);
-            }
-
-            Mutation::InboxDirToCorpus(ref m) => {
-                inodes.extend(m.tracked_files.iter().map(|f| f.inode));
-            }
         }
     }
 

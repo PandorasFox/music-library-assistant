@@ -19,8 +19,8 @@ use super::types::{Mutation, MutationResult, SignalClearScope, SignalToClear};
 
 // Re-export struct definitions from mm-meta
 pub use mm_meta::mutations::file_ops::{
-    HardLinkMutation, InboxDirToCorpusMutation, InboxToCorpusMutation,
-    LibraryMoveMutation, MoveMutation, StashFromZoneMutation, StashLeftoversMutation,
+    HardLinkMutation, LibraryMoveMutation, MoveMutation,
+    StashFromZoneMutation, StashLeftoversMutation,
 };
 
 // ============================================================================
@@ -257,96 +257,6 @@ impl MutationExecutor for LibraryMoveMutation {
             }
         }
         Vec::new()
-    }
-}
-
-impl MutationExecutor for InboxToCorpusMutation {
-    fn origin(&self) -> super::MutationOrigin {
-        super::MutationOrigin::Staged
-    }
-    fn execution_stage(&self) -> super::MutationExecutionStage {
-        super::MutationExecutionStage::DB
-    }
-
-    fn execute(&self, ctx: &MutationContext) -> MutationResult {
-        let start = std::time::Instant::now();
-
-        // Step 1: Move file on disk
-        let result = execute_move(&self.inbox_path, &self.corpus_path).and_then(|()| {
-            // Step 2: Update DB path + zone (inbox → corpus, migrates tags)
-            super::indexing::execute_update_file_path(
-                ctx.read_db,
-                "inbox",
-                self.inode,
-                &self.corpus_path,
-                Some("corpus"),
-                ctx.witness,
-            )
-        });
-
-        MutationResult::from_unit_result(Mutation::InboxToCorpus(self.clone()), result, start)
-    }
-
-    fn signal_clear_scope(&self) -> SignalClearScope {
-        SignalClearScope::MutableOnly
-    }
-
-    fn affected_inodes(&self) -> Vec<i64> {
-        vec![self.inode]
-    }
-    fn recomputation_scope(&self) -> RecomputationScope {
-        RecomputationScope::FILES | RecomputationScope::TAGS | RecomputationScope::INBOX
-    }
-
-    fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
-        vec![self.inbox_path.clone(), self.corpus_path.clone()]
-    }
-}
-
-impl MutationExecutor for InboxDirToCorpusMutation {
-    fn origin(&self) -> super::MutationOrigin {
-        super::MutationOrigin::Staged
-    }
-    fn execution_stage(&self) -> super::MutationExecutionStage {
-        super::MutationExecutionStage::DB
-    }
-
-    fn execute(&self, ctx: &MutationContext) -> MutationResult {
-        let start = std::time::Instant::now();
-
-        // Step 1: Move the entire directory on disk
-        let result = execute_move(&self.inbox_dir_path, &self.corpus_dir_path).and_then(|()| {
-            // Step 2: Update DB records for each tracked audio file
-            for tracked in &self.tracked_files {
-                super::indexing::execute_update_file_path(
-                    ctx.read_db,
-                    "inbox",
-                    tracked.inode,
-                    &tracked.corpus_path,
-                    Some("corpus"),
-                    ctx.witness,
-                )?;
-            }
-            Ok(())
-        });
-
-        MutationResult::from_unit_result(Mutation::InboxDirToCorpus(self.clone()), result, start)
-    }
-
-    fn signal_clear_scope(&self) -> SignalClearScope {
-        SignalClearScope::MutableOnly
-    }
-
-    fn affected_inodes(&self) -> Vec<i64> {
-        self.tracked_files.iter().map(|f| f.inode).collect()
-    }
-
-    fn recomputation_scope(&self) -> RecomputationScope {
-        RecomputationScope::FILES | RecomputationScope::TAGS | RecomputationScope::INBOX
-    }
-
-    fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
-        vec![self.inbox_dir_path.clone(), self.corpus_dir_path.clone()]
     }
 }
 

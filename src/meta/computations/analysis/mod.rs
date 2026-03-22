@@ -21,10 +21,6 @@
 //! - `DetectMetadataDuplicates` - Find tracks with identical tag sets
 //! - `DetectTagCanonicalizations` - Find tag canonicalization opportunities
 //!
-//! Inbox:
-//! - `DetectInboxCorpusMatches` - Find inbox files matching corpus by fingerprint
-//! - `DetectInboxTagCanonicity` - Find inbox tag values differing from corpus canonical spellings
-//!
 //! Deploy Health:
 //! - `DetectDeployConflicts` - Bulk detection of deploy path collisions
 //! - `DeriveDeployHealthSignals` - Derive library health signals from scan data
@@ -38,8 +34,6 @@ mod duplicates;
 mod external_matches;
 mod formats;
 pub(crate) mod image_index;
-mod inbox_matches;
-mod inbox_tags;
 mod path_schema;
 mod release_packing;
 mod schedule;
@@ -56,8 +50,6 @@ pub use duplicates::*;
 pub use external_matches::*;
 pub use formats::*;
 pub use image_index::*;
-pub use inbox_matches::*;
-pub use inbox_tags::*;
 pub use path_schema::*;
 pub use release_packing::*;
 pub use schedule::*;
@@ -168,32 +160,6 @@ pub enum Computation {
     /// For each HealthyFile, emits DeployReady (not in any library) or
     /// DeployedHealthy (correctly deployed). Runs after DeriveDeployHealthSignals.
     DeriveCorpusDeployStatus,
-
-    /// Detect inbox files that match corpus files by fingerprint+duration.
-    ///
-    /// For each inbox file with a fingerprint, finds corpus files with similar
-    /// fingerprints within duration tolerance. Emits InboxCorpusMatchSignal.
-    DetectInboxCorpusMatches,
-
-    /// Detect inbox tag values that differ from corpus canonical spellings.
-    ///
-    /// Compares inbox tag values against corpus vocabulary. Emits
-    /// InboxTagCanonicitySignal for values whose normalized form matches
-    /// corpus values but whose exact spelling differs.
-    DetectInboxTagCanonicity,
-
-    /// Detect inbox files missing required tags.
-    ///
-    /// Simplified version of DetectMissingTags for inbox zone.
-    /// No ExpectedMissingTag suppression, no MissingAlbumSingle routing.
-    DetectInboxMissingTags,
-
-    /// Detect compound tag values in inbox files.
-    ///
-    /// Single-pass (no orchestrator) since inbox is small.
-    /// Checks collaboration keywords + per-tag separators, enriches
-    /// matching_parts against corpus vocabulary.
-    DetectInboxCompoundTags,
 
     /// Detect disc values extractable from ALBUM or TRACKNUMBER tags.
     ///
@@ -337,10 +303,6 @@ impl Computation {
             Computation::DetectReleaseOverlaps => "Detecting release overlaps",
             Computation::DeriveDeployHealthSignals { .. } => "Deriving deploy health",
             Computation::DeriveCorpusDeployStatus => "Deriving corpus deploy status",
-            Computation::DetectInboxCorpusMatches => "Detecting inbox-corpus matches",
-            Computation::DetectInboxTagCanonicity => "Detecting inbox tag canonicity",
-            Computation::DetectInboxMissingTags => "Detecting inbox missing tags",
-            Computation::DetectInboxCompoundTags => "Detecting inbox compound tags",
             Computation::DetectDiscExtractions => "Detecting disc extractions",
             Computation::DetectPathTagMismatches => "Detecting path-tag mismatches",
             Computation::PackReleases => "Packing releases",
@@ -416,18 +378,6 @@ impl Computation {
             ),
             Computation::DeriveCorpusDeployStatus => {
                 execute_derive_corpus_deploy_status(ctx)
-            }
-            Computation::DetectInboxCorpusMatches => {
-                execute_detect_inbox_corpus_matches(ctx)
-            }
-            Computation::DetectInboxTagCanonicity => {
-                execute_detect_inbox_tag_canonicity(ctx)
-            }
-            Computation::DetectInboxMissingTags => {
-                execute_detect_inbox_missing_tags(ctx)
-            }
-            Computation::DetectInboxCompoundTags => {
-                execute_detect_inbox_compound_tags(ctx)
             }
             Computation::DetectDiscExtractions => {
                 execute_detect_disc_extractions(ctx)

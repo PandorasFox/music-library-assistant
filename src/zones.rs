@@ -1,24 +1,12 @@
 //! Zone trait hierarchy for generic zone-parameterized operations.
 //!
-//! Corpus and inbox are structurally identical — indexed audio files with tags
-//! and signals — but historically treated as separate worlds with duplicated
-//! logic. This module provides a trait hierarchy that lets computations, queries,
-//! and executors be written once and parameterized by zone.
-//!
 //! ## Trait Hierarchy
 //!
 //! - `AudioZone` — base: zone has indexed audio files in the `files` table
-//! - `TaggedZone: AudioZone` — zone has a tag table (corpus_tags / inbox_tags)
+//! - `TaggedZone: AudioZone` — zone has a tag table (corpus_tags)
 //! - `CanonicalTagSource: TaggedZone` — zone's tags define canonical vocabulary (corpus only)
 //! - `Deployable: TaggedZone` — zone's files participate in deploy path computation (corpus only)
 //! - `ExternallyMatchable: AudioZone` — zone's files can be matched against external databases
-//!
-//! ## Associated Signal Types
-//!
-//! The signal write system (`CorpusSignalStore`) dispatches on concrete signal
-//! type, not zone. Both corpus and inbox signals implement `CorpusSignalStore`.
-//! Zone identity lives in *which signal type you pass*. `AudioZone` carries
-//! associated signal types so generic code can do `Z::FilePresenceSignal::TABLE_NAME`.
 
 use std::collections::HashSet;
 
@@ -90,8 +78,7 @@ pub trait ExternallyMatchable: AudioZone {}
 pub trait DeriveZoneSignals: AudioZone {
     /// Handle an indexed file that is no longer on disk.
     ///
-    /// Corpus: emit MissingFileSignal + clear stale HealthyFile.
-    /// Inbox: cascade-drop all inbox state.
+    /// Emit MissingFileSignal + clear stale HealthyFile.
     fn on_file_gone(
         inode: i64,
         path: &str,
@@ -102,12 +89,10 @@ pub trait DeriveZoneSignals: AudioZone {
 
     /// Whether an indexed+present file should be marked healthy.
     ///
-    /// Corpus: false if OOB signals exist. Inbox: always true.
+    /// False if OOB signals exist.
     fn should_mark_healthy(inode: i64, read_only_db: &ReadOnlyDb<'_>) -> bool;
 
     /// GC orphaned signals for this zone. Returns count cleared.
-    ///
-    /// Corpus: ~18 signal tables. Inbox: 3 tables.
     fn gc_orphaned_signals(
         read_only_db: &ReadOnlyDb<'_>,
         sender: &SignalWriteSender,
@@ -117,8 +102,7 @@ pub trait DeriveZoneSignals: AudioZone {
 
     /// Reconcile signals for a file present on both disk and index.
     ///
-    /// Corpus: clear stale MissingFile/UnindexedFile, conditionally mark healthy (OOB gating).
-    /// Inbox: clear stale InboxUnindexed, unconditionally mark healthy.
+    /// Clear stale MissingFile/UnindexedFile, conditionally mark healthy (OOB gating).
     fn on_file_present(
         inode: i64,
         path: &str,
@@ -129,8 +113,7 @@ pub trait DeriveZoneSignals: AudioZone {
 
     /// How to compute "known inodes" for GC purposes.
     ///
-    /// Corpus: disk ∪ indexed (both matter — index-only files get MissingFile).
-    /// Inbox: disk only (gone inbox files are cascade-dropped).
+    /// disk ∪ indexed (both matter — index-only files get MissingFile).
     fn known_inodes_for_gc(disk_set: &HashSet<i64>, indexed_set: &HashSet<i64>) -> HashSet<i64>;
 }
 
@@ -139,7 +122,6 @@ pub trait DeriveZoneSignals: AudioZone {
 // ============================================================================
 
 pub struct CorpusZone;
-pub struct InboxZone;
 
 // ============================================================================
 // Implementations
@@ -203,63 +185,3 @@ impl TaggedZone for CorpusZone {
 impl CanonicalTagSource for CorpusZone {}
 impl Deployable for CorpusZone {}
 impl ExternallyMatchable for CorpusZone {}
-
-impl AudioZone for InboxZone {
-    const ZONE: Zone = Zone::Inbox;
-    const ZONE_STR: &'static str = "inbox";
-    type FilePresenceSignal = crate::meta::signals::data::FileInInboxSignal;
-    type UnindexedSignal = crate::meta::signals::data::InboxUnindexedSignal;
-    type HealthySignal = crate::meta::signals::data::InboxHealthySignal;
-
-    fn file_presence_signal(inode: i64, path: String, generation: u8) -> TypedSignalWrite {
-        TypedSignalWrite::FileInInbox(crate::meta::signals::data::FileInInboxSignal {
-            inode,
-            path,
-            generation,
-        })
-    }
-
-    fn unindexed_signal(inode: i64, path: String) -> TypedSignalWrite {
-        TypedSignalWrite::InboxUnindexed(crate::meta::signals::data::InboxUnindexedSignal {
-            inode,
-            path,
-        })
-    }
-
-    fn healthy_signal(inode: i64, path: String) -> TypedSignalWrite {
-        TypedSignalWrite::InboxHealthy(crate::meta::signals::data::InboxHealthySignal {
-            inode,
-            path,
-        })
-    }
-}
-
-impl TaggedZone for InboxZone {
-    const TAG_TABLE: &'static str = "inbox_tags";
-    type CompoundTagSignal = crate::meta::signals::data::InboxCompoundTagSignal;
-    type MissingTagSignal = crate::meta::signals::data::InboxMissingTagSignal;
-
-    fn compound_tag_signal(
-        inode: i64,
-        path: String,
-        compounds: Vec<crate::meta::signals::data::CompoundTagEntry>,
-    ) -> TypedSignalWrite {
-        TypedSignalWrite::InboxCompoundTag(crate::meta::signals::data::InboxCompoundTagSignal {
-            inode,
-            path,
-            compounds,
-        })
-    }
-
-    fn missing_tag_signal(
-        key: String,
-        data: crate::meta::signals::data::MissingTagData,
-    ) -> TypedSignalWrite {
-        TypedSignalWrite::InboxMissingTag(crate::meta::signals::data::InboxMissingTagSignal {
-            key,
-            data,
-        })
-    }
-}
-
-impl ExternallyMatchable for InboxZone {}

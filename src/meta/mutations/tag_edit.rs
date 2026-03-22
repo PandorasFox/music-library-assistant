@@ -88,10 +88,7 @@ impl MutationExecutor for ApplyTagOpsMutation {
     }
 
     fn recomputation_scope(&self) -> RecomputationScope {
-        match self.zone {
-            Zone::Inbox => RecomputationScope::INBOX,
-            _ => RecomputationScope::TAGS,
-        }
+        RecomputationScope::TAGS
     }
 }
 

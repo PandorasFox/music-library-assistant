@@ -31,7 +31,6 @@ pub fn execute_index_observed_images(
     for img in images {
         let zone_str = match img.zone {
             crate::db::types::Zone::Corpus => "corpus",
-            crate::db::types::Zone::Inbox => "inbox",
             crate::db::types::Zone::Library => "library",
         };
 

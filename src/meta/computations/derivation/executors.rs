@@ -19,7 +19,7 @@ use crate::meta::signals::registry::TypedSignalWrite;
 use crate::meta::signals::store::CorpusSignalStore;
 
 use crate::db::types::Zone;
-use crate::zones::{CorpusZone, DeriveZoneSignals, InboxZone};
+use crate::zones::{CorpusZone, DeriveZoneSignals};
 
 use super::{Computation, Result};
 
@@ -366,26 +366,6 @@ pub fn execute_derive_corpus_signals(
     )
 }
 
-/// Derive inbox signals via global inode set comparison.
-pub fn execute_derive_inbox_signals(
-    read_only_db: &ReadOnlyDb<'_>,
-    observed_inodes: HashMap<i64, crate::witch::ObservedInodeMeta>,
-    witness: &ComputationWitness,
-) -> Result {
-    let sender = require_sender!(Computation::DeriveInboxSignals {
-        observed_inodes: HashMap::new(),
-    });
-    derive_zone_signals::<InboxZone>(
-        read_only_db,
-        observed_inodes,
-        &sender,
-        witness,
-        Computation::DeriveInboxSignals {
-            observed_inodes: HashMap::new(),
-        },
-    )
-}
-
 /// Clear signals from a single corpus signal table for inodes not in `known_inodes`.
 fn gc_signal_table<S: CorpusSignalStore>(
     read_only_db: &ReadOnlyDb<'_>,
@@ -486,59 +466,6 @@ impl DeriveZoneSignals for CorpusZone {
 
     fn known_inodes_for_gc(disk_set: &HashSet<i64>, indexed_set: &HashSet<i64>) -> HashSet<i64> {
         disk_set.union(indexed_set).copied().collect()
-    }
-}
-
-impl DeriveZoneSignals for InboxZone {
-    fn on_file_gone(
-        inode: i64,
-        _path: &str,
-        _read_only_db: &ReadOnlyDb<'_>,
-        sender: &write_thread::SignalWriteSender,
-        witness: &ComputationWitness,
-    ) {
-        sender.drop_inbox_file_state(inode, witness);
-    }
-
-    fn should_mark_healthy(_inode: i64, _read_only_db: &ReadOnlyDb<'_>) -> bool {
-        true
-    }
-
-    fn gc_orphaned_signals(
-        read_only_db: &ReadOnlyDb<'_>,
-        sender: &write_thread::SignalWriteSender,
-        known_inodes: &HashSet<i64>,
-        witness: &ComputationWitness,
-    ) -> usize {
-        // FileInInbox excluded: it IS the disk observation, always part of known_inodes
-        gc_signal_tables!(read_only_db, sender, known_inodes, witness, [
-            InboxUnindexedSignal,
-            InboxHealthySignal,
-            InboxCorpusMatchSignal,
-        ])
-    }
-
-    fn on_file_present(
-        inode: i64,
-        path: &str,
-        read_only_db: &ReadOnlyDb<'_>,
-        sender: &write_thread::SignalWriteSender,
-        witness: &ComputationWitness,
-    ) {
-        drop_stale_corpus_signal::<InboxUnindexedSignal>(read_only_db, sender, inode, witness);
-        ensure_typed_signal(
-            read_only_db,
-            sender,
-            TypedSignalWrite::InboxHealthy(InboxHealthySignal {
-                inode,
-                path: path.to_string(),
-            }),
-            witness,
-        );
-    }
-
-    fn known_inodes_for_gc(disk_set: &HashSet<i64>, _indexed_set: &HashSet<i64>) -> HashSet<i64> {
-        disk_set.clone()
     }
 }
 

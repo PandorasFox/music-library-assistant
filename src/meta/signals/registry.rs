@@ -22,15 +22,13 @@ pub trait SignalContentHash {
 /// `signal_table_entries()`, and corpus signal clearing functions from a
 /// single declaration.
 ///
-/// Corpus signals are sub-categorized into three groups:
+/// Corpus signals are sub-categorized into two groups:
 /// - `mutable`: signals that should be cleared when a file's state changes
 /// - `inherent`: signals discovered from intrinsic file properties (CorruptFile, LosslessRemux)
-/// - `inbox`: signals specific to inbox-zone files
 ///
-/// The macro generates three clearing functions:
+/// The macro generates two clearing functions:
 /// - `clear_mutable_corpus_signals(conn, inode)` — clears `mutable` signals
 /// - `clear_all_corpus_signals(conn, inode)` — clears `mutable` + `inherent` signals
-/// - `clear_inbox_signals(conn, inode)` — clears `inbox` signals
 macro_rules! signal_registry {
     (
         corpus {
@@ -39,9 +37,6 @@ macro_rules! signal_registry {
             }
             inherent {
                 $($i_variant:ident($i_type:ty, $i_slug:literal)),* $(,)?
-            }
-            inbox {
-                $($inbox_variant:ident($inbox_type:ty, $inbox_slug:literal)),* $(,)?
             }
         }
         aggregate {
@@ -56,7 +51,6 @@ macro_rules! signal_registry {
         pub enum TypedSignalWrite {
             $($m_variant($m_type),)*
             $($i_variant($i_type),)*
-            $($inbox_variant($inbox_type),)*
             $($a_variant($a_type),)*
         }
 
@@ -67,7 +61,6 @@ macro_rules! signal_registry {
                 match self {
                     $(Self::$m_variant(s) => s.insert(conn),)*
                     $(Self::$i_variant(s) => s.insert(conn),)*
-                    $(Self::$inbox_variant(s) => s.insert(conn),)*
                     $(Self::$a_variant(s) => s.insert(conn),)*
                 }
             }
@@ -78,7 +71,6 @@ macro_rules! signal_registry {
                 let result = match self {
                     $(Self::$m_variant(s) => <$m_type>::exists(conn, s.inode),)*
                     $(Self::$i_variant(s) => <$i_type>::exists(conn, s.inode),)*
-                    $(Self::$inbox_variant(s) => <$inbox_type>::exists(conn, s.inode),)*
                     $(Self::$a_variant(s) => <$a_type>::exists(conn, &s.key),)*
                 };
                 result.unwrap_or(false)
@@ -94,7 +86,6 @@ macro_rules! signal_registry {
                 match self {
                     $(Self::$m_variant(s) => s.content_hash_fields(&mut hasher),)*
                     $(Self::$i_variant(s) => s.content_hash_fields(&mut hasher),)*
-                    $(Self::$inbox_variant(s) => s.content_hash_fields(&mut hasher),)*
                     $(Self::$a_variant(s) => s.content_hash_fields(&mut hasher),)*
                 }
                 hasher.finish()
@@ -112,7 +103,6 @@ macro_rules! signal_registry {
             let count = match signal_type {
                 $($m_slug => <$m_type>::count(conn)?,)*
                 $($i_slug => <$i_type>::count(conn)?,)*
-                $($inbox_slug => <$inbox_type>::count(conn)?,)*
                 $($a_slug => <$a_type>::count(conn)?,)*
                 _ => 0,
             };
@@ -145,14 +135,6 @@ macro_rules! signal_registry {
             )*
             $(
                 entries.push(TableEntry {
-                    name: <$inbox_type as CorpusSignalStore>::TABLE_NAME,
-                    kind: signal_registry!(@table_kind $inbox_slug),
-                    create_sql: <$inbox_type as CorpusSignalStore>::TABLE_SQL,
-                    index_sql: &[],
-                });
-            )*
-            $(
-                entries.push(TableEntry {
                     name: <$a_type as AggregateSignalStore>::TABLE_NAME,
                     kind: signal_registry!(@table_kind $a_slug),
                     create_sql: <$a_type as AggregateSignalStore>::TABLE_SQL,
@@ -180,14 +162,6 @@ macro_rules! signal_registry {
             use crate::meta::signals::store::CorpusSignalStore;
             $(let _ = <$m_type>::clear_by_inode(conn, inode);)*
             $(let _ = <$i_type>::clear_by_inode(conn, inode);)*
-        }
-
-        /// Clear inbox signals for an inode.
-        ///
-        /// Used when dropping inbox file state for inodes no longer observed on disk.
-        pub fn clear_inbox_signals(conn: &rusqlite::Connection, inode: i64) {
-            use crate::meta::signals::store::CorpusSignalStore;
-            $(let _ = <$inbox_type>::clear_by_inode(conn, inode);)*
         }
 
     };
@@ -258,13 +232,6 @@ signal_registry! {
             CorruptFile(CorruptFileSignal, "corrupt_file"),
             LosslessRemux(LosslessRemuxSignal, "lossless_remux"),
         }
-        inbox {
-            FileInInbox(FileInInboxSignal, "file_in_inbox"),
-            InboxUnindexed(InboxUnindexedSignal, "inbox_unindexed"),
-            InboxHealthy(InboxHealthySignal, "inbox_healthy"),
-            InboxCorpusMatch(InboxCorpusMatchSignal, "inbox_corpus_match"),
-            InboxCompoundTag(InboxCompoundTagSignal, "inbox_compound_tag"),
-        }
     }
     aggregate {
         CanonicalTag(CanonicalTagSignal, "canonical_tag"),
@@ -284,8 +251,6 @@ signal_registry! {
         CrossSourceOverlap(CrossSourceOverlapSignal, "cross_source_overlap"),
         ReleaseOverlap(ReleaseOverlapSignal, "release_overlap"),
         RedundantDuplicate(RedundantDuplicateSignal, "redundant_duplicate"),
-        InboxTagCanonicity(InboxTagCanonicitySignal, "inbox_tag_canonicity"),
-        InboxMissingTag(InboxMissingTagSignal, "inbox_missing_tag"),
         DiscExtraction(DiscExtractionSignal, "disc_extraction"),
         UnfilledReleaseSlot(UnfilledReleaseSlotSignal, "unfilled_release_slot"),
         PackedRelease(PackedReleaseSignal, "packed_release"),

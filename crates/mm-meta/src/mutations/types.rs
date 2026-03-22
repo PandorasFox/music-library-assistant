@@ -11,8 +11,8 @@ use crate::tags::{PictureInfo, TagSet};
 use super::config_edit::ApplyConfigEditsMutation;
 use super::dir_config_edit::{ApplyBatchDirConfigEditsMutation, ApplyDirConfigEditMutation};
 use super::file_ops::{
-    HardLinkMutation, InboxDirToCorpusMutation, InboxToCorpusMutation, LibraryMoveMutation,
-    MoveMutation, StashFromZoneMutation, StashLeftoversMutation,
+    HardLinkMutation, LibraryMoveMutation, MoveMutation, StashFromZoneMutation,
+    StashLeftoversMutation,
 };
 use super::indexing::{
     AcknowledgeMtimeOnlyMutation, ApplyDbTagsToDiskMutation, AssimilateDiskTagsToDbMutation,
@@ -241,7 +241,7 @@ pub enum Mutation {
     IndexFileFromPath(IndexFileFromPathMutation),
     /// Move a file from source to destination.
     Move(MoveMutation),
-    /// Stash a corpus or inbox file (operator-driven eviction).
+    /// Stash a corpus file (operator-driven eviction).
     StashFromZone(StashFromZoneMutation),
     /// Stash orphaned library files during deploy cleanup.
     StashLeftovers(StashLeftoversMutation),
@@ -251,10 +251,6 @@ pub enum Mutation {
     HardLink(HardLinkMutation),
     /// Move a file within a library.
     LibraryMove(LibraryMoveMutation),
-    /// Move an inbox file into the corpus.
-    InboxToCorpus(InboxToCorpusMutation),
-    /// Move an entire inbox directory into the corpus.
-    InboxDirToCorpus(InboxDirToCorpusMutation),
     /// Update file path in files table.
     UpdateFilePath(UpdateFilePathMutation),
     /// Drop file from index.
@@ -307,8 +303,6 @@ pub enum MutationKind {
     Transcode,
     HardLink,
     LibraryMove,
-    InboxToCorpus,
-    InboxDirToCorpus,
     UpdateFilePath,
     DropFromIndex,
     DropDirectoryFromIndex,
@@ -340,8 +334,6 @@ impl Mutation {
             Mutation::Transcode(_) => MutationKind::Transcode,
             Mutation::HardLink(_) => MutationKind::HardLink,
             Mutation::LibraryMove(_) => MutationKind::LibraryMove,
-            Mutation::InboxToCorpus(_) => MutationKind::InboxToCorpus,
-            Mutation::InboxDirToCorpus(_) => MutationKind::InboxDirToCorpus,
             Mutation::UpdateFilePath(_) => MutationKind::UpdateFilePath,
             Mutation::DropFromIndex(_) => MutationKind::DropFromIndex,
             Mutation::DropDirectoryFromIndex(_) => MutationKind::DropDirectoryFromIndex,
@@ -373,8 +365,6 @@ impl Mutation {
             Mutation::Transcode(_) => "Transcode",
             Mutation::HardLink(_) => "Hard link",
             Mutation::LibraryMove(_) => "Library move",
-            Mutation::InboxToCorpus(_) => "Inbox to corpus",
-            Mutation::InboxDirToCorpus(_) => "Inbox dir to corpus",
             Mutation::UpdateFilePath(_) => "Update path",
             Mutation::DropFromIndex(_) => "Drop from index",
             Mutation::DropDirectoryFromIndex(_) => "Drop directory",
@@ -409,8 +399,6 @@ impl Mutation {
             Mutation::Transcode(m) => m.diff_entries(),
             Mutation::HardLink(m) => m.diff_entries(),
             Mutation::LibraryMove(m) => m.diff_entries(),
-            Mutation::InboxToCorpus(m) => m.diff_entries(),
-            Mutation::InboxDirToCorpus(m) => m.diff_entries(),
             Mutation::UpdateFilePath(m) => m.diff_entries(),
             Mutation::DropFromIndex(m) => m.diff_entries(),
             Mutation::DropDirectoryFromIndex(m) => m.diff_entries(),

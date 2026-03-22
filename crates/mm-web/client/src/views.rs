@@ -8,7 +8,7 @@ use mm_meta::domain_query_types::SessionEditDetail;
 use mm_meta::protocol::DecisionDetail;
 use mm_meta::views::cluster_deploy::DeployModalData;
 use mm_meta::views::{
-    DeployStatus, EditHistoryData, ExternalMatchesData, InboxOverviewData, InsightsData,
+    DeployStatus, EditHistoryData, ExternalMatchesData, InsightsData,
 };
 use mm_meta::witch_types::{WitchStatus, WorkStateSnapshot};
 use mm_ui::domain_types::DeployTab;
@@ -16,12 +16,9 @@ use mm_ui::view_state::lateral::deploy::{DeployViewData, initial_tab};
 use mm_ui::view_state::lateral::history::{
     EditDetailEntry, SessionListEntry, group_edits, relative_timestamp,
 };
-use mm_ui::domain_types::InboxInsightAction;
 use mm_ui::html::style::color_to_css;
 use mm_ui::html::{self, div, h3, section, span, Node};
 use mm_ui::view_state::lateral::health::{BucketEntry, CachedBucketEntries, InsightType};
-use mm_ui::view_state::lateral::inbox::{InboxBucketEntry, InboxViewData};
-
 use mm_ui::resolutions::tag_canonicity::TagCanonicityViewState;
 use mm_ui::resolutions::compound_split::CompoundSplitViewState;
 use mm_ui::resolutions::directory_cluster::DirectoryClusterState;
@@ -91,7 +88,7 @@ pub fn titled_section(title: &str, items: Vec<Node>) -> Node {
 
 
 // ============================================================================
-// Bucket entry rendering (shared by Insights + Inbox)
+// Bucket entry rendering (Insights)
 // ============================================================================
 
 /// Render a single `BucketEntry` (from insights) as a colored kv row.
@@ -126,33 +123,6 @@ fn render_bucket_entry(entry: &BucketEntry) -> Node {
     }
 }
 
-/// Render a single `InboxBucketEntry` as a colored kv row.
-fn render_inbox_entry(entry: &InboxBucketEntry) -> Node {
-    let count_str = entry.count.to_string();
-    let css_color = color_to_css(entry.color);
-    let style = format!("color:{css_color}");
-
-    match inbox_route(&entry.action) {
-        Some(route) => {
-            div()
-                .class("mm-kv mm-kv--clickable")
-                .attr("onclick", &format!("window.__mm_navigate_route('{route}')"))
-                .attr("style", &format!("{style};cursor:pointer"))
-                .child(span().class("mm-kv__key").text(&entry.label))
-                .child(span().class("mm-kv__val").text(&count_str))
-                .child(span().class("mm-kv__action").text("\u{2192}"))
-                .into()
-        }
-        None => {
-            div()
-                .class("mm-kv")
-                .attr("style", &style)
-                .child(span().class("mm-kv__key").text(&entry.label))
-                .child(span().class("mm-kv__val").text(&count_str))
-                .into()
-        }
-    }
-}
 
 /// Map an `InsightType` to its web resolution route.
 ///
@@ -205,26 +175,6 @@ fn insight_route(ty: &InsightType) -> Option<String> {
         InsightType::CorpusFilesInCorpus
         | InsightType::CorpusFilesIndexed
         | InsightType::CorpusImagesInCorpus => None,
-    }
-}
-
-/// Map an `InboxInsightAction` to its web resolution route.
-///
-/// Returns `None` for informational entries.
-fn inbox_route(action: &InboxInsightAction) -> Option<String> {
-    match action {
-        InboxInsightAction::LaunchIntake => Some("resolve/inbox-intake".into()),
-        InboxInsightAction::LaunchCorpusMatchResolution => {
-            Some("resolve/inbox-corpus-match".into())
-        }
-        InboxInsightAction::LaunchInboxTagCanonicity => {
-            Some("resolve/inbox-tag-canonicity".into())
-        }
-        InboxInsightAction::LaunchOrganize => Some("resolve/inbox-organize".into()),
-        InboxInsightAction::LaunchInboxCompoundSplit => {
-            Some("resolve/inbox-compound-split".into())
-        }
-        InboxInsightAction::Informational => None,
     }
 }
 
@@ -694,27 +644,6 @@ pub fn render_session_detail_typed(detail: &SessionEditDetail) -> Node {
 }
 
 // ============================================================================
-// Inbox view — typed
-// ============================================================================
-
-pub fn render_inbox_content(data: &InboxOverviewData) -> Node {
-    let mut view_data = InboxViewData::new();
-    view_data.update(Some(data.clone()));
-
-    let items: Vec<Node> = view_data
-        .entries
-        .iter()
-        .map(|e| render_inbox_entry(e))
-        .collect();
-
-    if items.is_empty() {
-        titled_section("Inbox", vec![kv("Status", "No inbox signals")])
-    } else {
-        titled_section("Inbox", items)
-    }
-}
-
-// ============================================================================
 // Deploy view — typed using DeployViewData + DeployTab
 // ============================================================================
 
@@ -1163,7 +1092,6 @@ pub fn render_config_editor(config: &serde_json::Value) -> Node {
             ("tag_splitting", "Tag Splitting"),
             ("duplicate_analysis", "Duplicate Analysis"),
             ("release_packing", "Release Packing"),
-            ("inbox_organize", "Inbox Organize"),
             ("external_matching", "External Matching"),
             ("disc_extraction", "Disc Extraction"),
             ("album_art", "Album Art"),
@@ -2160,36 +2088,6 @@ pub fn render_missing_files_permanent(data: &serde_json::Value) -> Node {
         &items,
         &[
             ("Drop All", "var(--c-red)", "window.__mm_resolve_action('ConfirmDrop')"),
-            ("Cancel", "var(--c-white)", "window.__mm_resolve_action('Cancel')"),
-        ],
-    )
-}
-
-/// Render inbox/corpus match resolution data.
-pub fn render_inbox_corpus_match(data: &serde_json::Value) -> Node {
-    let items: Vec<String> = data
-        .get("entries")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|entry| {
-                    let inbox_path = entry.get("inbox_path")?.as_str()?;
-                    let quality = entry.get("inbox_quality").and_then(|v| v.as_str()).unwrap_or("?");
-                    let class = entry.get("classification").and_then(|v| v.as_str()).unwrap_or("?");
-                    let matches = entry.get("corpus_matches")
-                        .and_then(|v| v.as_array())
-                        .map_or(0, |a| a.len());
-                    Some(format!("{inbox_path}  [{quality}, {class}, {matches} match(es)]"))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    render_resolution_view(
-        &format!("Inbox/Corpus Matches ({})", items.len()),
-        &items,
-        &[
-            ("Stash Safe", "var(--c-green)", "window.__mm_resolve_action('ConfirmStash')"),
             ("Cancel", "var(--c-white)", "window.__mm_resolve_action('Cancel')"),
         ],
     )

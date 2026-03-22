@@ -16,7 +16,6 @@ pub mod deploy_conflicts;
 pub mod directory_cluster;
 pub mod disc_extraction;
 pub mod external_match;
-pub mod inbox_corpus_match;
 pub mod inconsistent_album_artist;
 pub mod manual_review;
 pub mod metadata_duplicates;

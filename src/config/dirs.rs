@@ -307,8 +307,9 @@ dir "web/releases/indie" {
     /// Helper: build a minimal Config with the given source_dirs for testing resolution.
     fn config_with_dirs(dirs: Vec<SourceDir>) -> crate::config::Config {
         crate::config::Config {
-            root: PathBuf::from("/test"),
-            legacy_enabled: false,
+            storage_root: PathBuf::from("/test"),
+            libraries_root: None,
+            stash_root: None,
             source_dirs: dirs,
             opinions: mm_meta::config::Opinions::default(),
         }

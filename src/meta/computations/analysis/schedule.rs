@@ -113,17 +113,7 @@ pub fn execute_schedule_content_analysis(
         spawn.push(Computation::DeriveExternalMatches);
     }
 
-    // Inbox computations
-    if run_all || s.touches_any(&[RecomputationScope::INBOX, RecomputationScope::FILES]) {
-        spawn.push(Computation::DetectInboxCorpusMatches);
-    }
-    if run_all || s.touches_any(&[RecomputationScope::INBOX, RecomputationScope::TAGS]) {
-        spawn.push(Computation::DetectInboxTagCanonicity);
-        spawn.push(Computation::DetectInboxMissingTags);
-        spawn.push(Computation::DetectInboxCompoundTags);
-    }
-
-    let total_possible = 17; // approximate total without library-specific ones
+    let total_possible = 13; // approximate total without library-specific ones
     log_general(format!(
         "[COMPUTE] ScheduleContentAnalysis: spawning {} computations (of ~{} possible)",
         spawn.len(),

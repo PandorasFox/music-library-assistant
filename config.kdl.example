@@ -1,14 +1,15 @@
 // Music Magic (MM) Configuration
 // Save this as $XDG_CONFIG_HOME/mm/config.kdl (or ~/.config/mm/config.kdl if XDG_CONFIG_HOME is not set)
 
-// Archive root - corpus/, libraries/, and stash/ are derived subdirectories
-root "/Volumes/cerberus/archive"
+// Storage root — this IS the corpus directory (no corpus/ subdirectory)
+storage-root "/Volumes/cerberus/archive/audio"
 
-// Optional: Enable legacy library mode for dissecting existing tag-organized libraries
-// legacy-library true
+// Optional: override where libraries and stash live (default: under storage-root)
+// libraries-root "/Volumes/cerberus/libraries"
+// stash-root "/Volumes/cerberus/stash"
 
 // Define source directories within the corpus and their library deployment targets.
-// Paths are relative to <root>/corpus/.
+// Paths are relative to the storage-root.
 // A single source can deploy to multiple libraries.
 dir "web/releases/bandcamp" {
     library "music"
@@ -52,14 +53,6 @@ opinions {
         // Set to 0.0 to disable the prompt entirely.
         // vacuum-threshold 0.1
     }
-
-    // -------------------------------------------------------------------------
-    // Quality Resolution - Auto-resolve duplicate quality variants
-    // -------------------------------------------------------------------------
-    // quality-resolution {
-    //     // Inbox-to-corpus bitrate tolerance for equivalence (default: 5.0%)
-    //     // inbox-bitrate-fuzz-percent 5.0
-    // }
 
     // -------------------------------------------------------------------------
     // Canonicalization - Tag normalization rules

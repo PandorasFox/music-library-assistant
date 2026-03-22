@@ -31,12 +31,6 @@ impl HandleAction for crate::startup::IntakeConfirmationAction {
         use crate::startup::IntakeConfirmationAction;
         use super::super::operator_decisions;
 
-        // Determine source before matching (used for post-action routing)
-        let is_inbox_source = matches!(
-            app.view,
-            ActiveView::IntakeConfirmation(ref s) if s.source == crate::startup::IntakeSource::Inbox
-        );
-
         match self {
             IntakeConfirmationAction::None => {}
             IntakeConfirmationAction::Confirmed => {
@@ -52,11 +46,7 @@ impl HandleAction for crate::startup::IntakeConfirmationAction {
                 if mutations.is_empty() {
                     // No files to index (all deleted since detection?)
                     mm_meta::logging::log_general("IntakeConfirmation: no mutations to queue");
-                    if is_inbox_source {
-                        app.view = ActiveView::Inbox(super::super::inbox_view::InboxViewState::empty());
-                    } else {
-                        app.start_health_view();
-                    }
+                    app.start_health_view();
                 } else {
                     let count = mutations.len();
                     mm_meta::logging::log_general(format!(
@@ -98,11 +88,7 @@ impl HandleAction for crate::startup::IntakeConfirmationAction {
                     let _ = operator_decisions::discard_transaction(app);
                 }
 
-                if is_inbox_source {
-                    app.view = ActiveView::Inbox(super::super::inbox_view::InboxViewState::empty());
-                } else {
-                    app.start_health_view();
-                }
+                app.start_health_view();
             }
         }
     }
@@ -116,7 +102,6 @@ impl App {
         let intake_state = self
             .query(mm_meta::domain_queries::GetIntakeConfirmation {
                 source: crate::startup::IntakeSource::Health,
-                zone: Some(mm_meta::db_types::Zone::Corpus),
             });
 
         if let Some(state) = intake_state {

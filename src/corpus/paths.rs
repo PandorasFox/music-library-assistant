@@ -90,6 +90,50 @@ pub fn resolve_zone_relative(
     })
 }
 
+/// Validate that storage, libraries, and stash roots are all on the same filesystem.
+///
+/// Hard links only work within a single filesystem. If the roots span mount
+/// boundaries, deploy (hard link) operations will fail at runtime.
+/// Sets EXPECTED_DEVICE_ID on success for future runtime checks.
+pub fn validate_same_filesystem(config: &mm_meta::config::Config) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+
+    let storage = &config.storage_root;
+    let libraries = config.libraries_dir();
+    let stash = config.stash_dir();
+
+    let storage_dev = std::fs::metadata(storage)
+        .map(|m| m.dev())
+        .map_err(|e| format!("Cannot stat storage-root {}: {}", storage.display(), e))?;
+
+    let libraries_dev = std::fs::metadata(&libraries)
+        .map(|m| m.dev())
+        .map_err(|e| format!("Cannot stat libraries-root {}: {}", libraries.display(), e))?;
+
+    let stash_dev = std::fs::metadata(&stash)
+        .map(|m| m.dev())
+        .map_err(|e| format!("Cannot stat stash-root {}: {}", stash.display(), e))?;
+
+    if storage_dev != libraries_dev {
+        return Err(format!(
+            "storage-root ({}) and libraries-root ({}) are on different filesystems (dev {} vs {}). \
+             Hard links require the same filesystem.",
+            storage.display(), libraries.display(), storage_dev, libraries_dev,
+        ));
+    }
+
+    if storage_dev != stash_dev {
+        return Err(format!(
+            "storage-root ({}) and stash-root ({}) are on different filesystems (dev {} vs {}). \
+             Stash operations require the same filesystem.",
+            storage.display(), stash.display(), storage_dev, stash_dev,
+        ));
+    }
+
+    let _ = EXPECTED_DEVICE_ID.set(storage_dev);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,8 +144,9 @@ mod tests {
 
     fn test_config() -> Config {
         Config {
-            root: PathBuf::from("/archive"),
-            legacy_enabled: true,
+            storage_root: PathBuf::from("/archive"),
+            libraries_root: None,
+            stash_root: None,
             source_dirs: vec![],
             opinions: Default::default(),
         }
@@ -111,7 +156,8 @@ mod tests {
     fn test_to_relative() {
         let resolver = PathResolver::from_config(&test_config());
 
-        let abs = Path::new("/archive/corpus/Artist/Album/track.mp3");
+        // storage_root IS the corpus: /archive/Artist/Album/track.mp3 → corpus/Artist/Album/track.mp3
+        let abs = Path::new("/archive/Artist/Album/track.mp3");
         let rel = t!(resolver.to_relative(abs));
         assert_eq!(rel, PathBuf::from("corpus/Artist/Album/track.mp3"));
     }
@@ -130,7 +176,7 @@ mod tests {
 
         let rel = Path::new("corpus/Artist/Album/track.mp3");
         let abs = resolver.resolve(rel);
-        assert_eq!(abs, PathBuf::from("/archive/corpus/Artist/Album/track.mp3"));
+        assert_eq!(abs, PathBuf::from("/archive/Artist/Album/track.mp3"));
     }
 
     #[test]
@@ -149,7 +195,7 @@ mod tests {
     fn test_roundtrip() {
         let resolver = PathResolver::from_config(&test_config());
 
-        let original = PathBuf::from("/archive/corpus/Artist/Album/track.flac");
+        let original = PathBuf::from("/archive/Artist/Album/track.flac");
         let rel = t!(resolver.to_relative(&original));
         let back = resolver.resolve(&rel);
         assert_eq!(back, original);
@@ -172,8 +218,7 @@ mod tests {
     fn test_derived_dirs() {
         let resolver = PathResolver::from_config(&test_config());
 
-        assert_eq!(resolver.root(), Path::new("/archive"));
-        assert_eq!(resolver.corpus_dir(), PathBuf::from("/archive/corpus"));
+        assert_eq!(resolver.corpus_dir(), PathBuf::from("/archive"));
         assert_eq!(
             resolver.libraries_dir(),
             PathBuf::from("/archive/libraries")

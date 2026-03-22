@@ -16,7 +16,7 @@ use super::eye::{EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::startup;
 use super::widgets::{status_bar, Modal, ModalButton, ModalFrame, ModalStyle, UnifiedTitleBar};
 use super::{
-    compound_split_v2, config_editor, disc_extraction_modal, inbox_view,
+    compound_split_v2, config_editor, disc_extraction_modal,
     insights_view, manual_review_modal, missing_album_modal, oob_conflict_modal,
     progressive_worker, tabbed_transaction_review, tag_canonicity_v2,  transaction_review,
 };
@@ -160,9 +160,6 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         ActiveView::ExternalMatches(ref mut state) => {
             super::external_match_view::render::render(f, area, state);
         }
-        ActiveView::Inbox(ref mut state) => {
-            inbox_view::render_inbox_view(f, area, state);
-        }
         ActiveView::TabbedTransactionReview(ref mut state) => {
             tabbed_transaction_review::render(f, area, state);
         }
@@ -216,12 +213,6 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         }
         ActiveView::SubparDuplicateResolution(ref mut preview) => {
             preview.render_frame(f, area);
-        }
-        ActiveView::InboxCorpusMatchResolution(ref mut preview) => {
-            preview.render_frame(f, area);
-        }
-        ActiveView::InboxOrganize(ref mut state) => {
-            super::inbox_organize::render::render(f, area, state);
         }
         ActiveView::DirectoryClusterResolution(ref mut s) => {
             super::directory_cluster_modal::render_v3::render_v3(f, area, s);

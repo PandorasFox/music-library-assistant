@@ -30,8 +30,6 @@ impl RecomputationScope {
     pub const FILES: Self = Self(1 << 1);
     /// Library deployment state changed (hard links, library moves, stashing).
     pub const DEPLOY: Self = Self(1 << 2);
-    /// Inbox state changed (inbox-to-corpus moves, inbox tag edits).
-    pub const INBOX: Self = Self(1 << 3);
     /// External match data arrived (AcoustID lookups completed).
     pub const EXTERNAL: Self = Self(1 << 4);
 

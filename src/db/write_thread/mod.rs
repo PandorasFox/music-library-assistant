@@ -236,7 +236,7 @@ enum DbWriteOp {
     },
 
     /// Drop file from index (file no longer exists or excluded).
-    /// Cascades to audio_info, corpus_tags/inbox_tags, tag_edit_history.
+    /// Cascades to audio_info, corpus_tags, tag_edit_history.
     DropFromIndex {
         path: String,
     },
@@ -335,18 +335,6 @@ enum DbWriteOp {
     SetNeedsDiskFlush {
         path: String,
         value: bool,
-    },
-
-    // =========================================================================
-    // Inbox State Operations (Awakening phase cascade cleanup)
-    // =========================================================================
-    /// Drop all inbox state for an inode no longer observed on disk.
-    ///
-    /// Cascade-deletes inbox_tags, files (zone='inbox'), and all per-inode
-    /// inbox signals. Does NOT touch audio_info (corpus may share the inode
-    /// after a move) or corpus signals.
-    DropInboxFileState {
-        inode: i64,
     },
 
     // =========================================================================

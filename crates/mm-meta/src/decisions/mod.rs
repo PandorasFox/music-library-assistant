@@ -31,10 +31,6 @@ pub enum DecisionKey {
         tag_name: String,
         cluster_index: usize,
     },
-    CompoundSplitInbox {
-        tag_name: String,
-        cluster_index: usize,
-    },
     Deploy,
     DeploySidecars,
     TagEdit { key_item: String },
@@ -46,8 +42,6 @@ pub enum DecisionKey {
     LosslessRemux,
     SubparDuplicate,
     DirectoryCluster { cluster_index: usize },
-    InboxCorpusMatch,
-    InboxOrganize,
     MissingAlbum { group_index: usize },
     ManualReview { group_index: usize },
     IntakeIndex,
@@ -70,7 +64,6 @@ impl DecisionKey {
             DecisionKey::CorruptFile => Some(DecisionKeyKind::CorruptFile),
             DecisionKey::LosslessRemux => Some(DecisionKeyKind::LosslessRemux),
             DecisionKey::SubparDuplicate => Some(DecisionKeyKind::SubparDuplicate),
-            DecisionKey::InboxCorpusMatch => Some(DecisionKeyKind::InboxCorpusMatch),
             DecisionKey::IntakeIndex => Some(DecisionKeyKind::IntakeIndex),
             _ => None,
         }
@@ -88,8 +81,7 @@ impl DecisionKey {
             DecisionKey::TagCanonicity { .. } => &[EmitCanonicalTag, ApplyTagOps],
             // Compound splits → tag ops (splitting compound tag values)
             DecisionKey::CompoundSplitSafe { .. }
-            | DecisionKey::CompoundSplitReview { .. }
-            | DecisionKey::CompoundSplitInbox { .. } => &[ApplyTagOps],
+            | DecisionKey::CompoundSplitReview { .. } => &[ApplyTagOps],
             // Deploy → hard links + library moves + stash leftovers
             DecisionKey::Deploy => &[HardLink, LibraryMove, StashLeftovers],
             // Deploy sidecars → hard links
@@ -113,10 +105,6 @@ impl DecisionKey {
             DecisionKey::SubparDuplicate => &[StashFromZone, DropFromIndex],
             // Directory cluster → tag ops (organize directory structure)
             DecisionKey::DirectoryCluster { .. } => &[ApplyTagOps],
-            // Inbox corpus match → move inbox files to corpus
-            DecisionKey::InboxCorpusMatch => &[Move],
-            // Inbox organize → move inbox files into corpus structure
-            DecisionKey::InboxOrganize => &[InboxToCorpus, InboxDirToCorpus],
             // Missing album → tag ops (fill missing album/artist tags)
             DecisionKey::MissingAlbum { .. } => &[ApplyTagOps],
             // Manual review → tag ops
@@ -154,10 +142,6 @@ impl std::fmt::Display for DecisionKey {
                 tag_name,
                 cluster_index,
             } => write!(f, "Compound Split Review:{}:{}", tag_name, cluster_index),
-            DecisionKey::CompoundSplitInbox {
-                tag_name,
-                cluster_index,
-            } => write!(f, "Compound Split Inbox:{}:{}", tag_name, cluster_index),
             DecisionKey::Deploy => write!(f, "Deploy"),
             DecisionKey::DeploySidecars => write!(f, "Deploy Sidecars"),
             DecisionKey::TagEdit { key_item } => write!(f, "Tag Edit:{}", key_item),
@@ -171,8 +155,6 @@ impl std::fmt::Display for DecisionKey {
             DecisionKey::DirectoryCluster { cluster_index } => {
                 write!(f, "Directory Cluster:{}", cluster_index)
             }
-            DecisionKey::InboxCorpusMatch => write!(f, "Inbox Corpus Match"),
-            DecisionKey::InboxOrganize => write!(f, "Inbox Organize"),
             DecisionKey::MissingAlbum { group_index } => {
                 write!(f, "Missing Album:{}", group_index)
             }
@@ -208,7 +190,6 @@ pub enum DecisionKeyKind {
     CorruptFile,
     LosslessRemux,
     SubparDuplicate,
-    InboxCorpusMatch,
     IntakeIndex,
 }
 

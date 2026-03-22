@@ -75,9 +75,7 @@ impl App {
         }
 
         // Start transaction
-        let mode_str = if zone == Zone::Inbox {
-            "inbox"
-        } else if safe_only {
+        let mode_str = if safe_only {
             "safe"
         } else {
             "review"

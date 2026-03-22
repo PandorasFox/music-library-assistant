@@ -353,7 +353,6 @@ impl<'a> ReadOnlyDb<'a> {
         fn get_tag_canonicity_signal(key: &str) -> Result<Option<crate::meta::signals::data::TagCanonicitySignal>>;
         fn get_inconsistent_album_artist_signal(key: &str) -> Result<Option<crate::meta::signals::data::InconsistentAlbumArtistSignal>>;
         fn get_compound_tag_signal(inode: i64) -> Result<Option<crate::meta::signals::data::CompoundTagSignal>>;
-        fn get_inbox_compound_tag_signal(inode: i64) -> Result<Option<crate::meta::signals::data::InboxCompoundTagSignal>>;
         fn get_cross_source_overlap_signals() -> Result<Vec<crate::meta::signals::data::CrossSourceOverlapSignal>>;
         fn get_release_overlap_signals() -> Result<Vec<crate::meta::signals::data::ReleaseOverlapSignal>>;
         fn get_fingerprint_overlap_signals() -> Result<Vec<crate::meta::signals::data::FingerprintOverlapSignal>>;
@@ -361,9 +360,7 @@ impl<'a> ReadOnlyDb<'a> {
         fn get_missing_album_single_signals() -> Result<Vec<crate::meta::signals::data::MissingAlbumSingleSignal>>;
         fn get_disc_extraction_signals() -> Result<Vec<crate::meta::signals::data::DiscExtractionSignal>>;
         fn get_tracknumber_values_with_context() -> Result<Vec<(i64, String, String, String)>>;
-        fn get_inbox_tag_canonicity_signal(key: &str) -> Result<Option<crate::meta::signals::data::InboxTagCanonicitySignal>>;
         fn get_compound_signal_groups_by_safety(safe_only: bool, tag_filter: Option<&str>) -> Result<Vec<crate::meta::signals::data::CompoundGroup>>;
-        fn get_inbox_compound_signal_groups() -> Result<Vec<crate::meta::signals::data::CompoundGroup>>;
         fn get_sidecar_deploy_ready_signals() -> Result<Vec<crate::meta::signals::data::SidecarDeployReadySignal>>;
     }
 
@@ -529,8 +526,6 @@ impl<'a> ReadOnlyDb<'a> {
         fn get_lossless_remux_files() -> Result<Vec<(i64, String, String)>>;
         fn get_lossless_remux_counts_by_type() -> Result<Vec<(String, i64)>>;
         fn get_subpar_duplicate_files() -> Result<Vec<crate::meta::views::SubparDuplicateEntry>>;
-        fn get_inbox_corpus_match_entries(bitrate_fuzz_percent: f64) -> Result<Vec<crate::meta::views::InboxCorpusMatchEntry>>;
-        fn get_organizable_inbox_files() -> Result<Vec<(i64, String)>>;
     }
 
     // =========================================================================
@@ -671,7 +666,6 @@ impl<'a> ReadOnlyDb<'a> {
 
     delegate_read! {
         fn get_insights_data() -> Result<crate::meta::views::InsightsData>;
-        fn get_inbox_overview_data() -> Result<crate::meta::views::InboxOverviewData>;
         fn get_deploy_status() -> Result<crate::meta::views::DeployStatus>;
     }
 

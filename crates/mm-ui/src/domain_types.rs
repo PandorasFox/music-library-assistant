@@ -134,22 +134,6 @@ pub enum InsightAction {
 }
 
 // ============================================================================
-// InboxInsightAction
-// ============================================================================
-
-/// What action an inbox bucket entry triggers on Enter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InboxInsightAction {
-    LaunchIntake,
-    LaunchCorpusMatchResolution,
-    LaunchInboxTagCanonicity,
-    LaunchOrganize,
-    LaunchInboxCompoundSplit,
-    /// Informational only, no action
-    Informational,
-}
-
-// ============================================================================
 // Search types
 // ============================================================================
 

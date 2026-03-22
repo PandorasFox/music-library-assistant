@@ -121,8 +121,8 @@ mod tests {
 
     #[test]
     fn zone_accessor() {
-        let cache = WizardDetailCache::new(Zone::Inbox);
-        assert_eq!(cache.zone(), Zone::Inbox);
+        let cache = WizardDetailCache::new(Zone::Library);
+        assert_eq!(cache.zone(), Zone::Library);
     }
 
     #[test]

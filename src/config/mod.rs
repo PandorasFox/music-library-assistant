@@ -42,7 +42,7 @@ pub fn config_exists() -> bool {
 /// Write a minimal initial config file with just the archive root path.
 ///
 /// Used during first-time setup before the full config system is available.
-/// The resulting config.kdl contains only the `root` directive; all other
+/// The resulting config.kdl contains only the `storage-root` directive; all other
 /// settings use defaults.
 pub fn write_initial_config(root: &Path) -> Result<()> {
     let config_dir = get_config_dir()?;
@@ -53,7 +53,7 @@ pub fn write_initial_config(root: &Path) -> Result<()> {
         "// Music Magic configuration\n\
          // See docs/ for full configuration reference.\n\
          \n\
-         root \"{}\"\n",
+         storage-root \"{}\"\n",
         root.display()
     );
 

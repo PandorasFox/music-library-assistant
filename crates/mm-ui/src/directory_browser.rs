@@ -81,7 +81,7 @@ pub struct DirectoryBrowser {
     pub search: TextInputState,
     /// Whether the search bar is active.
     pub search_active: bool,
-    /// Current zone label (e.g. "corpus", "inbox").
+    /// Current zone label (e.g. "corpus", "library").
     pub current_zone: String,
     /// Active path filter (if any) — set of matching relative paths.
     path_filter: Option<HashSet<String>>,

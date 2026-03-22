@@ -95,6 +95,5 @@ pub trait MutationExecutor: std::fmt::Debug + Send + Sync {
         RecomputationScope::TAGS
             | RecomputationScope::FILES
             | RecomputationScope::DEPLOY
-            | RecomputationScope::INBOX
     }
 }

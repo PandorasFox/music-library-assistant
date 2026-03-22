@@ -50,7 +50,6 @@ enum ActiveResolution {
     MovedFile(mm_ui::resolutions::moved_file::MovedFileState),
     SubparDuplicate(mm_ui::resolutions::subpar_duplicate::SubparDuplicateState),
     MissingFile(mm_ui::resolutions::missing_file::MissingFilePreviewState),
-    InboxCorpusMatch(mm_ui::resolutions::inbox_corpus_match::InboxCorpusMatchState),
     LosslessRemux(mm_ui::resolutions::lossless_remux::LosslessRemuxPreviewState),
 }
 
@@ -173,7 +172,6 @@ fn route_for_lateral(view: LateralView) -> Route {
         LateralView::Health => Route::Health(Default::default()),
         LateralView::History => Route::History(Default::default()),
         LateralView::Transaction => Route::Transaction(Default::default()),
-        LateralView::Inbox => Route::Inbox(Default::default()),
         LateralView::Deploy => Route::Deploy(Default::default()),
         LateralView::ExternalMatches => Route::ExternalMatches(Default::default()),
     }
@@ -377,10 +375,6 @@ async fn load_view_for_route(route: &Route) -> Result<Node, JsValue> {
             };
             Ok(views::render_deploy_content(&data, modal.as_ref()))
         }
-        Route::Inbox(_) => {
-            let data = api::get_inbox_overview().await?;
-            Ok(views::render_inbox_content(&data))
-        }
         Route::History(_) => {
             let data = api::get_edit_history().await?;
             Ok(views::render_edit_history_content(&data))
@@ -461,7 +455,6 @@ fn zone_api_str(zone: &mm_meta::db_types::Zone) -> &'static str {
     match zone {
         Zone::Corpus => "Corpus",
         Zone::Library => "Library",
-        Zone::Inbox => "Inbox",
     }
 }
 
@@ -552,20 +545,6 @@ async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsVa
                 *cell.borrow_mut() = Some(ActiveResolution::MissingFile(state));
             });
             Ok(views::render_missing_files_permanent(&raw))
-        }
-        ResolutionRoute::InboxCorpusMatch { .. } => {
-            let raw = api::get_query_with(
-                "inbox-corpus-match-data",
-                "bitrate_fuzz_percent=5",
-            ).await?;
-            let typed: mm_meta::views::review_match::InboxCorpusMatchModalData =
-                api_deserialize(&raw, "InboxCorpusMatchModalData")?;
-            let data = mm_ui::resolutions::inbox_corpus_match::InboxCorpusMatchData(typed);
-            let state = mm_ui::resolutions::inbox_corpus_match::InboxCorpusMatchState::new(data);
-            ACTIVE_RESOLUTION.with(|cell| {
-                *cell.borrow_mut() = Some(ActiveResolution::InboxCorpusMatch(state));
-            });
-            Ok(views::render_inbox_corpus_match(&raw))
         }
         ResolutionRoute::OobResolution { bucket, .. } => {
             let data = match bucket {
@@ -933,7 +912,6 @@ pub fn mm_navigate(view_name: &str) {
         "Health" => LateralView::Health,
         "History" => LateralView::History,
         "Transaction" => LateralView::Transaction,
-        "Inbox" => LateralView::Inbox,
         "Deploy" => LateralView::Deploy,
         "Ext. Matches" => LateralView::ExternalMatches,
         _ => return,
@@ -994,7 +972,7 @@ async fn do_resolve_action(action_name: &str) -> Result<(), JsValue> {
 
     // Build a PathResolver from config for dispatch calls that need path resolution.
     let config = fetch_config().await?;
-    let resolver = PathResolver::from_root(config.root.clone());
+    let resolver = PathResolver::from_config(&config);
 
     // Dispatch the action and get the result.
     let result = dispatch_active_resolution(&state, action_name, &resolver)?;
@@ -1155,16 +1133,6 @@ fn dispatch_active_resolution(
             };
             Ok(s.dispatch(action, resolver))
         }
-        ActiveResolution::InboxCorpusMatch(s) => {
-            use mm_ui::resolutions::inbox_corpus_match::InboxCorpusMatchAction;
-            let action = match action_name {
-                "ConfirmStash" => InboxCorpusMatchAction::ConfirmStash,
-                "ConfirmStashAll" => InboxCorpusMatchAction::ConfirmStashAll,
-                "Cancel" => InboxCorpusMatchAction::Cancel,
-                _ => return Err(JsValue::from_str(&format!("unknown InboxCorpusMatch action: {action_name}"))),
-            };
-            Ok(s.dispatch(action, resolver))
-        }
         ActiveResolution::LosslessRemux(s) => {
             use mm_ui::resolutions::lossless_remux::LosslessRemuxAction;
             let action = match action_name {
@@ -1193,7 +1161,6 @@ fn advance_active_resolution(state: &mut ActiveResolution) -> bool {
         | ActiveResolution::MovedFile(_)
         | ActiveResolution::SubparDuplicate(_)
         | ActiveResolution::MissingFile(_)
-        | ActiveResolution::InboxCorpusMatch(_)
         | ActiveResolution::LosslessRemux(_) => false,
     }
 }

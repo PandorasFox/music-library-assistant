@@ -7,10 +7,9 @@
 pub use mm_meta::config::{
     read_shared_config, AlbumArtOpinions, CanonicalizationOpinions, Config, CreditRoutingConfig,
     DiscExtractionOpinions, DuplicateAnalysisOpinions, ExternalMatchingConfig,
-    HealthDetectionOpinions, InboxOrganizeGranularity, InboxOrganizeOpinions, Opinions,
-    PackingWeights, PerformanceOpinions, QualityResolutionOpinions, RelationRouting,
-    ReleasePackingOpinions, SharedConfig, SidecarDeployMode, SourceDir, StartupOpinions,
-    StartupView, TagSplittingOpinions,
+    HealthDetectionOpinions, Opinions, PackingWeights, PerformanceOpinions,
+    QualityResolutionOpinions, RelationRouting, ReleasePackingOpinions, SharedConfig,
+    SidecarDeployMode, SourceDir, StartupOpinions, StartupView, TagSplittingOpinions,
 };
 
 // Config validation (filesystem checks, source path containment) previously lived here.

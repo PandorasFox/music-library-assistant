@@ -514,55 +514,6 @@ impl_corpus_signal!(HealthyFileSignal, "signal_healthy_file",
 impl_signal_query!(all_flat, HealthyFileSignal, "signal_healthy_file", [inode, path]);
 
 // ============================================================================
-// Inbox file signal stores
-// ============================================================================
-
-impl_corpus_signal!(FileInInboxSignal, "signal_file_in_inbox",
-    "CREATE TABLE IF NOT EXISTS signal_file_in_inbox (
-        inode INTEGER PRIMARY KEY,
-        path TEXT NOT NULL,
-        generation INTEGER NOT NULL DEFAULT 0,
-        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )",
-    insert_sql: "INSERT OR REPLACE INTO signal_file_in_inbox (inode, path, generation) VALUES (?1, ?2, ?3)",
-    fields: [inode, path, generation],
-);
-
-impl_corpus_signal!(InboxUnindexedSignal, "signal_inbox_unindexed",
-    "CREATE TABLE IF NOT EXISTS signal_inbox_unindexed (
-        inode INTEGER PRIMARY KEY,
-        path TEXT NOT NULL,
-        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )",
-    insert_sql: "INSERT OR REPLACE INTO signal_inbox_unindexed (inode, path) VALUES (?1, ?2)",
-    fields: [inode, path],
-);
-
-impl_corpus_signal!(InboxHealthySignal, "signal_inbox_healthy",
-    "CREATE TABLE IF NOT EXISTS signal_inbox_healthy (
-        inode INTEGER PRIMARY KEY,
-        path TEXT NOT NULL,
-        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )",
-    insert_sql: "INSERT OR REPLACE INTO signal_inbox_healthy (inode, path) VALUES (?1, ?2)",
-    fields: [inode, path],
-);
-
-impl_corpus_signal!(InboxCorpusMatchSignal, "signal_inbox_corpus_match",
-    "CREATE TABLE IF NOT EXISTS signal_inbox_corpus_match (
-        inode INTEGER PRIMARY KEY,
-        path TEXT NOT NULL,
-        classification TEXT NOT NULL DEFAULT 'equivalent',
-        data BLOB NOT NULL,
-        data_hash INTEGER NOT NULL DEFAULT 0,
-        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )",
-    insert_sql: "INSERT OR REPLACE INTO signal_inbox_corpus_match (inode, path, classification, data, data_hash) VALUES (?1, ?2, ?3, ?4, ?5)",
-    fields: [inode, path, classification via sql_via],
-    blob: data,
-);
-
-// ============================================================================
 // Corpus health signal stores
 // ============================================================================
 
@@ -769,21 +720,6 @@ impl_corpus_signal!(ReleasePackingSignal, "signal_release_packing",
     fields: [inode, path],
     blob: data,
 );
-
-impl_corpus_signal!(InboxCompoundTagSignal, "signal_inbox_compound_tag",
-    "CREATE TABLE IF NOT EXISTS signal_inbox_compound_tag (
-        inode INTEGER PRIMARY KEY,
-        path TEXT NOT NULL,
-        data BLOB NOT NULL,
-        data_hash INTEGER NOT NULL DEFAULT 0,
-        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )",
-    insert_sql: "INSERT OR REPLACE INTO signal_inbox_compound_tag (inode, path, data, data_hash) VALUES (?1, ?2, ?3, ?4)",
-    fields: [inode, path],
-    blob: compounds,
-);
-
-impl_signal_query!(by_inode, InboxCompoundTagSignal, "signal_inbox_compound_tag", [inode, path], compounds);
 
 impl_corpus_signal!(UnmatchedCorpusTrackSignal, "signal_unmatched_corpus_track",
     "CREATE TABLE IF NOT EXISTS signal_unmatched_corpus_track (
@@ -1021,33 +957,6 @@ impl_aggregate_signal!(RedundantDuplicateSignal, "signal_redundant_duplicate",
         discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )",
     insert_sql: "INSERT OR REPLACE INTO signal_redundant_duplicate (key, data, data_hash) VALUES (?1, ?2, ?3)",
-    fields: [key],
-    blob: data,
-);
-
-impl_aggregate_signal!(InboxTagCanonicitySignal, "signal_inbox_tag_canonicity",
-    "CREATE TABLE IF NOT EXISTS signal_inbox_tag_canonicity (
-        key TEXT PRIMARY KEY,
-        tag_name TEXT NOT NULL,
-        data BLOB NOT NULL,
-        data_hash INTEGER NOT NULL DEFAULT 0,
-        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )",
-    insert_sql: "INSERT OR REPLACE INTO signal_inbox_tag_canonicity (key, tag_name, data, data_hash) VALUES (?1, ?2, ?3, ?4)",
-    fields: [key, tag_name],
-    blob: data,
-);
-
-impl_signal_query!(by_key, InboxTagCanonicitySignal, "signal_inbox_tag_canonicity", [key, tag_name], data);
-
-impl_aggregate_signal!(InboxMissingTagSignal, "signal_inbox_missing_tag",
-    "CREATE TABLE IF NOT EXISTS signal_inbox_missing_tag (
-        key TEXT PRIMARY KEY,
-        data BLOB NOT NULL,
-        data_hash INTEGER NOT NULL DEFAULT 0,
-        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )",
-    insert_sql: "INSERT OR REPLACE INTO signal_inbox_missing_tag (key, data, data_hash) VALUES (?1, ?2, ?3)",
     fields: [key],
     blob: data,
 );

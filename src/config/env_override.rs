@@ -23,9 +23,22 @@ pub fn apply_env_overrides(config: &mut Config) {
 
 /// Direct shorthand aliases for the most common config fields.
 fn apply_curated(config: &mut Config) {
-    if let Ok(val) = env::var("MM_ROOT") {
-        logging::log_general(format!("env override: MM_ROOT = {val}"));
-        config.root = PathBuf::from(val);
+    if let Ok(val) = env::var("MM_STORAGE_ROOT") {
+        logging::log_general(format!("env override: MM_STORAGE_ROOT = {val}"));
+        config.storage_root = PathBuf::from(val);
+    } else if let Ok(val) = env::var("MM_ROOT") {
+        logging::log_general(format!("env override: MM_ROOT = {val} (deprecated, use MM_STORAGE_ROOT)"));
+        config.storage_root = PathBuf::from(val);
+    }
+
+    if let Ok(val) = env::var("MM_LIBRARIES_ROOT") {
+        logging::log_general(format!("env override: MM_LIBRARIES_ROOT = {val}"));
+        config.libraries_root = Some(PathBuf::from(val));
+    }
+
+    if let Ok(val) = env::var("MM_STASH_ROOT") {
+        logging::log_general(format!("env override: MM_STASH_ROOT = {val}"));
+        config.stash_root = Some(PathBuf::from(val));
     }
 
     if let Ok(val) = env::var("MM_ACOUSTID_API_KEY") {
@@ -140,14 +153,6 @@ fn apply_generic_field(config: &mut Config, block: &str, field: &str, val: &str)
         (Opinions::KDL_BLOCK_STARTUP, StartupOpinions::KDL_VACUUM_THRESHOLD) => {
             if let Ok(f) = val.parse::<f64>() {
                 config.opinions.startup.vacuum_threshold = f;
-                return true;
-            }
-        }
-
-        // quality-resolution
-        (Opinions::KDL_BLOCK_QUALITY_RESOLUTION, QualityResolutionOpinions::KDL_BITRATE_FUZZ) => {
-            if let Ok(f) = val.parse::<f64>() {
-                config.opinions.quality_resolution.inbox_bitrate_fuzz_percent = f;
                 return true;
             }
         }
@@ -322,23 +327,6 @@ fn apply_generic_field(config: &mut Config, block: &str, field: &str, val: &str)
             }
         }
 
-        // inbox-organize
-        (Opinions::KDL_BLOCK_INBOX_ORGANIZE, InboxOrganizeOpinions::KDL_DIR_GRANULARITY) => {
-            match val.to_lowercase().as_str() {
-                "leaf" => {
-                    config.opinions.inbox_organize.directory_granularity =
-                        InboxOrganizeGranularity::Leaf;
-                    return true;
-                }
-                "toplevel" | "top-level" => {
-                    config.opinions.inbox_organize.directory_granularity =
-                        InboxOrganizeGranularity::TopLevel;
-                    return true;
-                }
-                _ => {}
-            }
-        }
-
         // external-matching
         (Opinions::KDL_BLOCK_EXTERNAL_MATCHING, ExternalMatchingConfig::KDL_ACOUSTID_KEY) => {
             config.opinions.external_matching.acoustid_api_key = val.to_string();
@@ -455,8 +443,9 @@ mod tests {
     /// Build a minimal Config for testing (no filesystem needed).
     fn test_config() -> Config {
         Config {
-            root: PathBuf::from("/original/root"),
-            legacy_enabled: false,
+            storage_root: PathBuf::from("/original/root"),
+            libraries_root: None,
+            stash_root: None,
             source_dirs: Vec::new(),
             opinions: Opinions::default(),
         }
@@ -466,13 +455,13 @@ mod tests {
     fn curated_mm_root_overrides_config() {
         let _guard = t!(ENV_LOCK.lock());
         let mut config = test_config();
-        assert_eq!(config.root, PathBuf::from("/original/root"));
+        assert_eq!(config.storage_root, PathBuf::from("/original/root"));
 
         env::set_var("MM_ROOT", "/overridden/root");
         apply_env_overrides(&mut config);
         env::remove_var("MM_ROOT");
 
-        assert_eq!(config.root, PathBuf::from("/overridden/root"));
+        assert_eq!(config.storage_root, PathBuf::from("/overridden/root"));
     }
 
     #[test]
@@ -536,7 +525,7 @@ mod tests {
         env::remove_var("MM_CFG__NONEXISTENT__FAKE_FIELD");
 
         // Config unchanged (no curated vars leaked from other tests)
-        assert_eq!(config.root, original.root);
+        assert_eq!(config.storage_root, original.storage_root);
     }
 
     #[test]

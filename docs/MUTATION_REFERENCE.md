@@ -35,7 +35,7 @@ deployment operations.
 | Stage | Order | Mutations |
 |-------|-------|-----------|
 | Config | 0 | ApplyConfigEdits, ApplyDirConfigEdit, ApplyBatchDirConfigEdits |
-| DB | 1 | ApplyTagOps, AcknowledgeMtimeOnly, EmitCanonicalTag, EmitExpectedOverlap, EmitExpectedDuplicate, EmitExpectedMissingTag, IndexFileFromPath, UpdateFilePath, InboxToCorpus, InboxDirToCorpus, ApplyDbTagsToDisk |
+| DB | 1 | ApplyTagOps, AcknowledgeMtimeOnly, EmitCanonicalTag, EmitExpectedOverlap, EmitExpectedDuplicate, EmitExpectedMissingTag, IndexFileFromPath, UpdateFilePath, ApplyDbTagsToDisk |
 | DiskFlush | 2 | Transcode, Move, StashFromZone, StashLeftovers, DropFromIndex, DropDirectoryFromIndex, ExportEditHistory |
 | DiskDeploy | 3 | HardLink, LibraryMove |
 | *(ChainEmitted)* | — | FlushTagsToDisk, AssimilateDiskTagsToDb, ClearEditHistory *(spawned during execution, never in transactions)* |
@@ -50,20 +50,20 @@ deployment operations.
 
 | Mutation | Spawns Mutations | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
 |----------|------------------|---------------------|-----------------|-----------------|-------|
-| ApplyTagOps | **FlushTagsToDisk** (per inode) | — | — | — | Zone-aware: reads/writes corpus_tags or inbox_tags based on `zone` field. Incremental ops with validation, spawn disk sync per inode |
-| ApplyDbTagsToDisk | — | UpdateCorpusFileSignals | — | (per-file signals wiped), needs_disk_flush | Zone-aware: reads from corpus_tags or inbox_tags based on `zone` field. Write to disk, clear needs_disk_flush |
-| FlushTagsToDisk | — | UpdateCorpusFileSignals | — | (per-file signals wiped), needs_disk_flush | Zone-aware: validates committed tags from zone-appropriate table against expected_tags. Write to disk on match |
-| AssimilateDiskTagsToDb | — | UpdateCorpusFileSignals | — | (per-file signals wiped) | Zone-aware: writes to corpus_tags or inbox_tags based on zone. Read from disk, write to DB |
+| ApplyTagOps | **FlushTagsToDisk** (per inode) | — | — | — | Reads/writes corpus_tags. Incremental ops with validation, spawn disk sync per inode |
+| ApplyDbTagsToDisk | — | UpdateCorpusFileSignals | — | (per-file signals wiped), needs_disk_flush | Reads from corpus_tags. Write to disk, clear needs_disk_flush |
+| FlushTagsToDisk | — | UpdateCorpusFileSignals | — | (per-file signals wiped), needs_disk_flush | Validates committed tags from corpus_tags against expected_tags. Write to disk on match |
+| AssimilateDiskTagsToDb | — | UpdateCorpusFileSignals | — | (per-file signals wiped) | Writes to corpus_tags. Read from disk, write to DB |
 
 The incremental tag operation pattern:
 
-1. **ApplyTagOps**: Apply incremental `TagOp` operations (add/drop/replace). Carries `zone: Zone` to determine tag table. For each inode:
+1. **ApplyTagOps**: Apply incremental `TagOp` operations (add/drop/replace). For each inode:
    - Validate expected old_values exist (prevents stale overwrites)
-   - Apply ops directly via `apply_index_tag_ops` (INSERT/UPDATE/DELETE) to zone-appropriate tag table
+   - Apply ops directly via `apply_index_tag_ops` (INSERT/UPDATE/DELETE) to corpus_tags
    - Set `needs_disk_flush=true`
-   - **Spawn** FlushTagsToDisk for disk sync (carries zone)
+   - **Spawn** FlushTagsToDisk for disk sync
 2. **FlushTagsToDisk**: Drain DB queue, validate committed tags against expected, write to disk, clear `needs_disk_flush`.
-3. **ApplyDbTagsToDisk**: Read tags from zone-appropriate table (source of truth), write to disk, clear `needs_disk_flush`.
+3. **ApplyDbTagsToDisk**: Read tags from corpus_tags (source of truth), write to disk, clear `needs_disk_flush`.
 
 TagOps map directly to SQL operations:
 - `add` (old=None, new=Some) → `INSERT OR IGNORE`
@@ -104,7 +104,7 @@ Recovery process: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue
 | Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
 |----------|---------------------|-----------------|-----------------|-------|
 | UpdateFileEntry | UpdateCorpusFileSignals | — | (per-file signals wiped) | Update file entry in files table |
-| UpdateFilePath | — | — | MutableOnly scope signals for inode | Update path in files table; handles both absolute and relative new_path. When `new_zone` is set and differs from `zone`, also updates zone column and migrates tags between tag tables (e.g. inbox_tags → corpus_tags) |
+| UpdateFilePath | — | — | MutableOnly scope signals for inode | Update path in files table; handles both absolute and relative new_path |
 | CleanupStaleFiles | — | — | — | Remove orphaned file entries |
 
 ### File Operations
@@ -113,13 +113,10 @@ Recovery process: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue
 |----------|---------------------|-----------------|-----------------|-------|
 | Move | UpdateCorpusFileSignals × 2 | — | (signals for both paths wiped) | Move file within corpus |
 | Copy | UpdateCorpusFileSignals × 2 | — | (signals for both paths wiped) | Copy file within corpus |
-| StashFromZone | UpdateCorpusFileSignals | — | All scope signals for discovered inode | Operator-driven stash of corpus/inbox files; discovers inode before move |
+| StashFromZone | UpdateCorpusFileSignals | — | All scope signals for discovered inode | Operator-driven stash of corpus files; discovers inode before move |
 | StashLeftovers | UpdateCorpusFileSignals | — | All scope signals for discovered inode; LibraryLeftoverSignal by path key | Automated cleanup of orphaned library files during deploy |
 | UpdateTrackPath | UpdateCorpusFileSignals × 2 | — | (signals for both paths wiped) | Update path in index |
 | Transcode | UpdateCorpusFileSignals × 2 | WaveformReadError | (signals for both paths wiped) | Transcode lossless non-Vorbis file to FLAC |
-| InboxToCorpus | (via dirty inodes) | — | MutableOnly scope signals for inode | Move inbox file to corpus; updates zone from inbox→corpus, migrates inbox_tags→corpus_tags |
-| InboxDirToCorpus | (via dirty inodes) | — | MutableOnly scope signals for all tracked inodes | Move entire inbox directory to corpus via fs::rename; updates zone + migrates tags for each tracked audio file. Non-audio content (covers, booklets) travels with the directory. |
-
 ### Deployment Operations
 
 | Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |

@@ -9,7 +9,6 @@ pub enum LateralView {
     Health,
     History,
     Transaction,
-    Inbox,
     Deploy,
     ExternalMatches,
 }
@@ -24,7 +23,6 @@ impl LateralView {
             LateralView::Health => "Health",
             LateralView::History => "History",
             LateralView::Transaction => "Transaction",
-            LateralView::Inbox => "Inbox",
             LateralView::Deploy => "Deploy",
             LateralView::ExternalMatches => "Ext. Matches",
         }
@@ -40,11 +38,10 @@ impl LateralView {
                 if transactions_open {
                     LateralView::Transaction
                 } else {
-                    LateralView::Inbox
+                    LateralView::Deploy
                 }
             }
-            LateralView::Transaction => LateralView::Inbox,
-            LateralView::Inbox => LateralView::Deploy,
+            LateralView::Transaction => LateralView::Deploy,
             LateralView::Deploy => LateralView::History,
             LateralView::History => LateralView::ExternalMatches,
             LateralView::ExternalMatches => LateralView::Config,
@@ -59,14 +56,13 @@ impl LateralView {
             LateralView::Files => LateralView::Search,
             LateralView::Health => LateralView::Files,
             LateralView::Transaction => LateralView::Health,
-            LateralView::Inbox => {
+            LateralView::Deploy => {
                 if transactions_open {
                     LateralView::Transaction
                 } else {
                     LateralView::Health
                 }
             }
-            LateralView::Deploy => LateralView::Inbox,
             LateralView::History => LateralView::Deploy,
             LateralView::ExternalMatches => LateralView::History,
         }
@@ -82,7 +78,6 @@ impl LateralView {
             LateralView::Health => Route::Health(HealthRoute::default()),
             LateralView::History => Route::History(HistoryRoute::default()),
             LateralView::Transaction => Route::Transaction(TransactionRoute::default()),
-            LateralView::Inbox => Route::Inbox(InboxRoute::default()),
             LateralView::Deploy => Route::Deploy(DeployRoute::default()),
             LateralView::ExternalMatches => Route::ExternalMatches(ExternalMatchesRoute::default()),
         }
@@ -99,7 +94,6 @@ impl LateralView {
         if transactions_open {
             views.push(LateralView::Transaction);
         }
-        views.push(LateralView::Inbox);
         views.push(LateralView::Deploy);
         views.push(LateralView::History);
         views.push(LateralView::ExternalMatches);
@@ -119,12 +113,12 @@ mod tests {
 
         // With transactions
         assert_eq!(LateralView::Health.next(true), LateralView::Transaction);
-        assert_eq!(LateralView::Transaction.next(true), LateralView::Inbox);
-        assert_eq!(LateralView::Inbox.prev(true), LateralView::Transaction);
+        assert_eq!(LateralView::Transaction.next(true), LateralView::Deploy);
+        assert_eq!(LateralView::Deploy.prev(true), LateralView::Transaction);
 
         // Without transactions
-        assert_eq!(LateralView::Health.next(false), LateralView::Inbox);
-        assert_eq!(LateralView::Inbox.prev(false), LateralView::Health);
+        assert_eq!(LateralView::Health.next(false), LateralView::Deploy);
+        assert_eq!(LateralView::Deploy.prev(false), LateralView::Health);
     }
 
     #[test]

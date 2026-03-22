@@ -74,10 +74,6 @@ pub struct MissingAlbumSingleSignalWire {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GetInsights;
 
-/// Inbox file counts by category (unindexed, corpus match, organizable, etc.).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct GetInboxOverview;
-
 /// Current deploy status: library health and per-library file counts.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GetDeployStatus;
@@ -168,12 +164,6 @@ pub struct GetReleaseOverlapData;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetLosslessRemuxData;
 
-/// Inbox corpus match data with configurable bitrate fuzz tolerance.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetInboxCorpusMatchData {
-    pub bitrate_fuzz_percent: f64,
-}
-
 /// Deploy modal data with optional config for library assignment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetDeployData {
@@ -250,14 +240,10 @@ pub struct GetCurrentTagValues {
 // Wave 5: Remaining closure conversions
 // ============================================================================
 
-/// Gather unindexed files for intake confirmation.
-///
-/// `zone: None` checks both corpus and inbox (startup mode).
-/// `zone: Some(Zone::Corpus)` or `Some(Zone::Inbox)` checks one zone.
+/// Gather unindexed corpus files for intake confirmation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetIntakeConfirmation {
     pub source: crate::views::startup_organize::IntakeSource,
-    pub zone: Option<crate::db_types::Zone>,
 }
 
 /// Batch-load MB recording summaries and detail data from cache.
@@ -284,12 +270,6 @@ pub struct GetReleaseStagingData {
 pub struct GetTagEditorFiles {
     pub rel_path: std::path::PathBuf,
     pub mode: crate::domain_query_types::TagEditorLoadMode,
-}
-
-/// Load organizable inbox directories for the organize workflow.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetInboxOrganizeData {
-    pub config: crate::config::Config,
 }
 
 /// Read tags from disk for a batch of audio files (by inode).
@@ -459,7 +439,6 @@ macro_rules! domain_query_protocol {
 domain_query_protocol! {
     // Summary queries
     GetInsights("insights") => crate::views::InsightsData,
-    GetInboxOverview("inbox-overview") => crate::views::InboxOverviewData,
     GetDeployStatus("deploy-status") => crate::views::DeployStatus,
     GetEditHistory("edit-history") => crate::views::EditHistoryData,
     GetExternalMatches("external-matches") => crate::views::ExternalMatchesData,
@@ -484,7 +463,6 @@ domain_query_protocol! {
     GetDirectoryClusterData("directory-cluster-data") => crate::views::cluster_deploy::DirectoryClusterModalData,
     GetReleaseOverlapData("release-overlap-data") => crate::views::cluster_deploy::DirectoryClusterModalData,
     GetLosslessRemuxData("lossless-remux-data") => crate::views::cluster_deploy::LosslessRemuxModalData,
-    GetInboxCorpusMatchData("inbox-corpus-match-data") => crate::views::review_match::InboxCorpusMatchModalData,
     GetDeployData("deploy-data") => crate::views::cluster_deploy::DeployModalData,
     GetManualReviewData("manual-review-data") => crate::views::review_match::ManualReviewData,
     GetCorpusTags("corpus-tags") => Vec<(String, String)>,
@@ -504,7 +482,6 @@ domain_query_protocol! {
     GetRecordingBatchData("recording-batch-data") => crate::domain_query_types::RecordingBatchResult,
     GetReleaseStagingData("release-staging-data") => crate::domain_query_types::ReleaseStagingData,
     GetTagEditorFiles("tag-editor-files") => (Vec<crate::db_types::AudioFile>, usize),
-    GetInboxOrganizeData("inbox-organize-data") => Vec<crate::views::startup_organize::InboxDirectory>,
     GetFileTagValues("file-tag-values") => Vec<(i64, Vec<(String, String)>)>,
 
     // Web file browser & search

@@ -906,29 +906,6 @@ fn load_same_recording_different_releases(
 }
 
 // ============================================================================
-// Inbox Corpus Match Modal
-// ============================================================================
-
-/// Load inbox corpus match entries from the database.
-pub fn load_inbox_corpus_match_data(
-    read_db: &ReadOnlyDb<'_>,
-    bitrate_fuzz_percent: f64,
-) -> Result<mm_meta::views::review_match::InboxCorpusMatchModalData> {
-    use crate::meta::views::MatchClassification;
-    use mm_meta::views::review_match::InboxCorpusMatchModalData;
-
-    let mut entries = read_db.get_inbox_corpus_match_entries(bitrate_fuzz_percent)?;
-
-    entries.sort_by_key(|e| match e.classification {
-        MatchClassification::Equivalent => 0,
-        MatchClassification::Subpar => 1,
-        MatchClassification::Better => 2,
-    });
-
-    Ok(InboxCorpusMatchModalData { entries })
-}
-
-// ============================================================================
 // Packed Tag Canonicity Resolution (single-load, all clusters)
 // ============================================================================
 
@@ -950,14 +927,9 @@ pub fn load_tag_canonicity_resolution(
     let tag_prefix = format!("{}:", tag_name);
 
     // Step 1: Get all signal keys for this tag name, then load each signal
-    let all_keys = match zone {
-        Zone::Inbox => db
-            .aggregate_signal_keys::<crate::meta::signals::data::InboxTagCanonicitySignal>()
-            .unwrap_or_default(),
-        _ => db
-            .aggregate_signal_keys::<crate::meta::signals::data::TagCanonicitySignal>()
-            .unwrap_or_default(),
-    };
+    let all_keys = db
+        .aggregate_signal_keys::<crate::meta::signals::data::TagCanonicitySignal>()
+        .unwrap_or_default();
 
     let filtered_keys: Vec<&String> = all_keys
         .iter()
@@ -995,95 +967,63 @@ pub fn load_tag_canonicity_resolution(
             None
         };
 
-        match zone {
-            Zone::Inbox => {
-                let Some(signal) = db.get_inbox_tag_canonicity_signal(key).ok().flatten() else {
-                    continue;
-                };
-                // Suggested canonical = top corpus variant
-                let suggested = signal.data.corpus_variants
-                    .first()
-                    .map(|(v, _)| v.clone());
+        {
+            let Some(signal) = db.get_tag_canonicity_signal(key).ok().flatten() else {
+                continue;
+            };
+            // Suggested canonical = most common variant (first in sorted-by-count list)
+            let suggested = signal.data.variants
+                .first()
+                .map(|(v, _)| v.clone());
 
-                // ALL variants: corpus + inbox
-                let all_variant_inodes = signal.data.inbox_inodes.clone();
-                all_inodes.extend(&all_variant_inodes);
+            // Query actual tag values per inode to build accurate variant→file mapping
+            let tag_values_map = db
+                .get_tag_values_batch(zone, tag_name, &signal.data.inodes)
+                .unwrap_or_default();
 
-                let variants: Vec<Variant> = signal.data.inbox_variants
-                    .iter()
-                    .map(|(value, _)| Variant {
+            // Group ALL inodes by their actual tag value
+            let mut variant_inodes: HashMap<String, Vec<i64>> = HashMap::new();
+            for &inode in &signal.data.inodes {
+                if let Some(values) = tag_values_map.get(&inode) {
+                    for value in values {
+                        variant_inodes
+                            .entry(value.clone())
+                            .or_default()
+                            .push(inode);
+                    }
+                }
+            }
+            all_inodes.extend(&signal.data.inodes);
+
+            // If tag query returned nothing, fall back to signal variant list
+            if variant_inodes.is_empty() {
+                for (value, _) in &signal.data.variants {
+                    for &inode in &signal.data.inodes {
+                        variant_inodes.entry(value.clone()).or_default().push(inode);
+                    }
+                }
+            }
+
+            // Build ALL variants (no skip, no filtering)
+            let variants: Vec<Variant> = signal.data.variants
+                .iter()
+                .filter_map(|(value, _)| {
+                    let inodes = variant_inodes.get(value)?;
+                    Some(Variant {
                         value: value.clone(),
-                        files: all_variant_inodes.iter()
+                        files: inodes.iter()
                             .map(|&inode| ResolutionFileInfo { inode, display_name: String::new() })
                             .collect(),
                     })
-                    .collect();
+                })
+                .collect();
 
-                clusters.push(CanonicityCluster {
-                    signal_key: key.to_string(),
-                    confirmed_canonical: confirmed.clone(),
-                    suggested_canonical: confirmed.or(suggested),
-                    variants,
-                });
-            }
-            _ => {
-                let Some(signal) = db.get_tag_canonicity_signal(key).ok().flatten() else {
-                    continue;
-                };
-                // Suggested canonical = most common variant (first in sorted-by-count list)
-                let suggested = signal.data.variants
-                    .first()
-                    .map(|(v, _)| v.clone());
-
-                // Query actual tag values per inode to build accurate variant→file mapping
-                let tag_values_map = db
-                    .get_tag_values_batch(zone, tag_name, &signal.data.inodes)
-                    .unwrap_or_default();
-
-                // Group ALL inodes by their actual tag value
-                let mut variant_inodes: HashMap<String, Vec<i64>> = HashMap::new();
-                for &inode in &signal.data.inodes {
-                    if let Some(values) = tag_values_map.get(&inode) {
-                        for value in values {
-                            variant_inodes
-                                .entry(value.clone())
-                                .or_default()
-                                .push(inode);
-                        }
-                    }
-                }
-                all_inodes.extend(&signal.data.inodes);
-
-                // If tag query returned nothing, fall back to signal variant list
-                if variant_inodes.is_empty() {
-                    for (value, _) in &signal.data.variants {
-                        for &inode in &signal.data.inodes {
-                            variant_inodes.entry(value.clone()).or_default().push(inode);
-                        }
-                    }
-                }
-
-                // Build ALL variants (no skip, no filtering)
-                let variants: Vec<Variant> = signal.data.variants
-                    .iter()
-                    .filter_map(|(value, _)| {
-                        let inodes = variant_inodes.get(value)?;
-                        Some(Variant {
-                            value: value.clone(),
-                            files: inodes.iter()
-                                .map(|&inode| ResolutionFileInfo { inode, display_name: String::new() })
-                                .collect(),
-                        })
-                    })
-                    .collect();
-
-                clusters.push(CanonicityCluster {
-                    signal_key: key.to_string(),
-                    confirmed_canonical: confirmed.clone(),
-                    suggested_canonical: confirmed.or(suggested),
-                    variants,
-                });
-            }
+            clusters.push(CanonicityCluster {
+                signal_key: key.to_string(),
+                confirmed_canonical: confirmed.clone(),
+                suggested_canonical: confirmed.or(suggested),
+                variants,
+            });
         }
     }
 
@@ -1133,18 +1073,9 @@ pub fn load_compound_split_resolution(
     };
 
     // Step 1: Get compound groups filtered by tag name and safety
-    let groups = match zone {
-        Zone::Inbox => {
-            let all_groups = db.get_inbox_compound_signal_groups().unwrap_or_default();
-            all_groups
-                .into_iter()
-                .filter(|g| g.tag_name == tag_name)
-                .collect::<Vec<_>>()
-        }
-        _ => db
-            .get_compound_signal_groups_by_safety(safe_only, Some(tag_name))
-            .unwrap_or_default(),
-    };
+    let groups = db
+        .get_compound_signal_groups_by_safety(safe_only, Some(tag_name))
+        .unwrap_or_default();
 
     if groups.is_empty() {
         return CompoundSplitResolutionData {
@@ -1168,18 +1099,11 @@ pub fn load_compound_split_resolution(
     for group in &groups {
         // Get split_parts and matching_parts from the compound tag signal
         let (split_parts, matching_parts) = if let Some(first_inode) = group.inodes.first() {
-            let compounds = match zone {
-                Zone::Inbox => db
-                    .get_inbox_compound_tag_signal(*first_inode)
-                    .ok()
-                    .flatten()
-                    .map(|s| s.compounds),
-                _ => db
-                    .get_compound_tag_signal(*first_inode)
-                    .ok()
-                    .flatten()
-                    .map(|s| s.compounds),
-            };
+            let compounds = db
+                .get_compound_tag_signal(*first_inode)
+                .ok()
+                .flatten()
+                .map(|s| s.compounds);
             compounds
                 .and_then(|cs| {
                     cs.iter()
@@ -1282,7 +1206,6 @@ pub fn gather_intake_zone<Z: crate::zones::AudioZone>(
 
             files.push(UnindexedFileEntry {
                 abs_path,
-                zone: Z::ZONE,
             });
         }
     }
@@ -1298,7 +1221,6 @@ pub fn gather_intake_zone<Z: crate::zones::AudioZone>(
             DirectoryGroup {
                 display_path: dir,
                 filenames,
-                zone: Z::ZONE,
             }
         })
         .collect();
@@ -1316,61 +1238,9 @@ pub fn gather_intake_zone<Z: crate::zones::AudioZone>(
         total_bytes,
         files,
         source,
-        multi_zone: false,
         _directory_count: directories.len(),
         grouped_files,
         scroll_offset: 0,
     })
 }
 
-/// Gather intake confirmation state for startup: checks both corpus AND inbox.
-pub fn gather_intake_startup(
-    read_db: &ReadOnlyDb<'_>,
-) -> Option<mm_meta::views::startup_organize::IntakeConfirmationState> {
-    use crate::logging::log_general;
-    use mm_meta::views::startup_organize::IntakeConfirmationState;
-    use mm_meta::views::startup_organize::IntakeSource;
-    use crate::zones::{CorpusZone, InboxZone};
-
-    let corpus_state = gather_intake_zone::<CorpusZone>(read_db, IntakeSource::Startup);
-    let inbox_state = gather_intake_zone::<InboxZone>(read_db, IntakeSource::Startup);
-
-    match (corpus_state, inbox_state) {
-        (None, None) => None,
-        (Some(mut state), None) => {
-            state.source = IntakeSource::Startup;
-            Some(state)
-        }
-        (None, Some(mut state)) => {
-            state.source = IntakeSource::Startup;
-            Some(state)
-        }
-        (Some(corpus), Some(inbox)) => {
-            let mut files = corpus.files;
-            files.extend(inbox.files);
-
-            let mut grouped_files = corpus.grouped_files;
-            grouped_files.extend(inbox.grouped_files);
-
-            let file_count = files.len();
-            let total_bytes = corpus.total_bytes + inbox.total_bytes;
-            let directory_count = corpus._directory_count + inbox._directory_count;
-
-            log_general(format!(
-                "IntakeConfirmation (startup): merged {} corpus + {} inbox = {} total files",
-                corpus.file_count, inbox.file_count, file_count
-            ));
-
-            Some(IntakeConfirmationState {
-                file_count,
-                total_bytes,
-                files,
-                source: IntakeSource::Startup,
-                multi_zone: true,
-                _directory_count: directory_count,
-                grouped_files,
-                scroll_offset: 0,
-            })
-        }
-    }
-}

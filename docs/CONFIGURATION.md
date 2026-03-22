@@ -19,7 +19,7 @@ Minimal `config.kdl`:
 root "/path/to/your/archive"
 ```
 
-This gets you running with all defaults. The archive root must contain `corpus/`, `libraries/`, `stash/`, and `inbox/` subdirectories, all on the same filesystem.
+This gets you running with all defaults. The archive root must contain `corpus/`, `libraries/`, and `stash/` subdirectories, all on the same filesystem.
 
 ## Archive Root
 
@@ -27,24 +27,15 @@ This gets you running with all defaults. The archive root must contain `corpus/`
 root "/Volumes/cerberus/archive"
 ```
 
-The `root` directive is the only mandatory field. MM derives four subdirectories from it:
+The `root` directive is the only mandatory field. MM derives three subdirectories from it:
 
 | Directory | Purpose |
 |-----------|---------|
 | `<root>/corpus/` | Source-of-truth audio files, organized by source directories |
 | `<root>/libraries/` | Deployment targets (e.g., Navidrome media dirs) — hardlinked from corpus |
 | `<root>/stash/` | Quarantine for resolved duplicates |
-| `<root>/inbox/` | Drop zone for new files awaiting organization |
 
-**Validation**: All four must exist and reside on the same filesystem (required for hardlinking).
-
-## Legacy Library Mode
-
-```kdl
-legacy-library true
-```
-
-Optional. Enables dissection of an existing tag-organized library. Default: `false`.
+**Validation**: All three must exist and reside on the same filesystem (required for hardlinking).
 
 ## Source Directories (`dirs.kdl`)
 
@@ -113,19 +104,7 @@ startup {
 |----------|------|---------|-------------|
 | `force-check-all-files` | bool | `false` | Verify all indexed files at startup, bypassing mtime optimization |
 | `vacuum-threshold` | f64 | `0.1` | Free-page ratio threshold for DB compaction prompt (0.0 disables) |
-| `default-view` | string | `"health"` | Landing view after startup: `health`, `search`, `browser`, `inbox`, `external-matches` |
-
-### `quality-resolution` Block
-
-```kdl
-quality-resolution {
-    inbox-bitrate-fuzz-percent 5.0
-}
-```
-
-| KDL Name | Type | Default | Description |
-|----------|------|---------|-------------|
-| `inbox-bitrate-fuzz-percent` | f64 | `5.0` | Bitrate tolerance (%) for treating inbox files as equivalent to corpus |
+| `default-view` | string | `"health"` | Landing view after startup: `health`, `search`, `browser`, `external-matches` |
 
 ### `canonicalization` Block
 
@@ -248,18 +227,6 @@ release-packing {
 
 **Weight sub-blocks** (`candidate-weights`, `elimination-weights`): Six scoring dimensions, each a f64 weight. See `RELEASE_PACKING_ALGORITHM.md` for scoring details.
 
-### `inbox-organize` Block
-
-```kdl
-inbox-organize {
-    directory-granularity "leaf"
-}
-```
-
-| KDL Name | Type | Default | Description |
-|----------|------|---------|-------------|
-| `directory-granularity` | string | `"leaf"` | `"leaf"` = deepest dirs with audio; `"toplevel"` = direct children of inbox/ |
-
 ### `external-matching` Block
 
 ```kdl
@@ -378,8 +345,8 @@ All applied overrides are logged to `general.log`.
 `config.validate()` checks:
 
 1. **Archive root exists** — the directory at `root` must exist on disk
-2. **Subdirectories exist** — `corpus/`, `libraries/`, `stash/`, `inbox/` must all exist
-3. **Same filesystem** — all four subdirectories must reside on the same block device (required for hardlinking)
+2. **Subdirectories exist** — `corpus/`, `libraries/`, `stash/` must all exist
+3. **Same filesystem** — all three subdirectories must reside on the same block device (required for hardlinking)
 4. **Source path containment** — no source directory path may escape the corpus directory
 
 Validation runs once at startup. Filesystem layout is assumed stable at runtime.

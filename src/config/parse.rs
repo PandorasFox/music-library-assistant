@@ -24,20 +24,10 @@ pub(crate) fn parse_size_mb(s: &str) -> Option<u32> {
 
 /// Parse quality-resolution opinions from KDL node
 fn parse_quality_resolution_opinions(
-    node: &kdl::KdlNode,
-    opinions: &mut QualityResolutionOpinions,
+    _node: &kdl::KdlNode,
+    _opinions: &mut QualityResolutionOpinions,
 ) {
-    if let Some(children) = node.children() {
-        for child in children.nodes() {
-            if child.name().value() == QualityResolutionOpinions::KDL_BITRATE_FUZZ {
-                if let Some(entry) = child.entries().first() {
-                    if let Some(val) = entry.value().as_f64() {
-                        opinions.inbox_bitrate_fuzz_percent = val;
-                    }
-                }
-            }
-        }
-    }
+    // All quality-resolution fields removed (inbox zone removed).
 }
 
 /// Parse canonicalization opinions from KDL node
@@ -81,7 +71,6 @@ fn parse_startup_opinions(node: &kdl::KdlNode, opinions: &mut StartupOpinions) {
                                 "health" => opinions.default_view = StartupView::Health,
                                 "search" => opinions.default_view = StartupView::Search,
                                 "browser" => opinions.default_view = StartupView::Browser,
-                                "inbox" => opinions.default_view = StartupView::Inbox,
                                 "external-matches" => opinions.default_view = StartupView::ExternalMatches,
                                 _ => {}
                             }
@@ -511,58 +500,42 @@ fn parse_disc_extraction_opinions(node: &kdl::KdlNode, opinions: &mut DiscExtrac
     }
 }
 
-/// Parse inbox-organize opinions from KDL node
-fn parse_inbox_organize_opinions(node: &kdl::KdlNode, opinions: &mut InboxOrganizeOpinions) {
-    if let Some(children) = node.children() {
-        for child in children.nodes() {
-            if child.name().value() == InboxOrganizeOpinions::KDL_DIR_GRANULARITY {
-                if let Some(entry) = child.entries().first() {
-                    if let Some(val) = entry.value().as_string() {
-                        match val {
-                            "leaf" => {
-                                opinions.directory_granularity = InboxOrganizeGranularity::Leaf
-                            }
-                            "top-level" => {
-                                opinions.directory_granularity = InboxOrganizeGranularity::TopLevel
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 pub(crate) fn parse_kdl_config(content: &str) -> Result<Config> {
     let doc: kdl::KdlDocument = content.parse().context("Failed to parse KDL document")?;
 
     let mut config = Config {
-        root: PathBuf::new(),
-        legacy_enabled: false,
+        storage_root: PathBuf::new(),
+        libraries_root: None,
+        stash_root: None,
         source_dirs: Vec::new(),
         opinions: Opinions::default(),
     };
 
     for node in doc.nodes() {
         match node.name().value() {
-            "root" => {
+            "storage-root" | "root" => {
                 if let Some(path) = node.entries().first() {
                     if let Some(path_str) = path.value().as_string() {
-                        config.root = PathBuf::from(path_str);
+                        config.storage_root = PathBuf::from(path_str);
                     }
                 }
             }
-            "legacy-library" => {
-                // Boolean toggle: `legacy-library true`
-                if let Some(entry) = node.entries().first() {
-                    if let Some(val) = entry.value().as_bool() {
-                        config.legacy_enabled = val;
+            "libraries-root" => {
+                if let Some(path) = node.entries().first() {
+                    if let Some(path_str) = path.value().as_string() {
+                        config.libraries_root = Some(PathBuf::from(path_str));
                     }
                 }
             }
-            // dir stanzas are now in dirs.kdl — ignored here for backwards compat
-            "dir" => {}
+            "stash-root" => {
+                if let Some(path) = node.entries().first() {
+                    if let Some(path_str) = path.value().as_string() {
+                        config.stash_root = Some(PathBuf::from(path_str));
+                    }
+                }
+            }
+            // legacy stanzas silently ignored
+            "legacy-library" | "dir" => {}
             "opinions" => {
                 if let Some(children) = node.children() {
                     for child in children.nodes() {
@@ -607,12 +580,6 @@ pub(crate) fn parse_kdl_config(content: &str) -> Result<Config> {
                                 parse_release_packing_opinions(
                                     child,
                                     &mut config.opinions.release_packing,
-                                );
-                            }
-                            Opinions::KDL_BLOCK_INBOX_ORGANIZE => {
-                                parse_inbox_organize_opinions(
-                                    child,
-                                    &mut config.opinions.inbox_organize,
                                 );
                             }
                             Opinions::KDL_LEAVE_TXN_OPEN => {
@@ -669,8 +636,8 @@ pub(crate) fn parse_kdl_config(content: &str) -> Result<Config> {
         }
     }
 
-    if config.root.as_os_str().is_empty() {
-        anyhow::bail!("root not specified in config.kdl");
+    if config.storage_root.as_os_str().is_empty() {
+        anyhow::bail!("storage-root not specified in config.kdl");
     }
 
     Ok(config)
@@ -682,19 +649,13 @@ mod tests {
     use mm_utils::t;
 
     #[test]
-    fn test_parse_single_root() {
+    fn test_parse_storage_root() {
         let kdl = r#"
-root "/Volumes/cerberus/archive"
-
-legacy-library true
+storage-root "/Volumes/cerberus/archive"
 "#;
 
         let config = t!(parse_kdl_config(kdl));
-        assert_eq!(config.root, PathBuf::from("/Volumes/cerberus/archive"));
-        assert_eq!(
-            config.corpus_dir(),
-            PathBuf::from("/Volumes/cerberus/archive/corpus")
-        );
+        assert_eq!(config.storage_root, PathBuf::from("/Volumes/cerberus/archive"));
         assert_eq!(
             config.libraries_dir(),
             PathBuf::from("/Volumes/cerberus/archive/libraries")
@@ -703,30 +664,42 @@ legacy-library true
             config.stash_dir(),
             PathBuf::from("/Volumes/cerberus/archive/stash")
         );
-        assert!(config.legacy_enabled);
         assert!(config.source_dirs.is_empty());
     }
 
     #[test]
-    fn test_missing_root() {
+    fn test_parse_legacy_root_compat() {
+        // Old "root" key still works
         let kdl = r#"
-legacy-library true
+root "/Volumes/cerberus/archive"
 "#;
+        let config = t!(parse_kdl_config(kdl));
+        assert_eq!(config.storage_root, PathBuf::from("/Volumes/cerberus/archive"));
+    }
+
+    #[test]
+    fn test_parse_multi_root() {
+        let kdl = r#"
+storage-root "/mnt/pool/archive/audio"
+libraries-root "/mnt/pool/libraries"
+stash-root "/mnt/pool/stash"
+"#;
+        let config = t!(parse_kdl_config(kdl));
+        assert_eq!(config.storage_root, PathBuf::from("/mnt/pool/archive/audio"));
+        assert_eq!(config.libraries_root, Some(PathBuf::from("/mnt/pool/libraries")));
+        assert_eq!(config.stash_root, Some(PathBuf::from("/mnt/pool/stash")));
+        assert_eq!(config.libraries_dir(), PathBuf::from("/mnt/pool/libraries"));
+        assert_eq!(config.stash_dir(), PathBuf::from("/mnt/pool/stash"));
+    }
+
+    #[test]
+    fn test_missing_root() {
+        let kdl = r#""#;
 
         let result = parse_kdl_config(kdl);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("root not specified"));
-    }
-
-    #[test]
-    fn test_legacy_disabled_by_default() {
-        let kdl = r#"
-root "/archive"
-"#;
-
-        let config = t!(parse_kdl_config(kdl));
-        assert!(!config.legacy_enabled);
+        assert!(err_msg.contains("storage-root not specified"));
     }
 
     #[test]
@@ -735,10 +708,6 @@ root "/archive"
 root "/archive"
 
 opinions {
-    quality-resolution {
-        inbox-bitrate-fuzz-percent 3.0
-    }
-
     canonicalization {
         strip-album-format-suffixes false
     }
@@ -747,13 +716,6 @@ opinions {
 
         let config = t!(parse_kdl_config(kdl));
 
-        assert_eq!(
-            config
-                .opinions
-                .quality_resolution
-                .inbox_bitrate_fuzz_percent,
-            3.0
-        );
         assert!(!config.opinions.canonicalization.strip_album_format_suffixes);
     }
 
@@ -765,13 +727,6 @@ root "/archive"
 
         let config = t!(parse_kdl_config(kdl));
 
-        assert_eq!(
-            config
-                .opinions
-                .quality_resolution
-                .inbox_bitrate_fuzz_percent,
-            5.0
-        );
         assert!(!config.opinions.canonicalization.strip_album_format_suffixes);
     }
 
@@ -828,7 +783,6 @@ dir "web/releases/steam" {
             ("health", StartupView::Health),
             ("search", StartupView::Search),
             ("browser", StartupView::Browser),
-            ("inbox", StartupView::Inbox),
         ] {
             let kdl = format!(
                 r#"root "/archive"

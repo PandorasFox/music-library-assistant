@@ -16,7 +16,6 @@ mod deploy;
 mod disc_extraction;
 mod external_match;
 mod history;
-mod inbox;
 mod manual_review;
 mod missing_album;
 mod oob_resolution;
@@ -65,7 +64,6 @@ impl App {
             ViewAction::Insights(a) => a.handle(self, witness.as_ref()),
             ViewAction::CorpusBrowser(a) => a.handle(self, witness.as_ref()),
             ViewAction::TagSearch(a) => a.handle(self, witness.as_ref()),
-            ViewAction::Inbox(a) => a.handle(self, witness.as_ref()),
             ViewAction::TabbedTransactionReview(a) => a.handle(self, witness.as_ref()),
             ViewAction::ExitConfirm(a) => a.handle(self, witness.as_ref()),
             ViewAction::IntakeConfirmation(a) => a.handle(self, witness.as_ref()),
@@ -77,8 +75,6 @@ impl App {
             ViewAction::CorruptFileResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::LosslessRemuxResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::SubparDuplicateResolution(a) => a.handle(self, witness.as_ref()),
-            ViewAction::InboxCorpusMatchResolution(a) => a.handle(self, witness.as_ref()),
-            ViewAction::InboxOrganize(a) => a.handle(self, witness.as_ref()),
             ViewAction::DirectoryClusterResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::MovedFileAcknowledge(a) => a.handle(self, witness.as_ref()),
             ViewAction::OobResolution(a) => a.handle(self, witness.as_ref()),
@@ -315,7 +311,6 @@ impl App {
             ActiveView::OobResolution(s) => s.handle_click(x, y).map(ViewAction::OobResolution),
             ActiveView::MovedFileAcknowledge(s) => s.handle_click(x, y).map(ViewAction::MovedFileAcknowledge),
             ActiveView::SubparDuplicateResolution(s) => s.handle_click(x, y).map(ViewAction::SubparDuplicateResolution),
-            ActiveView::InboxCorpusMatchResolution(s) => s.handle_click(x, y).map(ViewAction::InboxCorpusMatchResolution),
             ActiveView::CorruptFileResolution(s) => s.handle_click(x, y).map(ViewAction::CorruptFileResolution),
             ActiveView::MissingDirectoryResolution(s) => s.handle_click(x, y).map(ViewAction::MissingDirectoryResolution),
             ActiveView::MissingFileResolution(s) => s.handle_click(x, y).map(ViewAction::MissingFileResolution),
@@ -332,10 +327,6 @@ impl App {
             }
             ActiveView::ExternalMatches(ref mut s) => {
                 s.interaction.list.handle_click(x, y, &s.data.flat_items);
-                None
-            }
-            ActiveView::Inbox(ref mut s) => {
-                s.interaction.list.handle_click(x, y, &s.data.entries);
                 None
             }
             ActiveView::TagSearch(ref mut s) => click_dispatch!(void s),

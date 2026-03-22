@@ -37,9 +37,6 @@ pub mod external_match_view;
 pub mod eye;
 pub mod helpers;
 pub mod history_view;
-pub mod inbox_corpus_match_modal;
-pub mod inbox_organize;
-pub mod inbox_view;
 pub mod insights_view;
 pub mod knot_browser;
 pub mod manual_review_modal;
@@ -348,7 +345,6 @@ impl App {
             ActiveView::Insights(ref mut s) => dispatch_input!(Insights, s),
             ActiveView::CorpusBrowser(s) => dispatch_input!(CorpusBrowser, s),
             ActiveView::TagSearch(s) => dispatch_input!(TagSearch, s),
-            ActiveView::Inbox(ref mut s) => dispatch_input!(Inbox, s),
             ActiveView::TabbedTransactionReview(ref mut s) => dispatch_input!(TabbedTransactionReview, s),
             ActiveView::ExitConfirm(state) => {
                 let a = match action {
@@ -402,8 +398,6 @@ impl App {
             ActiveView::CorruptFileResolution(s) => dispatch_input!(CorruptFileResolution, s),
             ActiveView::LosslessRemuxResolution(s) => dispatch_input_raw!(LosslessRemuxResolution, s),
             ActiveView::SubparDuplicateResolution(s) => dispatch_input!(SubparDuplicateResolution, s),
-            ActiveView::InboxCorpusMatchResolution(s) => dispatch_input!(InboxCorpusMatchResolution, s),
-            ActiveView::InboxOrganize(s) => dispatch_input_raw!(InboxOrganize, s),
             ActiveView::DirectoryClusterResolution(ref mut s) => dispatch_input!(DirectoryClusterResolution, s),
             ActiveView::MovedFileAcknowledge(s) => dispatch_input!(MovedFileAcknowledge, s),
             ActiveView::OobResolution(s) => dispatch_input_raw!(OobResolution, s),
@@ -532,16 +526,6 @@ impl App {
                     }
                 }
             }
-            ActiveView::Inbox(_) => {
-                let inbox_data = self.query(mm_meta::domain_queries::GetInboxOverview);
-                let busy = self.cached_status.work.pending > 0;
-                if let ActiveView::Inbox(ref mut s) = self.view {
-                    s.data.busy = busy;
-                    if s.data.update(Some(inbox_data)) {
-                        s.interaction.clamp_to_data(&s.data.entries);
-                    }
-                }
-            }
             ActiveView::History(_) => {
                 let history_data = self.query(mm_meta::domain_queries::GetEditHistory);
                 if let ActiveView::History(ref mut s) = self.view {
@@ -571,12 +555,12 @@ impl App {
                 if let ActiveView::CorpusBrowser(ref mut browser_state) = self.view {
                     let tree_browser::BrowserVariant::CorpusBrowser(ref mut v) = browser_state.variant_mut();
                     let file_paths: std::collections::HashSet<String> = packing.file_paths.iter()
-                        .filter_map(|p| p.strip_prefix(&config.root).ok())
+                        .filter_map(|p| p.strip_prefix(&config.storage_root).ok())
                         .map(|p| p.to_string_lossy().to_string())
                         .collect();
                     let dir_categories: std::collections::HashMap<String, mm_meta::signals::packing_category::PackingCategory> = packing.dir_categories.iter()
                         .filter_map(|(p, &cat)| {
-                            p.strip_prefix(&config.root).ok().map(|rel| (rel.to_string_lossy().to_string(), cat))
+                            p.strip_prefix(&config.storage_root).ok().map(|rel| (rel.to_string_lossy().to_string(), cat))
                         })
                         .collect();
                     v.set_packing_markers(file_paths, dir_categories);
@@ -609,7 +593,6 @@ impl App {
             mm_meta::config::StartupView::Health => self.start_health_view(),
             mm_meta::config::StartupView::Search => self.start_tag_search(),
             mm_meta::config::StartupView::Browser => self.start_corpus_browser(),
-            mm_meta::config::StartupView::Inbox => self.start_inbox_view(),
             mm_meta::config::StartupView::ExternalMatches => self.start_external_matches_view(),
         }
     }
@@ -631,28 +614,6 @@ impl App {
     pub(crate) fn start_tag_search(&mut self) {
         self.last_lateral_view = widgets::LateralView::Search;
         self.view = ActiveView::TagSearch(tag_search::TagSearchState::new());
-        self.sync_route();
-    }
-
-    pub(crate) fn start_inbox_view(&mut self) {
-        self.last_lateral_view = widgets::LateralView::Inbox;
-        // Check for inbox unindexed files — show intake popup if any
-        let intake_state = self
-            .query(mm_meta::domain_queries::GetIntakeConfirmation {
-                source: startup::IntakeSource::Inbox,
-                zone: Some(mm_meta::db_types::Zone::Inbox),
-            });
-
-        if let Some(state) = intake_state {
-            self.view = ActiveView::IntakeConfirmation(state);
-        } else {
-            let inbox_data = self.query(mm_meta::domain_queries::GetInboxOverview);
-            let busy = self.cached_status.work.pending > 0;
-            let mut data = inbox_view::InboxViewData::new();
-            data.busy = busy;
-            data.update(Some(inbox_data));
-            self.view = ActiveView::Inbox(inbox_view::InboxViewState::new(data));
-        }
         self.sync_route();
     }
 
@@ -703,10 +664,6 @@ impl App {
             Route::History(ref r) => {
                 self.start_history_view();
                 if let ActiveView::History(ref mut s) = self.view { s.apply_route(r); }
-            }
-            Route::Inbox(ref r) => {
-                self.start_inbox_view();
-                if let ActiveView::Inbox(ref mut s) = self.view { s.apply_route(r); }
             }
             Route::Deploy(ref r) => {
                 self.start_deploy_view();
@@ -779,7 +736,7 @@ impl App {
     pub(crate) fn start_corpus_browser(&mut self) {
         self.last_lateral_view = widgets::LateralView::Files;
         let config = self.config();
-        let corpus_dir = config.corpus_dir();
+        let corpus_dir = config.storage_root.clone();
         let corpus_dir_rel = "corpus".to_string();
 
         // Compute relative paths for marker lookups
@@ -790,7 +747,6 @@ impl App {
             .collect();
         let primary_zone_dirs = vec![
             "corpus".to_string(),
-            "inbox".to_string(),
             "stash".to_string(),
         ];
 
@@ -812,12 +768,12 @@ impl App {
         let packing = self.query(mm_meta::domain_queries::GetPackingDirs);
         let tree_browser::BrowserVariant::CorpusBrowser(ref mut v) = browser_state.variant_mut();
         let file_paths: std::collections::HashSet<String> = packing.file_paths.iter()
-            .filter_map(|p| p.strip_prefix(&config.root).ok())
+            .filter_map(|p| p.strip_prefix(&config.storage_root).ok())
             .map(|p| p.to_string_lossy().to_string())
             .collect();
         let dir_categories: std::collections::HashMap<String, mm_meta::signals::packing_category::PackingCategory> = packing.dir_categories.iter()
             .filter_map(|(p, &cat)| {
-                p.strip_prefix(&config.root).ok().map(|rel| (rel.to_string_lossy().to_string(), cat))
+                p.strip_prefix(&config.storage_root).ok().map(|rel| (rel.to_string_lossy().to_string(), cat))
             })
             .collect();
         v.set_packing_markers(file_paths, dir_categories);

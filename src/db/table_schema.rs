@@ -121,21 +121,6 @@ pub fn schema_inventory() -> Vec<TableEntry> {
     });
 
     tables.push(TableEntry {
-        name: "inbox_tags",
-        kind: TableKind::Core,
-        create_sql: "CREATE TABLE IF NOT EXISTS inbox_tags (
-            inode INTEGER NOT NULL REFERENCES audio_info(inode) ON DELETE CASCADE,
-            tag_name TEXT NOT NULL,
-            tag_value TEXT NOT NULL,
-            PRIMARY KEY (inode, tag_name, tag_value)
-        )",
-        index_sql: &[
-            "CREATE INDEX IF NOT EXISTS idx_inbox_tags_inode ON inbox_tags(inode)",
-            "CREATE INDEX IF NOT EXISTS idx_inbox_tags_name ON inbox_tags(tag_name)",
-        ],
-    });
-
-    tables.push(TableEntry {
         name: "tag_edit_history",
         kind: TableKind::Core,
         create_sql: "CREATE TABLE IF NOT EXISTS tag_edit_history (

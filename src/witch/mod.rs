@@ -71,7 +71,6 @@ pub use mm_meta::computations::types::ObservedInodeMeta;
 /// receive cloned snapshots.
 struct ObservedInodes {
     corpus: HashMap<i64, ObservedInodeMeta>,
-    inbox: HashMap<i64, ObservedInodeMeta>,
     library: HashMap<i64, ObservedInodeMeta>,
 }
 
@@ -79,7 +78,6 @@ impl ObservedInodes {
     fn new() -> Self {
         Self {
             corpus: HashMap::new(),
-            inbox: HashMap::new(),
             library: HashMap::new(),
         }
     }
@@ -88,30 +86,22 @@ impl ObservedInodes {
     fn for_zone_mut(&mut self, zone: crate::db::types::Zone) -> Option<&mut HashMap<i64, ObservedInodeMeta>> {
         match zone {
             crate::db::types::Zone::Corpus => Some(&mut self.corpus),
-            crate::db::types::Zone::Inbox => Some(&mut self.inbox),
             crate::db::types::Zone::Library => Some(&mut self.library),
         }
     }
 
     fn clear(&mut self) {
         self.corpus.clear();
-        self.inbox.clear();
         self.library.clear();
     }
 }
 
 /// Build the zone→root list for watcher start commands.
 ///
-/// Always includes corpus. Includes inbox and library if their directories
-/// exist on disk.
+/// Always includes corpus. Includes library if its directory exists on disk.
 fn watched_zones() -> Vec<(crate::db::types::Zone, std::path::PathBuf)> {
     let resolver = crate::corpus::paths::get_resolver();
     let mut zones = vec![(crate::db::types::Zone::Corpus, resolver.corpus_dir())];
-
-    let inbox_dir = resolver.inbox_dir();
-    if inbox_dir.is_dir() {
-        zones.push((crate::db::types::Zone::Inbox, inbox_dir));
-    }
 
     let libraries_dir = resolver.libraries_dir();
     if libraries_dir.is_dir() {
@@ -214,7 +204,7 @@ pub struct Witch {
     /// Used by the insights view to hide entries already handled.
     handled_sources: std::collections::HashSet<crate::meta::decisions::DecisionKeyKind>,
 
-    /// Authoritative inode→path maps for watched zones (corpus + inbox).
+    /// Authoritative inode→path maps for watched zones (corpus + library).
     /// Populated by watcher initial scan, updated incrementally by steady-state events.
     /// Cloned (not taken) when queuing derivation computations.
     observed_inodes: ObservedInodes,
@@ -831,15 +821,17 @@ impl Witch {
         // Init performance globals
         config::init_performance_config(cfg.opinions.performance.clone());
 
-        // Create subdirectories
-        std::fs::create_dir_all(root.join("corpus"))
-            .map_err(|e| format!("Failed to create corpus/: {}", e))?;
-        std::fs::create_dir_all(root.join("libraries"))
-            .map_err(|e| format!("Failed to create libraries/: {}", e))?;
-        std::fs::create_dir_all(root.join("stash"))
-            .map_err(|e| format!("Failed to create stash/: {}", e))?;
-        std::fs::create_dir_all(root.join("inbox"))
-            .map_err(|e| format!("Failed to create inbox/: {}", e))?;
+        // Create zone directories (storage_root IS corpus, no subdirectory needed)
+        std::fs::create_dir_all(&cfg.storage_root)
+            .map_err(|e| format!("Failed to create storage-root {}: {}", cfg.storage_root.display(), e))?;
+        std::fs::create_dir_all(cfg.libraries_dir())
+            .map_err(|e| format!("Failed to create libraries dir: {}", e))?;
+        std::fs::create_dir_all(cfg.stash_dir())
+            .map_err(|e| format!("Failed to create stash dir: {}", e))?;
+
+        // Validate all roots are on the same filesystem (hard links require it)
+        crate::corpus::paths::validate_same_filesystem(&cfg)
+            .map_err(|e| format!("Filesystem validation failed: {}", e))?;
 
         // Create database
         let db_path = config::get_db_path().map_err(|e| format!("Failed to get DB path: {}", e))?;
@@ -1002,7 +994,7 @@ impl Witch {
 
     /// Build a DB cache for the watcher's initial scan.
     ///
-    /// Queries all corpus+inbox file mtimes and tags, producing a map
+    /// Queries all corpus file mtimes and tags, producing a map
     /// the watcher can use to skip tag reads for files with matching mtimes.
     fn build_watcher_db_cache(&self) -> HashMap<i64, fs_thread::CachedInodeState> {
         let db_path = match config::get_db_path() {
@@ -1014,10 +1006,8 @@ impl Witch {
             Err(_) => return HashMap::new(),
         };
 
-        // Get mtimes for corpus and inbox files
+        // Get mtimes for corpus files
         let corpus_mtimes = db.get_all_file_mtimes(crate::db::types::Zone::Corpus)
-            .unwrap_or_default();
-        let inbox_mtimes = db.get_all_file_mtimes(crate::db::types::Zone::Inbox)
             .unwrap_or_default();
 
         // Get all corpus tags, grouped by inode
@@ -1041,18 +1031,9 @@ impl Witch {
             });
         }
 
-        // Build cache entries for inbox files (no tags — inbox tags are in inbox_tags table)
-        for (inode, (mtime_secs, mtime_nanos)) in &inbox_mtimes {
-            cache.entry(*inode).or_insert(fs_thread::CachedInodeState {
-                mtime_secs: *mtime_secs,
-                mtime_nanos: *mtime_nanos,
-                tags: crate::corpus::tags::TagSet::empty(),
-            });
-        }
-
         crate::logging::log_general(format!(
-            "[WITCH] DB cache seeded: {} entries ({} corpus, {} inbox)",
-            cache.len(), corpus_mtimes.len(), inbox_mtimes.len()
+            "[WITCH] DB cache seeded: {} entries ({} corpus)",
+            cache.len(), corpus_mtimes.len()
         ));
 
         cache
@@ -1144,9 +1125,8 @@ impl Witch {
             fs_thread::WatcherMessage::AllInitialScansComplete => {
                 crate::logging::log_general(format!(
                     "[WITCH] All watcher initial scans complete. \
-                     Corpus: {} inodes, Inbox: {} inodes, Library: {} inodes",
+                     Corpus: {} inodes, Library: {} inodes",
                     self.observed_inodes.corpus.len(),
-                    self.observed_inodes.inbox.len(),
                     self.observed_inodes.library.len(),
                 ));
                 match self.reasoning_level {
@@ -1551,8 +1531,8 @@ impl Witch {
 
     /// Queue Awakening-phase computations.
     ///
-    /// Takes the accumulated observed inode maps and queues DeriveCorpusSignals
-    /// and DeriveInboxSignals. When `include_second_level` is true, also queues
+    /// Takes the accumulated observed inode maps and queues DeriveCorpusSignals.
+    /// When `include_second_level` is true, also queues
     /// ScheduleSecondLevelDerivations for directory checks and library walks.
     fn queue_awakening_computations(&mut self, include_second_level: bool) {
         // Flush pending image observations before derivation runs.
@@ -1576,12 +1556,11 @@ impl Witch {
         // steady-state watcher events to incrementally update them. Derivation
         // gets a snapshot; the Witch keeps the authoritative live set.
         let observed_corpus = self.observed_inodes.corpus.clone();
-        let observed_inbox = self.observed_inodes.inbox.clone();
 
         let label = if include_second_level { "Awakening" } else { "Steady-state derivation" };
         crate::logging::log_general(format!(
-            "[STATE] Queueing {}: DeriveCorpusSignals ({} inodes), DeriveInboxSignals ({} inodes){}",
-            label, observed_corpus.len(), observed_inbox.len(),
+            "[STATE] Queueing {}: DeriveCorpusSignals ({} inodes){}",
+            label, observed_corpus.len(),
             if include_second_level { ", ScheduleSecondLevelDerivations" } else { "" },
         ));
 
@@ -1590,13 +1569,6 @@ impl Witch {
                 observed_inodes: observed_corpus,
             }),
             Some("Deriving corpus signals".to_string()),
-        );
-
-        self.queue_computation_with_label(
-            Computation::Derivation(derivation::Computation::DeriveInboxSignals {
-                observed_inodes: observed_inbox,
-            }),
-            Some("Deriving inbox signals".to_string()),
         );
 
         if include_second_level {

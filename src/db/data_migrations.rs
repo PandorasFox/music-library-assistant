@@ -87,6 +87,25 @@ pub fn all_data_migrations() -> Vec<DataMigrationEntry> {
                 Ok(())
             },
         },
+        DataMigrationEntry {
+            id: "2026-03-remove-inbox-zone",
+            description: "Remove inbox zone: delete inbox files and drop orphan inbox signal/tag tables",
+            apply: |db| {
+                let conn = db.conn();
+                conn.execute("DELETE FROM files WHERE zone = 'inbox'", [])?;
+                conn.execute_batch(
+                    "DROP TABLE IF EXISTS inbox_tags;
+                     DROP TABLE IF EXISTS signal_file_in_inbox;
+                     DROP TABLE IF EXISTS signal_inbox_unindexed;
+                     DROP TABLE IF EXISTS signal_inbox_healthy;
+                     DROP TABLE IF EXISTS signal_inbox_corpus_match;
+                     DROP TABLE IF EXISTS signal_inbox_compound_tag;
+                     DROP TABLE IF EXISTS signal_inbox_tag_canonicity;
+                     DROP TABLE IF EXISTS signal_inbox_missing_tag;",
+                )?;
+                Ok(())
+            },
+        },
     ]
 }
 

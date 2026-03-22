@@ -3,7 +3,7 @@
 //! This module provides read-only queries for the new inode-based schema:
 //! - `files`: All paths (files and directories) with mtime
 //! - `audio_info`: Audio-specific metadata by inode
-//! - `corpus_tags` / `inbox_tags`: Tags by inode
+//! - `corpus_tags`: Tags by inode
 //!
 //! Write operations go through `write_thread::SignalWriteSender`.
 
@@ -140,7 +140,7 @@ impl Database {
         Ok(result)
     }
 
-    /// Look up the zone and path for an inode in corpus/inbox zones.
+    /// Look up the zone and path for an inode in corpus zone.
     ///
     /// Used for cross-zone move detection: when a file is found in zone A
     /// but is indexed in zone B, this returns (zone_str, path) from zone B.
@@ -581,7 +581,7 @@ impl Database {
 
     /// Get all tags for an audio file from the tag table appropriate for its zone.
     ///
-    /// Corpus → corpus_tags, Inbox → inbox_tags, Library → error (no tags).
+    /// Corpus → corpus_tags, Library → error (no tags).
     pub fn get_tags_for_zone(&self, inode: i64, zone: Zone) -> Result<Vec<AudioTag>> {
         let table = zone
             .tag_table()
@@ -1372,7 +1372,7 @@ impl Database {
     /// Batch-query display names for inodes: TITLE tag value, or filename fallback.
     ///
     /// Returns HashMap<inode, display_name>. Uses the tag table appropriate
-    /// for the zone (`corpus_tags` for Corpus, `inbox_tags` for Inbox).
+    /// for the zone (`corpus_tags` for Corpus).
     pub fn get_display_names_batch(
         &self,
         zone: Zone,

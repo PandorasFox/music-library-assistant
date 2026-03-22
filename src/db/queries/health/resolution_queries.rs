@@ -1,5 +1,5 @@
 //! Resolution modal queries: missing files, corrupt files, format issues,
-//! duplicates, inbox corpus matches, and whitelist lookups.
+//! duplicates, and whitelist lookups.
 
 use anyhow::Result;
 use rusqlite::params;
@@ -128,103 +128,6 @@ impl Database {
         self.query_signal_key_blobs(
             "SELECT key, data FROM signal_metadata_duplicate ORDER BY key",
         )
-    }
-
-    /// Get all inbox corpus match entries with quality classification.
-    ///
-    /// Reads InboxCorpusMatch signals, deserializes bincode BLOB data,
-    /// and reads the pre-computed classification from the signal. Quality
-    /// strings are still looked up from audio_info for display purposes.
-    ///
-    /// `bitrate_fuzz_percent` is no longer used for classification (now
-    /// pre-computed at signal emission time) but kept in the signature
-    /// for API compatibility.
-    pub fn get_inbox_corpus_match_entries(
-        &self,
-        _bitrate_fuzz_percent: f64,
-    ) -> Result<Vec<crate::meta::views::InboxCorpusMatchEntry>> {
-        use crate::meta::signals::data::InboxCorpusMatchData;
-        use crate::meta::views::{CorpusMatchDetail, InboxCorpusMatchEntry, MatchClassification};
-
-        let mut stmt = self
-            .conn
-            .prepare("SELECT inode, path, data FROM signal_inbox_corpus_match ORDER BY path")?;
-
-        let mut results = Vec::new();
-        let rows = stmt.query_map(params![], |row| {
-            let inode: i64 = row.get(0)?;
-            let path: String = row.get(1)?;
-            let blob: Vec<u8> = row.get(2)?;
-            Ok((inode, path, blob))
-        })?;
-
-        for row in rows {
-            let (inbox_inode, inbox_path, blob) = row?;
-
-            let match_data: InboxCorpusMatchData = match bincode::deserialize(&blob) {
-                Ok(d) => d,
-                Err(_) => continue,
-            };
-
-            if match_data.corpus_matches.is_empty() {
-                continue;
-            }
-
-            let classification: MatchClassification = match_data.classification.into();
-
-            // Look up quality strings for display only
-            let inbox_quality = self.get_quality_string(inbox_inode);
-
-            let corpus_details: Vec<CorpusMatchDetail> = match_data
-                .corpus_matches
-                .iter()
-                .map(|cm| CorpusMatchDetail {
-                    _corpus_inode: cm.corpus_inode,
-                    corpus_path: cm.corpus_path.clone(),
-                    corpus_quality: self.get_quality_string(cm.corpus_inode),
-                    similarity: cm.similarity,
-                })
-                .collect();
-
-            results.push(InboxCorpusMatchEntry {
-                inbox_inode,
-                inbox_path,
-                inbox_quality,
-                corpus_matches: corpus_details,
-                classification,
-            });
-        }
-
-        Ok(results)
-    }
-
-    /// Get a human-readable quality string for an inode from audio_info.
-    fn get_quality_string(&self, inode: i64) -> String {
-        let mut stmt = match self
-            .conn
-            .prepare("SELECT file_type, bitrate_kbps, sample_rate FROM audio_info WHERE inode = ?1")
-        {
-            Ok(s) => s,
-            Err(_) => return "Unknown".to_string(),
-        };
-
-        match stmt.query_row(params![inode], |row| {
-            let file_type: String = row.get(0)?;
-            let bitrate: Option<i32> = row.get(1)?;
-            let sample_rate: Option<i32> = row.get(2)?;
-            Ok((file_type, bitrate, sample_rate))
-        }) {
-            Ok((file_type, bitrate, sample_rate)) => {
-                let ft = file_type.to_uppercase();
-                match (bitrate, sample_rate) {
-                    (Some(br), Some(sr)) => format!("{} {}kbps {}Hz", ft, br, sr),
-                    (Some(br), None) => format!("{} {}kbps", ft, br),
-                    (None, Some(sr)) => format!("{} {}Hz", ft, sr),
-                    (None, None) => ft,
-                }
-            }
-            Err(_) => "Unknown".to_string(),
-        }
     }
 
     // ========================================================================

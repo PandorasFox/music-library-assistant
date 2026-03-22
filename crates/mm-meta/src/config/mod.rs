@@ -13,8 +13,12 @@ pub use path_schema::PathTagSchema;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    pub root: PathBuf,
-    pub legacy_enabled: bool,
+    /// The corpus directory. This IS the root of the corpus — no `corpus/` subdirectory.
+    pub storage_root: PathBuf,
+    /// Override for library deployments. None = `storage_root/libraries`.
+    pub libraries_root: Option<PathBuf>,
+    /// Override for stash location. None = `storage_root/stash`.
+    pub stash_root: Option<PathBuf>,
     pub source_dirs: Vec<SourceDir>,
     pub opinions: Opinions,
 }
@@ -29,7 +33,6 @@ pub struct Opinions {
     pub tag_splitting: TagSplittingOpinions,
     pub duplicate_analysis: DuplicateAnalysisOpinions,
     pub release_packing: ReleasePackingOpinions,
-    pub inbox_organize: InboxOrganizeOpinions,
     /// When true, keep one persistent transaction open across modal interactions.
     /// Decisions accumulate in a Transaction tab; commit/discard from there.
     /// Default: false.
@@ -68,33 +71,14 @@ impl Opinions {
     pub const KDL_BLOCK_TAG_SPLITTING: &str = "tag-splitting";
     pub const KDL_BLOCK_DUPLICATE_ANALYSIS: &str = "duplicate-analysis";
     pub const KDL_BLOCK_RELEASE_PACKING: &str = "release-packing";
-    pub const KDL_BLOCK_INBOX_ORGANIZE: &str = "inbox-organize";
     pub const KDL_BLOCK_EXTERNAL_MATCHING: &str = "external-matching";
     pub const KDL_BLOCK_DISC_EXTRACTION: &str = "disc-extraction";
     pub const KDL_BLOCK_ALBUM_ART: &str = "album-art";
 }
 
 /// Opinions for quality-based auto-resolution
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QualityResolutionOpinions {
-    /// Inbox-to-corpus bitrate fuzz tolerance as a percentage (default: 5.0).
-    /// Files within this % bitrate difference (same format class and sample rate)
-    /// are treated as equivalent rather than superior/inferior. Suppresses noise
-    /// from minor FLAC compression differences across encoder versions.
-    pub inbox_bitrate_fuzz_percent: f64,
-}
-
-impl Default for QualityResolutionOpinions {
-    fn default() -> Self {
-        Self {
-            inbox_bitrate_fuzz_percent: 5.0,
-        }
-    }
-}
-
-impl QualityResolutionOpinions {
-    pub const KDL_BITRATE_FUZZ: &str = "inbox-bitrate-fuzz-percent";
-}
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QualityResolutionOpinions {}
 
 /// Opinions for tag canonicalization
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -115,7 +99,6 @@ pub enum StartupView {
     Health,
     Search,
     Browser,
-    Inbox,
     ExternalMatches,
 }
 
@@ -360,26 +343,6 @@ impl ReleasePackingOpinions {
     pub const KDL_LOW_CONFIDENCE_ALBUM_MATCH: &str = "low-confidence-max-album-match";
 }
 
-/// Directory granularity for inbox organize workflow.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub enum InboxOrganizeGranularity {
-    /// Walk to deepest directories containing audio files (default).
-    #[default]
-    Leaf,
-    /// Iterate only direct children of inbox/.
-    TopLevel,
-}
-
-/// Opinions for inbox organize workflow.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct InboxOrganizeOpinions {
-    pub directory_granularity: InboxOrganizeGranularity,
-}
-
-impl InboxOrganizeOpinions {
-    pub const KDL_DIR_GRANULARITY: &str = "directory-granularity";
-}
-
 /// How a recording-level MusicBrainz relation type maps to tag output.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RelationRouting {
@@ -557,7 +520,6 @@ impl Default for Opinions {
             tag_splitting: TagSplittingOpinions::default(),
             duplicate_analysis: DuplicateAnalysisOpinions::default(),
             release_packing: ReleasePackingOpinions::default(),
-            inbox_organize: InboxOrganizeOpinions::default(),
             leave_transactions_open: false,
             external_matching: ExternalMatchingConfig::default(),
             disc_extraction: DiscExtractionOpinions::default(),
@@ -627,20 +589,16 @@ impl Config {
     // Derived directory accessors
     // =========================================================================
 
-    pub fn corpus_dir(&self) -> PathBuf {
-        self.root.join("corpus")
-    }
-
     pub fn libraries_dir(&self) -> PathBuf {
-        self.root.join("libraries")
+        self.libraries_root
+            .clone()
+            .unwrap_or_else(|| self.storage_root.join("libraries"))
     }
 
     pub fn stash_dir(&self) -> PathBuf {
-        self.root.join("stash")
-    }
-
-    pub fn inbox_dir(&self) -> PathBuf {
-        self.root.join("inbox")
+        self.stash_root
+            .clone()
+            .unwrap_or_else(|| self.storage_root.join("stash"))
     }
 
     // =========================================================================
@@ -649,11 +607,10 @@ impl Config {
 
     /// Get all corpus paths that deploy to a specific library.
     pub fn get_corpus_paths_for_library(&self, library_name: &str) -> Vec<PathBuf> {
-        let corpus_dir = self.corpus_dir();
         self.source_dirs
             .iter()
             .filter(|sd| sd.libraries.contains(&library_name.to_string()))
-            .map(|sd| corpus_dir.join(&sd.path))
+            .map(|sd| self.storage_root.join(&sd.path))
             .collect()
     }
 

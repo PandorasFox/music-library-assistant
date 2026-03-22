@@ -120,8 +120,6 @@ impl MutationDispatch for Mutation {
             Mutation::Transcode(m) => m,
             Mutation::HardLink(m) => m,
             Mutation::LibraryMove(m) => m,
-            Mutation::InboxToCorpus(m) => m,
-            Mutation::InboxDirToCorpus(m) => m,
             Mutation::UpdateFilePath(m) => m,
             Mutation::DropFromIndex(m) => m,
             Mutation::DropDirectoryFromIndex(m) => m,

@@ -58,23 +58,10 @@ pub fn apply_config_edits_to_kdl(
                 StartupView::Health => "health",
                 StartupView::Search => "search",
                 StartupView::Browser => "browser",
-                StartupView::Inbox => "inbox",
                 StartupView::ExternalMatches => "external-matches",
             };
             set_or_create_string_node(startup, StartupOpinions::KDL_DEFAULT_VIEW, view_str);
         }
-    }
-
-    // --- Quality Resolution ---
-    let old_qr = &old_config.opinions.quality_resolution;
-    let new_qr = &new_config.opinions.quality_resolution;
-    if new_qr.inbox_bitrate_fuzz_percent != old_qr.inbox_bitrate_fuzz_percent {
-        let block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_QUALITY_RESOLUTION);
-        set_or_create_float_node(
-            block,
-            QualityResolutionOpinions::KDL_BITRATE_FUZZ,
-            new_qr.inbox_bitrate_fuzz_percent,
-        );
     }
 
     // --- Canonicalization ---
@@ -278,18 +265,6 @@ pub fn apply_config_edits_to_kdl(
             Opinions::KDL_WATCHER_POLL_INTERVAL,
             new_config.opinions.watcher_poll_interval_secs as i64,
         );
-    }
-
-    // --- Inbox Organize ---
-    if new_config.opinions.inbox_organize.directory_granularity
-        != old_config.opinions.inbox_organize.directory_granularity
-    {
-        let block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_INBOX_ORGANIZE);
-        let gran_str = match new_config.opinions.inbox_organize.directory_granularity {
-            InboxOrganizeGranularity::Leaf => "leaf",
-            InboxOrganizeGranularity::TopLevel => "top-level",
-        };
-        set_or_create_string_node(block, InboxOrganizeOpinions::KDL_DIR_GRANULARITY, gran_str);
     }
 
     // --- Tag Splitting ---
@@ -647,7 +622,7 @@ opinions {
         let result = apply_config_edits_to_kdl(kdl, &config, &config).unwrap();
         // Re-parse the result and verify it's equivalent
         let reparsed = parse_kdl_config(&result).unwrap();
-        assert_eq!(reparsed.root, config.root);
+        assert_eq!(reparsed.storage_root, config.storage_root);
         assert_eq!(
             reparsed.opinions.startup.default_view,
             config.opinions.startup.default_view
@@ -678,7 +653,7 @@ opinions {
         let reparsed = parse_kdl_config(&result).unwrap();
         assert_eq!(reparsed.opinions.startup.default_view, StartupView::Browser);
         // Root should be preserved
-        assert_eq!(reparsed.root, PathBuf::from("/archive"));
+        assert_eq!(reparsed.storage_root, PathBuf::from("/archive"));
     }
 
     #[test]
@@ -689,17 +664,16 @@ opinions {
         let mut new_config = old_config.clone();
         new_config
             .opinions
-            .quality_resolution
-            .inbox_bitrate_fuzz_percent = 3.0;
+            .canonicalization
+            .strip_album_format_suffixes = true;
 
         let result = apply_config_edits_to_kdl(kdl, &old_config, &new_config).unwrap();
         let reparsed = parse_kdl_config(&result).unwrap();
-        assert_eq!(
+        assert!(
             reparsed
                 .opinions
-                .quality_resolution
-                .inbox_bitrate_fuzz_percent,
-            3.0
+                .canonicalization
+                .strip_album_format_suffixes,
         );
     }
 

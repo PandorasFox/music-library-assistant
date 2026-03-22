@@ -25,7 +25,6 @@ pub enum Route {
     Files(FilesRoute),
     Health(HealthRoute),
     History(HistoryRoute),
-    Inbox(InboxRoute),
     Transaction(TransactionRoute),
     Deploy(DeployRoute),
     ExternalMatches(ExternalMatchesRoute),
@@ -84,11 +83,6 @@ pub struct HealthRoute {
 pub struct HistoryRoute {
     /// Expanded session ID.
     pub session: Option<i64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct InboxRoute {
-    pub cursor: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -174,7 +168,6 @@ pub enum ResolutionRoute {
     CorruptFiles { cursor: Option<usize> },
     LosslessRemux { cursor: Option<usize> },
     SubparDuplicates { cursor: Option<usize> },
-    InboxCorpusMatch { cursor: Option<usize> },
     DirectoryCluster { cluster: Option<usize>, cursor: Option<usize> },
     MovedFiles { cursor: Option<usize> },
     OobResolution { bucket: Option<mm_meta::views::ConflictBucket>, cursor: Option<usize> },
@@ -203,7 +196,6 @@ impl ResolutionRoute {
             Self::CorruptFiles { .. } => "Corrupt Files",
             Self::LosslessRemux { .. } => "Lossless Remux",
             Self::SubparDuplicates { .. } => "Subpar Duplicates",
-            Self::InboxCorpusMatch { .. } => "Inbox/Corpus Match",
             Self::DirectoryCluster { .. } => "Directory Cluster",
             Self::MovedFiles { .. } => "Moved Files",
             Self::OobResolution { .. } => "OOB Resolution",
@@ -301,10 +293,6 @@ impl Route {
                 if let Some(sid) = r.session {
                     params.set_str("session", Some(&sid.to_string()));
                 }
-            }
-            Route::Inbox(r) => {
-                path.push_str("/inbox");
-                params.set_usize("cursor", r.cursor);
             }
             Route::Transaction(r) => {
                 path.push_str("/transaction");
@@ -414,9 +402,6 @@ impl Route {
             })),
             "history" => Ok(Route::History(HistoryRoute {
                 session: params.get_string("session").and_then(|s| s.parse().ok()),
-            })),
-            "inbox" => Ok(Route::Inbox(InboxRoute {
-                cursor: params.get_usize("cursor"),
             })),
             "transaction" => Ok(Route::Transaction(TransactionRoute {
                 cursor: params.get_usize("cursor"),
@@ -547,7 +532,6 @@ impl Route {
             Route::Files(_) => Some(LateralView::Files),
             Route::Health(_) => Some(LateralView::Health),
             Route::History(_) => Some(LateralView::History),
-            Route::Inbox(_) => Some(LateralView::Inbox),
             Route::Transaction(_) => Some(LateralView::Transaction),
             Route::Deploy(_) => Some(LateralView::Deploy),
             Route::ExternalMatches(_) => Some(LateralView::ExternalMatches),
@@ -604,10 +588,6 @@ fn resolution_to_url(r: &ResolutionRoute, path: &mut String, params: &mut QueryP
         }
         ResolutionRoute::SubparDuplicates { cursor } => {
             path.push_str("subpar-duplicates");
-            params.set_usize("cursor", *cursor);
-        }
-        ResolutionRoute::InboxCorpusMatch { cursor } => {
-            path.push_str("inbox-corpus-match");
             params.set_usize("cursor", *cursor);
         }
         ResolutionRoute::DirectoryCluster { cluster, cursor } => {
@@ -718,9 +698,6 @@ fn resolution_from_url(
             cursor: params.get_usize("cursor"),
         },
         "subpar-duplicates" => ResolutionRoute::SubparDuplicates {
-            cursor: params.get_usize("cursor"),
-        },
-        "inbox-corpus-match" => ResolutionRoute::InboxCorpusMatch {
             cursor: params.get_usize("cursor"),
         },
         "directory-cluster" => ResolutionRoute::DirectoryCluster {
@@ -995,11 +972,6 @@ mod tests {
     }
 
     #[test]
-    fn round_trip_inbox() {
-        assert_round_trip(&Route::Inbox(InboxRoute { cursor: Some(2) }));
-    }
-
-    #[test]
     fn round_trip_transaction() {
         assert_round_trip(&Route::Transaction(TransactionRoute {
             cursor: Some(1),
@@ -1098,15 +1070,6 @@ mod tests {
     }
 
     #[test]
-    fn round_trip_resolution_tag_canonicity_inbox() {
-        assert_round_trip(&Route::Resolution(ResolutionRoute::TagCanonicity {
-            tag_name: "genre".into(),
-            zone: Zone::Inbox,
-            cluster: None,
-        }));
-    }
-
-    #[test]
     fn round_trip_resolution_inconsistent_album_artist() {
         assert_round_trip(&Route::Resolution(ResolutionRoute::InconsistentAlbumArtist {
             tag_name: "albumartist".into(),
@@ -1121,16 +1084,6 @@ mod tests {
             zone: Zone::Corpus,
             safe_mode: true,
             cluster: Some(3),
-        }));
-    }
-
-    #[test]
-    fn round_trip_resolution_compound_split_inbox() {
-        assert_round_trip(&Route::Resolution(ResolutionRoute::CompoundSplit {
-            tag_name: "artist".into(),
-            zone: Zone::Inbox,
-            safe_mode: false,
-            cluster: None,
         }));
     }
 
@@ -1154,7 +1107,6 @@ mod tests {
             ResolutionRoute::CorruptFiles { cursor: Some(2) },
             ResolutionRoute::LosslessRemux { cursor: None },
             ResolutionRoute::SubparDuplicates { cursor: Some(4) },
-            ResolutionRoute::InboxCorpusMatch { cursor: Some(0) },
             ResolutionRoute::DirectoryCluster { cluster: Some(7), cursor: Some(3) },
             ResolutionRoute::MovedFiles { cursor: Some(1) },
             ResolutionRoute::OobResolution { bucket: None, cursor: Some(5) },

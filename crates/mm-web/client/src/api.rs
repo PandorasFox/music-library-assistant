@@ -14,7 +14,7 @@ use web_sys::{Headers, Request, RequestInit, RequestMode, Response};
 use mm_meta::domain_query_types::SessionEditDetail;
 use mm_meta::views::cluster_deploy::DeployModalData;
 use mm_meta::views::{
-    DeployStatus, EditHistoryData, ExternalMatchesData, InboxOverviewData, InsightsData,
+    DeployStatus, EditHistoryData, ExternalMatchesData, InsightsData,
 };
 use mm_meta::witch_types::WitchStatus;
 
@@ -193,11 +193,6 @@ pub async fn get_config_kdl() -> Result<String, JsValue> {
 /// GET /queries/insights → InsightsData
 pub async fn get_insights() -> Result<InsightsData, JsValue> {
     from_json(get("/queries/insights").await?)
-}
-
-/// GET /queries/inbox-overview → InboxOverviewData
-pub async fn get_inbox_overview() -> Result<InboxOverviewData, JsValue> {
-    from_json(get("/queries/inbox-overview").await?)
 }
 
 /// GET /queries/deploy-status → DeployStatus

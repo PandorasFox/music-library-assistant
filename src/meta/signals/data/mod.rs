@@ -30,8 +30,6 @@ pub use mm_meta::signals::data::{
     DiscExtractionData, DiscExtractionSource, TrackNumberExtraction,
     // Deploy data types
     SidecarDeployReadyData, DeployLifecyclePhase,
-    // Inbox data types
-    CorpusMatchQuality, InboxCorpusMatchData, InboxCorpusMatch, InboxTagCanonicityData,
     // Release packing data types
     MatchMethod, ReleasePackingData, UnsolvedCategory,
     UnmatchedCorpusTrackData, UnfilledReleaseSlotData,
@@ -107,11 +105,9 @@ macro_rules! impl_content_hash {
 // ============================================================================
 
 mod deploy;
-mod inbox;
 mod release_packing;
 
 pub use deploy::*;
-pub use inbox::*;
 pub use release_packing::*;
 
 // ============================================================================

@@ -1423,6 +1423,10 @@ impl Witch {
                     "[STATE] Mutations now enabled.",
                 );
 
+                // Auto-index any unindexed corpus files discovered by derivation.
+                // Signal writes are flushed (queue drained before this callback).
+                self.auto_index_unindexed_files();
+
                 // Queue content analysis after full awakening
                 work.content_analysis = true;
             }
@@ -1460,7 +1464,11 @@ impl Witch {
                     ));
                     work.content_analysis = true;
                 }
-                // If no mutations and no pending scope, stay Full (normal work completion)
+                // Steady-state: derivation completed (no prior mutations).
+                // Check for newly unindexed files to auto-index.
+                if !had_mutations && self.pending_recomputation_scope.is_none() {
+                    self.auto_index_unindexed_files();
+                }
             }
 
             // Maintenance can complete while None - this is valid, just NOP
@@ -1881,6 +1889,68 @@ impl Witch {
     fn queue_maintenance(&mut self, task: crate::meta::maintenance::DbMaintenanceTask) {
         self.transition_to_working();
         self.enqueue_one(Task::Maintenance(task), None);
+    }
+
+    // -------------------------------------------------------------------------
+    // Auto-Indexing
+    // -------------------------------------------------------------------------
+
+    /// Automatically index unindexed corpus files after derivation.
+    ///
+    /// Called at the Inodes→Full transition when all derivation signal writes
+    /// have been flushed. Reads UnindexedFileSignal rows, creates
+    /// IndexFileFromPath mutations, and queues them for execution.
+    fn auto_index_unindexed_files(&mut self) {
+        let db_path = match config::get_db_path() {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        let db = match Database::open_read_only(&db_path) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+        let read_db = crate::db::ReadOnlyDb::new(&db);
+
+        let unindexed = match read_db.get_unindexed_signals_for::<crate::zones::CorpusZone>() {
+            Ok(files) => files,
+            Err(e) => {
+                crate::logging::log_error(format!(
+                    "[AUTO-INDEX] Failed to query unindexed signals: {}", e
+                ));
+                return;
+            }
+        };
+
+        if unindexed.is_empty() {
+            return;
+        }
+
+        let resolver = crate::corpus::paths::get_resolver();
+        let mutations: Vec<Mutation> = unindexed
+            .iter()
+            .map(|(_inode, path)| {
+                let abs_path = resolver.resolve_for_zone(
+                    crate::db::types::Zone::Corpus,
+                    std::path::Path::new(path),
+                );
+                Mutation::IndexFileFromPath(
+                    mm_meta::mutations::indexing::IndexFileFromPathMutation {
+                        path: abs_path,
+                        zone: "corpus".to_string(),
+                    },
+                )
+            })
+            .collect();
+
+        crate::logging::log_general(format!(
+            "[AUTO-INDEX] Queueing {} index mutations for unindexed corpus files",
+            mutations.len()
+        ));
+
+        self.queue_mutations_internal(
+            mutations,
+            Some("Auto-index unindexed files".to_string()),
+        );
     }
 
     // -------------------------------------------------------------------------

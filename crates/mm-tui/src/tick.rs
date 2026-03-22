@@ -12,7 +12,7 @@ use super::App;
 use crate::{
     progress_screen::{ProgressPhase, ProgressScreen},
     progressive_worker::{OnComplete, ProgressiveWorkerState, WorkItem, WorkSummary},
-    startup, transaction_review, ActiveView,
+    transaction_review, ActiveView,
 };
 
 impl App {
@@ -67,18 +67,15 @@ impl App {
         if screen.is_complete() {
             match phase {
                 ProgressPhase::Eyeballing => {
-                    // Check for unindexed files before deciding next phase
-                    if let Some(intake_state) = self.check_for_unindexed_files() {
-                        self.view = ActiveView::IntakeConfirmation(intake_state);
-                    } else if self.witch_status().has_pending {
-                        // Witch has pending work (e.g., freshen latch triggered content analysis)
+                    // Auto-indexing is handled by the Witch — no intake confirmation needed.
+                    if self.witch_status().has_pending {
+                        // Witch has pending work (auto-index mutations, content analysis)
                         self.view = ActiveView::Progress {
                             screen: ProgressScreen::new_content_analysis(),
                             eye: Eye::default(),
                         };
                     } else {
-                        // No unindexed files, no mutations - skip content analysis entirely
-                        // Corpus is unchanged from last session, signals are still valid
+                        // No pending work — go straight to default view
                         self.start_default_view();
                     }
                 }
@@ -110,22 +107,6 @@ impl App {
                 self.start_unified_tag_editor_for_audio_files(files);
             }
         }
-    }
-
-    /// Check for unindexed files after Awakening completes.
-    ///
-    /// Queries UnindexedFile signals (emitted by DeriveZoneSignals / UpdateCorpusFileSignals).
-    /// Returns Some if there are unindexed files to confirm, None otherwise.
-    pub(super) fn check_for_unindexed_files(&mut self) -> Option<startup::IntakeConfirmationState> {
-        let reasoning = self.witch_status().reasoning_level;
-        mm_meta::logging::log_general(format!(
-            "check_for_unindexed_files: reasoning_level={:?}",
-            reasoning
-        ));
-
-        self.query(mm_meta::domain_queries::GetIntakeConfirmation {
-                source: startup::IntakeSource::Startup,
-            })
     }
 
     // =========================================================================

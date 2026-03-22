@@ -134,7 +134,7 @@ fn insight_route(ty: &InsightType) -> Option<String> {
             Some("resolve/oob-sync".into())
         }
         InsightType::CorpusOobTagConflict => Some("resolve/oob-conflict/two-way".into()),
-        InsightType::CorpusFilesUnindexed => None, // handled via __mm_index_now()
+        InsightType::CorpusFilesUnindexed => None, // auto-indexed by Witch
         InsightType::CorpusFilesMissing => Some("resolve/missing-files/restorable".into()),
         InsightType::CorpusDirectoriesMissing => Some("resolve/missing-directories".into()),
         InsightType::CorpusFilesRelocated => Some("resolve/moved-files".into()),
@@ -288,7 +288,6 @@ pub fn render_insights_content(insights: &InsightsData) -> Node {
             continue;
         }
         let (alert_class, button_label) = match entry.insight_type {
-            InsightType::CorpusFilesUnindexed => ("mm-alert", "Index Now"),
             InsightType::CorpusFilesMissing | InsightType::CorpusCorruptFiles => {
                 ("mm-alert mm-alert--warning", "Resolve")
             }
@@ -300,15 +299,7 @@ pub fn render_insights_content(insights: &InsightsData) -> Node {
             .child(span().class("mm-alert__text").text(
                 format!("{} {}", count, entry.label.to_lowercase()),
             ));
-        // Unindexed uses a special JS action; others navigate to resolution routes.
-        if matches!(entry.insight_type, InsightType::CorpusFilesUnindexed) {
-            alert = alert.child(
-                html::button()
-                    .class("mm-btn mm-alert__action")
-                    .attr("onclick", "window.__mm_index_now()")
-                    .text(button_label),
-            );
-        } else if let Some(route) = insight_route(&entry.insight_type) {
+        if let Some(route) = insight_route(&entry.insight_type) {
             alert = alert.child(
                 html::button()
                     .class("mm-btn mm-alert__action")

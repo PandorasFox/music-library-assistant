@@ -1766,21 +1766,6 @@ pub fn mm_stage_decision(binding_json: &str) {
     });
 }
 
-/// Build intake index mutations client-side, submit via tx API, navigate to review.
-#[wasm_bindgen]
-pub fn mm_index_now() {
-    spawn_local(async {
-        if let Err(e) = do_index_now().await {
-            web_sys::console::error_1(&format!("index now error: {e:?}").into());
-        }
-    });
-}
-
-async fn do_index_now() -> Result<(), JsValue> {
-    // Auto-indexing is handled by the Witch — nothing to do client-side.
-    load_from_hash().await.ok();
-    Ok(())
-}
 
 /// Approve releases: load staging data, build decisions, stage to transaction.
 #[wasm_bindgen]

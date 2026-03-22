@@ -416,7 +416,7 @@ impl super::dispatch::Dispatchable for OobResolutionState {
                 let tracks: Vec<(i64, std::path::PathBuf)> = indices
                     .iter()
                     .filter_map(|&idx| bucket_state.files.get(idx))
-                    .map(|f| (f.inode, resolver.resolve(std::path::Path::new(&f.path))))
+                    .map(|f| (f.inode, resolver.resolve_for_zone(Zone::Corpus, std::path::Path::new(&f.path))))
                     .collect();
 
                 if tracks.is_empty() {
@@ -474,7 +474,7 @@ impl super::dispatch::Dispatchable for OobResolutionState {
                 let tracks: Vec<(i64, std::path::PathBuf)> = indices
                     .iter()
                     .filter_map(|&idx| bucket_state.files.get(idx))
-                    .map(|f| (f.inode, resolver.resolve(std::path::Path::new(&f.path))))
+                    .map(|f| (f.inode, resolver.resolve_for_zone(Zone::Corpus, std::path::Path::new(&f.path))))
                     .collect();
 
                 if tracks.is_empty() {

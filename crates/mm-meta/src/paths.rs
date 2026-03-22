@@ -1,8 +1,18 @@
 //! Path Resolution Layer
 //!
-//! Handles conversion between absolute filesystem paths and root-relative database paths.
+//! Two kinds of relative paths:
+//!
+//! - **Root-relative**: `corpus/Artist/Album/track.flac` — includes zone directory,
+//!   produced by `to_relative()`. Used for routing (classifying which zone a path
+//!   belongs to). NOT stored in the database.
+//!
+//! - **Zone-relative**: `Artist/Album/track.flac` — relative to the zone root,
+//!   produced by `to_zone_relative()`. This is the format stored in the DB and
+//!   signal tables. The zone is metadata on the row, not part of the path.
 
 use std::path::{Path, PathBuf};
+
+use crate::db_types::Zone;
 
 /// Resolves paths between absolute filesystem paths and root-relative database paths.
 ///
@@ -23,16 +33,42 @@ impl PathResolver {
         Self::from_root(config.root.clone())
     }
 
-    /// Convert an absolute filesystem path to a root-relative path for database storage.
+    /// Convert an absolute path to a root-relative path (includes zone directory).
     ///
-    /// Returns None if the path doesn't start with the archive root.
+    /// Returns e.g. `corpus/Artist/Album/track.flac`. Used for routing — do NOT
+    /// store the result in the DB. Use `to_zone_relative()` for DB paths.
     pub fn to_relative(&self, abs: &Path) -> Option<PathBuf> {
         abs.strip_prefix(&self.root).ok().map(PathBuf::from)
     }
 
+    /// Convert an absolute path to a zone-relative path for DB storage.
+    ///
+    /// Strips both the archive root and the zone directory.
+    /// Returns e.g. `Artist/Album/track.flac` for a corpus file.
+    pub fn to_zone_relative(&self, abs: &Path, zone: Zone) -> Option<PathBuf> {
+        abs.strip_prefix(&self.zone_dir(zone)).ok().map(PathBuf::from)
+    }
+
     /// Resolve a root-relative path to an absolute filesystem path.
+    ///
+    /// Input should include the zone directory (e.g. `corpus/Artist/Album/track.flac`).
+    /// For zone-relative DB paths, use `resolve_for_zone()` instead.
     pub fn resolve(&self, rel: &Path) -> PathBuf {
         self.root.join(rel)
+    }
+
+    /// Resolve a zone-relative DB path to an absolute filesystem path.
+    pub fn resolve_for_zone(&self, zone: Zone, rel: &Path) -> PathBuf {
+        self.zone_dir(zone).join(rel)
+    }
+
+    /// Get the filesystem directory for a zone.
+    pub fn zone_dir(&self, zone: Zone) -> PathBuf {
+        match zone {
+            Zone::Corpus => self.corpus_dir(),
+            Zone::Library => self.libraries_dir(),
+            Zone::Inbox => self.inbox_dir(),
+        }
     }
 
     /// Get the archive root path.
@@ -66,16 +102,22 @@ impl PathResolver {
 // =============================================================================
 
 /// Check if a root-relative path is a corpus path.
+///
+/// Operates on root-relative paths from `to_relative()`, NOT DB paths.
 pub fn is_corpus_path(rel: &Path) -> bool {
     rel.starts_with("corpus")
 }
 
 /// Check if a root-relative path is a library path.
+///
+/// Operates on root-relative paths from `to_relative()`, NOT DB paths.
 pub fn is_library_path(rel: &Path) -> bool {
     rel.starts_with("libraries")
 }
 
 /// Check if a root-relative path is a stash path.
+///
+/// Operates on root-relative paths from `to_relative()`, NOT DB paths.
 pub fn is_stash_path(rel: &Path) -> bool {
     rel.starts_with("stash")
 }
@@ -133,4 +175,45 @@ mod tests {
         assert!(is_stash_path(Path::new("stash/cleanup/track.flac")));
         assert!(!is_stash_path(Path::new("corpus/track.flac")));
     }
+
+    fn test_config() -> crate::config::Config {
+        crate::config::Config {
+            root: PathBuf::from("/archive"),
+            legacy_enabled: true,
+            source_dirs: vec![],
+            opinions: Default::default(),
+        }
+    }
+
+    #[test]
+    fn test_to_zone_relative() {
+        let resolver = PathResolver::from_config(&test_config());
+
+        let abs = Path::new("/archive/corpus/Artist/Album/track.flac");
+        let rel = t!(resolver.to_zone_relative(abs, Zone::Corpus));
+        assert_eq!(rel, PathBuf::from("Artist/Album/track.flac"));
+
+        let abs = Path::new("/archive/libraries/music/Artist/track.opus");
+        let rel = t!(resolver.to_zone_relative(abs, Zone::Library));
+        assert_eq!(rel, PathBuf::from("music/Artist/track.opus"));
+
+        // Wrong zone returns None
+        let abs = Path::new("/archive/corpus/Artist/Album/track.flac");
+        assert!(resolver.to_zone_relative(abs, Zone::Library).is_none());
+    }
+
+    #[test]
+    fn test_resolve_for_zone() {
+        let resolver = PathResolver::from_config(&test_config());
+
+        let abs = resolver.resolve_for_zone(Zone::Corpus, Path::new("Artist/Album/track.flac"));
+        assert_eq!(abs, PathBuf::from("/archive/corpus/Artist/Album/track.flac"));
+
+        let abs = resolver.resolve_for_zone(Zone::Library, Path::new("music/Artist/track.opus"));
+        assert_eq!(abs, PathBuf::from("/archive/libraries/music/Artist/track.opus"));
+
+        let abs = resolver.resolve_for_zone(Zone::Inbox, Path::new("unsorted/track.mp3"));
+        assert_eq!(abs, PathBuf::from("/archive/inbox/unsorted/track.mp3"));
+    }
+
 }

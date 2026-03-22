@@ -39,7 +39,7 @@ pub fn load_corrupt_file_data(
     let mut files = Vec::new();
 
     for corpus_path in corrupt_paths {
-        let abs_path = resolver.resolve(std::path::Path::new(&corpus_path));
+        let abs_path = resolver.resolve_for_zone(Zone::Corpus, std::path::Path::new(&corpus_path));
         let inode = if let Ok(metadata) = std::fs::metadata(&abs_path) {
             metadata.ino() as i64
         } else {
@@ -152,7 +152,7 @@ pub fn load_subpar_duplicate_data(
         } else if let Some(fe) = read_db.get_file_entry_by_path(&entry.corpus_path, "corpus")? {
             fe.inode
         } else {
-            let abs_path = resolver.resolve(std::path::Path::new(&entry.corpus_path));
+            let abs_path = resolver.resolve_for_zone(Zone::Corpus, std::path::Path::new(&entry.corpus_path));
             if let Ok(metadata) = std::fs::metadata(&abs_path) {
                 metadata.ino() as i64
             } else {
@@ -1263,7 +1263,7 @@ pub fn gather_intake_zone<Z: crate::zones::AudioZone>(
 
     for (_inode, rel_path_str) in &unindexed {
         let rel_path = std::path::Path::new(rel_path_str);
-        let abs_path = resolver.resolve(rel_path);
+        let abs_path = resolver.resolve_for_zone(Z::ZONE, rel_path);
 
         if abs_path.exists() && abs_path.is_file() {
             if let Ok(meta) = std::fs::metadata(&abs_path) {

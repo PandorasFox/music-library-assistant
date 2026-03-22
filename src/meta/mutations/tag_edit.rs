@@ -210,7 +210,7 @@ fn execute_apply_tag_ops(
 
         // Spawn disk flush — carries expected_tags for post-drain validation
         let resolver = paths::get_resolver();
-        let abs_path = resolver.resolve(std::path::Path::new(file_path));
+        let abs_path = resolver.resolve_for_zone(zone, std::path::Path::new(file_path));
         spawned.push(
             witness.spawn_mutation(Mutation::FlushTagsToDisk(FlushTagsToDiskMutation {
                 inode,

@@ -164,14 +164,13 @@ impl MutationExecutor for StashLeftoversMutation {
 
     fn specific_signals_to_clear(&self) -> Vec<SignalToClear> {
         use crate::corpus::paths;
+        use crate::db::types::Zone;
         let resolver = paths::get_resolver();
-        if let Some(rel) = resolver.to_relative(&self.path) {
-            if let Ok(lib_rel) = rel.strip_prefix("libraries") {
-                let library_path = lib_rel.to_string_lossy();
-                if let Some(library_name) = library_path.split('/').next() {
-                    let key = LibraryLeftoverSignal::make_key(library_name, &library_path);
-                    return vec![SignalToClear::exact::<LibraryLeftoverSignal>(key)];
-                }
+        if let Some(lib_rel) = resolver.to_zone_relative(&self.path, Zone::Library) {
+            let library_path = lib_rel.to_string_lossy();
+            if let Some(library_name) = library_path.split('/').next() {
+                let key = LibraryLeftoverSignal::make_key(library_name, &library_path);
+                return vec![SignalToClear::exact::<LibraryLeftoverSignal>(key)];
             }
         }
         Vec::new()
@@ -248,14 +247,13 @@ impl MutationExecutor for LibraryMoveMutation {
 
     fn specific_signals_to_clear(&self) -> Vec<SignalToClear> {
         use crate::corpus::paths;
+        use crate::db::types::Zone;
         let resolver = paths::get_resolver();
-        if let Some(rel) = resolver.to_relative(&self.source) {
-            if let Ok(lib_rel) = rel.strip_prefix("libraries") {
-                let library_path = lib_rel.to_string_lossy();
-                if let Some(library_name) = library_path.split('/').next() {
-                    let key = LibraryStaleSignal::make_key(library_name, &library_path);
-                    return vec![SignalToClear::exact::<LibraryStaleSignal>(key)];
-                }
+        if let Some(lib_rel) = resolver.to_zone_relative(&self.source, Zone::Library) {
+            let library_path = lib_rel.to_string_lossy();
+            if let Some(library_name) = library_path.split('/').next() {
+                let key = LibraryStaleSignal::make_key(library_name, &library_path);
+                return vec![SignalToClear::exact::<LibraryStaleSignal>(key)];
             }
         }
         Vec::new()
@@ -500,12 +498,13 @@ pub fn execute_move_to_stash(path: &Path, stash_name: &str, stash_root: &Path) -
 
     let resolver = paths::get_resolver();
 
-    // Convert absolute path to root-relative (e.g., "corpus/Artist/Album/track.flac")
+    // Convert absolute path to root-relative (includes zone dir, e.g., "corpus/Artist/Album/track.flac").
+    // This is NOT a DB path — it's an intermediate for stripping the zone dir to get structure to preserve.
     let root_relative = resolver
         .to_relative(path)
         .ok_or_else(|| anyhow::anyhow!("Path not within archive root: {}", path.display()))?;
 
-    // Strip the domain prefix (corpus/ or libraries/) to get the preservable structure
+    // Strip the zone directory to get the preservable structure
     let preserved_path = root_relative
         .strip_prefix("corpus")
         .or_else(|_| root_relative.strip_prefix("libraries"))

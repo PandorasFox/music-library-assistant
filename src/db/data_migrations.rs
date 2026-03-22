@@ -60,6 +60,33 @@ pub fn all_data_migrations() -> Vec<DataMigrationEntry> {
                 Ok(())
             },
         },
+        DataMigrationEntry {
+            id: "2026-03-strip-zone-prefix-from-paths",
+            description: "Strip zone prefix from file paths (zone is metadata, not path)",
+            apply: |db| {
+                let conn = db.conn();
+                // Corpus: strip "corpus/" prefix (7 chars, SUBSTR 1-based → start at 8)
+                conn.execute(
+                    "UPDATE files SET path = SUBSTR(path, 8) \
+                     WHERE zone = 'corpus' AND path LIKE 'corpus/%'",
+                    [],
+                )?;
+                // Inbox: strip "inbox/" prefix (6 chars → start at 7)
+                conn.execute(
+                    "UPDATE files SET path = SUBSTR(path, 7) \
+                     WHERE zone = 'inbox' AND path LIKE 'inbox/%'",
+                    [],
+                )?;
+                // Library: delete buggy "library/"-prefixed entries (sidecar images).
+                // Correct entries already exist from ReconcileLibraryFiles.
+                conn.execute(
+                    "DELETE FROM files \
+                     WHERE zone = 'library' AND path LIKE 'library/%'",
+                    [],
+                )?;
+                Ok(())
+            },
+        },
     ]
 }
 

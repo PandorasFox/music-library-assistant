@@ -1131,16 +1131,9 @@ impl Witch {
                     zone, inodes.len()
                 ));
                 if let Some(map) = self.observed_inodes.for_zone_mut(zone) {
-                    let use_zone_prefix = zone != crate::db::types::Zone::Library;
-                    let zone_prefix = zone.as_str();
                     for (inode, observed) in inodes {
-                        let path = if use_zone_prefix {
-                            format!("{}/{}", zone_prefix, observed.path)
-                        } else {
-                            observed.path.clone()
-                        };
                         map.insert(inode, ObservedInodeMeta {
-                            path,
+                            path: observed.path,
                             mtime_secs: observed.mtime_secs,
                             mtime_nanos: observed.mtime_nanos,
                             file_size: observed.file_size,
@@ -1188,7 +1181,7 @@ impl Witch {
                 ));
                 if let Some(map) = self.observed_inodes.for_zone_mut(zone) {
                     let rel_path = crate::corpus::paths::get_resolver()
-                        .to_relative(&path)
+                        .to_zone_relative(&path, zone)
                         .unwrap_or_else(|| path.clone())
                         .to_string_lossy()
                         .to_string();
@@ -1220,7 +1213,7 @@ impl Witch {
                 ));
                 if let Some(map) = self.observed_inodes.for_zone_mut(zone) {
                     let rel_path = crate::corpus::paths::get_resolver()
-                        .to_relative(&path)
+                        .to_zone_relative(&path, zone)
                         .unwrap_or_else(|| path.clone())
                         .to_string_lossy()
                         .to_string();
@@ -1241,8 +1234,8 @@ impl Witch {
                 }
                 self.watcher_derivation_needed = true;
             }
-            fs_thread::WatcherMessage::ImageFileObserved(mut img) => {
-                img.path = format!("{}/{}", img.zone.as_str(), img.path);
+            fs_thread::WatcherMessage::ImageFileObserved(img) => {
+                // img.path is already zone-relative from the fs_thread
                 self.pending_observed_images.push(img);
             }
             fs_thread::WatcherMessage::MonitoringActive => {
@@ -1475,8 +1468,19 @@ impl Witch {
                     ));
                     // Queue derivation immediately since mutations may have changed file state
                     self.watcher_derivation_needed = true;
+                } else if self.pending_recomputation_scope.is_some() {
+                    // Re-derivation completed after a mutation session.
+                    // The pending scope was stored when mutations drained — now
+                    // that derivation has reconciled signals, schedule content
+                    // analysis to recompute deploy status, overlaps, etc.
+                    crate::logging::log_general(format!(
+                        "[STATE] Post-mutation re-derivation complete (scope={:?}). \
+                         Scheduling content analysis. Processed {} tasks.",
+                        self.pending_recomputation_scope, session_processed
+                    ));
+                    work.content_analysis = true;
                 }
-                // If no mutations, stay Full (normal work completion)
+                // If no mutations and no pending scope, stay Full (normal work completion)
             }
 
             // Maintenance can complete while None - this is valid, just NOP

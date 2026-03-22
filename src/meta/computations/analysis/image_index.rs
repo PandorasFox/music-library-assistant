@@ -73,7 +73,7 @@ pub fn execute_analyze_image_metadata(
     let mut skipped = 0;
 
     for img in images {
-        let abs_path = resolver.resolve(std::path::Path::new(&img.path));
+        let abs_path = resolver.resolve_for_zone(img.zone, std::path::Path::new(&img.path));
         if !abs_path.exists() {
             skipped += 1;
             continue;

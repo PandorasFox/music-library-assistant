@@ -168,10 +168,7 @@ pub fn execute_detect_release_overlaps(
     let mut album_dir_files: HashMap<String, Vec<FileInfo>> = HashMap::new();
 
     for signal in &healthy_signals {
-        // Strip "corpus/" prefix for source directory lookup (signal paths are corpus-prefixed)
-        let relative_path = signal.path.strip_prefix("corpus/").unwrap_or(&signal.path);
-
-        let resolved = match config.resolve_source_config(Path::new(relative_path)) {
+        let resolved = match config.resolve_source_config(Path::new(&signal.path)) {
             Some(r) => r,
             None => continue,
         };
@@ -196,7 +193,7 @@ pub fn execute_detect_release_overlaps(
         }
 
         let source_dir = resolved.source_path.to_string_lossy().to_string();
-        let release_dir = extract_release_directory(relative_path, &resolved.source_path);
+        let release_dir = extract_release_directory(&signal.path, &resolved.source_path);
 
         album_dir_files
             .entry(album_dir)

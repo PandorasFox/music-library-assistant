@@ -18,6 +18,7 @@ use crate::meta::signals::data::*;
 use crate::meta::signals::registry::TypedSignalWrite;
 use crate::meta::signals::store::CorpusSignalStore;
 
+use crate::db::types::Zone;
 use crate::zones::{CorpusZone, DeriveZoneSignals, InboxZone};
 
 use super::{Computation, Result};
@@ -26,10 +27,10 @@ use super::{Computation, Result};
 // Shared Helpers
 // ============================================================================
 
-/// Convert an absolute path to a root-relative string via the corpus resolver.
-fn to_relative_str(resolver: &paths::PathResolver, path: &Path) -> String {
+/// Convert an absolute path to a zone-relative string for DB storage.
+fn to_zone_relative_str(resolver: &paths::PathResolver, path: &Path, zone: Zone) -> String {
     resolver
-        .to_relative(path)
+        .to_zone_relative(path, zone)
         .unwrap_or_else(|| path.to_path_buf())
         .to_string_lossy()
         .to_string()
@@ -105,9 +106,9 @@ pub fn execute_schedule_second_level_derivations(
     let mut existing_dir_count = 0;
 
     for (indexed_dir, inode) in &indexed_dirs {
-        // Paths in DB are root-relative (e.g., "corpus/physical/cd/...")
-        // Use resolver.resolve() to get absolute path
-        let abs_path = resolver.resolve(indexed_dir);
+        // Paths in DB are zone-relative (e.g., "physical/cd/...")
+        // Use resolver.resolve_for_zone() to get absolute path
+        let abs_path = resolver.resolve_for_zone(Zone::Corpus, indexed_dir);
         let dir_str = indexed_dir.to_string_lossy().to_string();
 
         if abs_path.exists() && abs_path.is_dir() {
@@ -556,9 +557,9 @@ pub fn execute_update_corpus_file_signals(
 
     let sender = require_sender!(computation);
 
-    // Convert absolute path to relative for DB queries
+    // Convert absolute path to zone-relative for DB queries
     let resolver = paths::get_resolver();
-    let path_str = to_relative_str(resolver, path);
+    let path_str = to_zone_relative_str(resolver, path, Zone::Corpus);
 
     let file_exists = path.exists() && is_audio_file(path);
 
@@ -647,9 +648,9 @@ pub fn execute_update_library_file_signals(
 
     let sender = require_sender!(computation);
 
-    // Convert absolute path to relative for signal keys
+    // Convert absolute path to zone-relative for signal keys
     let resolver = paths::get_resolver();
-    let path_str = to_relative_str(resolver, path);
+    let path_str = to_zone_relative_str(resolver, path, Zone::Library);
 
     // For library files, we check if the file exists and clear any leftover/stale signals
     // The full library health is recomputed during the Analysis phase
@@ -779,10 +780,10 @@ pub fn execute_update_deploy_signals(
 
     let sender = require_sender!(computation);
 
-    // Convert absolute paths to relative for DB queries and signal keys
+    // Convert absolute paths to zone-relative for DB queries and signal keys
     let resolver = paths::get_resolver();
-    let library_path_str = to_relative_str(resolver, library_path);
-    let corpus_path_str = to_relative_str(resolver, corpus_path);
+    let library_path_str = to_zone_relative_str(resolver, library_path, Zone::Library);
+    let corpus_path_str = to_zone_relative_str(resolver, corpus_path, Zone::Corpus);
 
     log_general(format!(
         "[COMPUTE] UpdateDeploySignals: corpus={} library={}",

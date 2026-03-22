@@ -935,9 +935,8 @@ pub fn execute_analyze_fingerprint_overlaps(
                     .iter()
                     .map(|&idx| {
                         let path = cluster[idx].path();
-                        let relative = path.strip_prefix("corpus/").unwrap_or(path);
                         config
-                            .resolve_source_config(Path::new(relative))
+                            .resolve_source_config(Path::new(path))
                             .map(|r| r.source_path)
                     })
                     .collect();
@@ -1244,12 +1243,9 @@ pub fn execute_detect_cross_source_overlaps(
             // Cache inode->path for track pair construction
             inode_path_map.insert(inode, path.to_string());
 
-            // Strip "corpus/" prefix if present to get relative path
-            let relative_path = path.strip_prefix("corpus/").unwrap_or(path);
-
             // Look up source directory from config
             let source_key = config
-                .resolve_source_config(Path::new(relative_path))
+                .resolve_source_config(Path::new(path))
                 .map(|r| r.source_path.to_string_lossy().to_string())
                 .unwrap_or_else(|| "undeployed".to_string());
 

@@ -209,13 +209,15 @@ fn stash_directory_mutations(
     dir: &mm_meta::views::cluster_deploy::DirectoryGroupEntry,
     resolver: &PathResolver,
 ) -> Vec<Mutation> {
+    use mm_meta::db_types::Zone;
+
     if !dir.can_stash_dupes {
         return Vec::new();
     }
 
     let mut mutations = Vec::new();
     for (idx, corpus_path) in dir.paths.iter().enumerate() {
-        let abs_path = resolver.resolve(std::path::Path::new(corpus_path));
+        let abs_path = resolver.resolve_for_zone(Zone::Corpus, std::path::Path::new(corpus_path));
         mutations.push(Mutation::StashFromZone(StashFromZoneMutation {
             path: abs_path,
             stash_name: "overlaps".to_string(),

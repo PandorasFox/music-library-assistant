@@ -429,7 +429,7 @@ dir "web/releases/indie" {
     }
 
     #[test]
-    fn test_resolve_db_path_strips_prefix() {
+    fn test_resolve_db_path_zone_relative() {
         let config = config_with_dirs(vec![SourceDir {
             path: PathBuf::from("web"),
             libraries: vec!["music".into()],
@@ -440,8 +440,9 @@ dir "web/releases/indie" {
             pinned_release: None,
         }]);
 
+        // DB paths are now zone-relative (no "corpus/" prefix)
         let resolved = t!(config
-            .resolve_source_config_for_db_path("corpus/web/track.flac"));
+            .resolve_source_config_for_db_path("web/track.flac"));
         assert_eq!(resolved.source_path, PathBuf::from("web"));
         assert_eq!(resolved.libraries, vec!["music".to_string()]);
     }

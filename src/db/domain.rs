@@ -983,7 +983,7 @@ fn load_file_tag_values(
             results.push((inode, Vec::new()));
             continue;
         };
-        let abs_path = resolver.resolve(std::path::Path::new(rel_path));
+        let abs_path = resolver.resolve_for_zone(zone, std::path::Path::new(rel_path));
         let tags = match tags::from_file(&abs_path) {
             Ok(ts) => ts.into_vec(),
             Err(e) => {
@@ -1132,9 +1132,19 @@ mod tests {
     fn get_external_matches_empty_db() {
         let db = test_db();
         let read_db = ReadOnlyDb::new(&db);
-        let result = GetExternalMatches.execute(&read_db);
-        assert!(result.confidence_buckets.is_empty());
-        assert_eq!(result.packing_perfect_count, 0);
+        // GetExternalMatches is intercepted in dispatch_domain_query (needs config).
+        // Test via dispatch with no config → returns default empty data.
+        let result = dispatch_domain_query(
+            DomainQueryPayload::GetExternalMatches(GetExternalMatches),
+            &read_db,
+            None,
+        );
+        if let DomainQueryResult::GetExternalMatches(data) = result {
+            assert!(data.confidence_buckets.is_empty());
+            assert_eq!(data.packing_perfect_count, 0);
+        } else {
+            panic!("unexpected result variant");
+        }
     }
 
     #[test]
@@ -1399,7 +1409,12 @@ mod tests {
         t!(serde_json::to_string(&GetInboxOverview.execute(&read_db)));
         t!(serde_json::to_string(&GetDeployStatus.execute(&read_db)));
         t!(serde_json::to_string(&GetEditHistory.execute(&read_db)));
-        t!(serde_json::to_string(&GetExternalMatches.execute(&read_db)));
+        // GetExternalMatches is intercepted in dispatch — test via dispatch with no config.
+        if let DomainQueryResult::GetExternalMatches(data) = dispatch_domain_query(
+            DomainQueryPayload::GetExternalMatches(GetExternalMatches), &read_db, None,
+        ) {
+            t!(serde_json::to_string(&data));
+        }
         t!(serde_json::to_string(&GetPackingDirs.execute(&read_db)));
 
         // Detail queries

@@ -313,8 +313,10 @@ fn index_track_from_metadata(
 
     let sender = write_thread::require_sender()?;
 
-    // Convert absolute path to relative for storage
-    let relative_path = paths::resolve_relative(path)?;
+    // Convert absolute path to zone-relative for DB storage
+    let zone_enum = Zone::from_str(zone)
+        .ok_or_else(|| anyhow::anyhow!("Unknown zone: {}", zone))?;
+    let relative_path = paths::resolve_zone_relative(path, zone_enum)?;
     let rel_path_str = relative_path.to_string_lossy();
 
     // Get file metadata using portable API (consistent with comparison code)
@@ -390,8 +392,10 @@ pub fn execute_index_file_from_path(
     // This avoids the race condition where post-execution DB queries don't see
     // the write yet (fire-and-forget pattern).
     let mut pending_signals = Vec::new();
+    let zone_enum = Zone::from_str(zone)
+        .ok_or_else(|| anyhow::anyhow!("Unknown zone: {}", zone))?;
     let resolver = paths::get_resolver();
-    if let Some(rel) = resolver.to_relative(path) {
+    if let Some(rel) = resolver.to_zone_relative(path, zone_enum) {
         let rel_str = rel.to_string_lossy().to_string();
 
         // Note: fingerprint.is_none() does NOT mean corrupt. Fingerprinting
@@ -437,11 +441,14 @@ pub fn execute_update_file_path(
 
     let sender = write_thread::require_sender()?;
 
-    // Convert to relative for storage. The new_path may already be relative
-    // (e.g., from signal_moved_file table which stores relative paths like
-    // "corpus/web/misc/..."), so skip to_relative() if it's not absolute.
+    // Convert to zone-relative for DB storage. The new_path may already be
+    // zone-relative (from signal_moved_file table which now stores zone-relative
+    // paths), so skip conversion if it's not absolute.
     let relative_path = if new_path.is_absolute() {
-        paths::resolve_relative(new_path)?
+        let effective_zone = new_zone.unwrap_or(zone);
+        let zone_enum = Zone::from_str(effective_zone)
+            .ok_or_else(|| anyhow::anyhow!("Unknown zone: {}", effective_zone))?;
+        paths::resolve_zone_relative(new_path, zone_enum)?
     } else {
         new_path.to_path_buf()
     };
@@ -761,9 +768,9 @@ pub fn execute_apply_db_tags_to_disk(
 
     let sender = write_thread::require_sender()?;
 
-    // Convert abs_path to relative for DB operations.
+    // Convert abs_path to zone-relative for DB operations.
     // Use mutation's abs_path parameter, not file's path from DB (may be stale).
-    let relative_path = paths::resolve_relative(abs_path)?;
+    let relative_path = paths::resolve_zone_relative(abs_path, zone)?;
     let rel_path_str = relative_path.to_string_lossy();
 
     // Get DB tags from the zone-appropriate table and convert to TagSet
@@ -809,7 +816,7 @@ pub fn execute_flush_tags_to_disk(
 
     let sender = write_thread::require_sender()?;
 
-    let relative_path = paths::resolve_relative(abs_path)?;
+    let relative_path = paths::resolve_zone_relative(abs_path, zone)?;
     let rel_path_str = relative_path.to_string_lossy();
 
     // 2. Read committed tags from zone-appropriate table
@@ -859,13 +866,6 @@ pub fn execute_assimilate_disk_tags_to_db(
 
     let sender = write_thread::require_sender()?;
 
-    // Convert abs_path to relative for DB operations.
-    // IMPORTANT: We use the mutation's abs_path parameter, NOT file's path from DB.
-    // When spawned from Transcode, the DB read connection may not have seen the
-    // path update yet (async write via db_thread), causing stale reads.
-    let relative_path = paths::resolve_relative(abs_path)?;
-    let rel_path_str = relative_path.to_string_lossy();
-
     // Use in-band zone when available (chain-spawned from Transcode), otherwise
     // fall back to DB read (standalone OOB resolution where inode is stable).
     let zone: &str = match in_band_zone {
@@ -878,13 +878,20 @@ pub fn execute_assimilate_disk_tags_to_db(
         }
     };
 
+    // Determine zone enum for path resolution and tag table lookup
+    let zone_enum =
+        Zone::from_str(zone).ok_or_else(|| anyhow::anyhow!("Unknown zone: {}", zone))?;
+
+    // Convert abs_path to zone-relative for DB operations.
+    // IMPORTANT: We use the mutation's abs_path parameter, NOT file's path from DB.
+    // When spawned from Transcode, the DB read connection may not have seen the
+    // path update yet (async write via db_thread), causing stale reads.
+    let relative_path = paths::resolve_zone_relative(abs_path, zone_enum)?;
+    let rel_path_str = relative_path.to_string_lossy();
+
     // Read disk tags using TagSet
     let disk_tagset = tags::from_file(abs_path)
         .with_context(|| format!("Failed to read tags from {}", abs_path.display()))?;
-
-    // Determine tag table from zone
-    let zone_enum =
-        Zone::from_str(zone).ok_or_else(|| anyhow::anyhow!("Unknown zone: {}", zone))?;
     let tag_table = zone_enum
         .tag_table()
         .ok_or_else(|| anyhow::anyhow!("Zone {:?} has no tag table", zone_enum))?;

@@ -794,25 +794,25 @@ dir "web/releases/steam" {
 "#,
         ));
 
-        // Relative paths (as stored in DB) should match
+        // Zone-relative paths (as stored in DB) should match
         assert!(config.is_path_in_source(std::path::Path::new(
-            "corpus/web/releases/bandcamp/Artist/Album/track.flac"
+            "web/releases/bandcamp/Artist/Album/track.flac"
         )));
         assert!(config.is_path_in_source(std::path::Path::new(
-            "corpus/web/releases/steam/Game/Soundtrack/01.mp3"
+            "web/releases/steam/Game/Soundtrack/01.mp3"
         )));
 
         // Non-configured paths should not match
         assert!(!config.is_path_in_source(std::path::Path::new(
-            "corpus/web/releases/itunes/Artist/Album/track.flac"
+            "web/releases/itunes/Artist/Album/track.flac"
         )));
         assert!(!config.is_path_in_source(std::path::Path::new(
-            "corpus/physical/cd/Artist/Album/track.flac"
+            "physical/cd/Artist/Album/track.flac"
         )));
 
         // Exact prefix match (not substring)
         assert!(!config.is_path_in_source(std::path::Path::new(
-            "corpus/web/releases/bandcamp-extra/Artist/track.flac"
+            "web/releases/bandcamp-extra/Artist/track.flac"
         )));
     }
 

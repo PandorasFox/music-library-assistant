@@ -104,26 +104,27 @@ pub fn execute_verify_tags(
     // Check for pending_write marker (MM-initiated write)
     let has_pending_write = read_only_db.is_pending_write(inode).unwrap_or(false);
 
-    // Get relative path for signal keys
-    let resolver = crate::corpus::paths::get_resolver();
-    let rel_path = match resolver.to_relative(path) {
-        Some(rel) => rel,
-        None => {
-            return Result::failure(
-                computation,
-                format!("Path {} does not match any configured root", path.display()),
-            );
-        }
-    };
-    let rel_str = rel_path.to_string_lossy().to_string();
-
-    // Resolve zone for mtime update (needed in all branches)
+    // Resolve zone for mtime update and path conversion (needed in all branches)
     let zone_str = read_only_db
         .get_file_zone_and_path_by_inode(inode)
         .ok()
         .flatten()
         .map(|(z, _)| z)
         .unwrap_or_else(|| "corpus".to_string());
+    let zone_enum = Zone::from_str(&zone_str).unwrap_or(Zone::Corpus);
+
+    // Get zone-relative path for signal keys
+    let resolver = crate::corpus::paths::get_resolver();
+    let rel_path = match resolver.to_zone_relative(path, zone_enum) {
+        Some(rel) => rel,
+        None => {
+            return Result::failure(
+                computation,
+                format!("Path {} does not match zone {:?}", path.display(), zone_enum),
+            );
+        }
+    };
+    let rel_str = rel_path.to_string_lossy().to_string();
 
     match indexing::execute_verify_tags(read_only_db, inode, disk_tags.clone()) {
         Ok(verify_result) => {
@@ -354,14 +355,14 @@ pub fn execute_verify_audio(
         }
     };
 
-    // Get relative path for signal keys
+    // Get zone-relative path for signal keys (VerifyAudio only runs on corpus files)
     let resolver = crate::corpus::paths::get_resolver();
-    let rel_path = match resolver.to_relative(path) {
+    let rel_path = match resolver.to_zone_relative(path, Zone::Corpus) {
         Some(rel) => rel,
         None => {
             return Result::failure(
                 computation,
-                format!("Path {} does not match any configured root", path.display()),
+                format!("Path {} does not match corpus zone", path.display()),
             );
         }
     };

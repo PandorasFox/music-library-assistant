@@ -657,12 +657,9 @@ impl Config {
             .collect()
     }
 
-    /// Check if a file path is under a configured source directory.
+    /// Check if a zone-relative file path is under a configured source directory.
     pub fn is_path_in_source(&self, path: &Path) -> bool {
-        self.source_dirs.iter().any(|sd| {
-            let prefix = Path::new("corpus").join(&sd.path);
-            path.starts_with(&prefix)
-        })
+        self.source_dirs.iter().any(|sd| path.starts_with(&sd.path))
     }
 
     /// Resolve the full source config for a corpus-relative path, with inheritance.
@@ -717,13 +714,12 @@ impl Config {
         })
     }
 
-    /// Resolve source config for a DB path (with "corpus/" prefix).
+    /// Resolve source config for a DB path (zone-relative, no prefix).
     pub fn resolve_source_config_for_db_path(
         &self,
         db_path: &str,
     ) -> Option<ResolvedSourceConfig> {
-        let relative = db_path.strip_prefix("corpus/").unwrap_or(db_path);
-        self.resolve_source_config(Path::new(relative))
+        self.resolve_source_config(Path::new(db_path))
     }
 
     /// Get the raw SourceDir for an exact path match (for config editing).
@@ -750,8 +746,9 @@ impl Config {
         }
     }
 
-    /// Compute db-path prefixes for source dirs where AcoustID is disabled.
+    /// Compute DB-path prefixes for source dirs where AcoustID is disabled.
     ///
+    /// Returns zone-relative prefixes (no "corpus/" prefix).
     /// Returns empty vec when no dirs are excluded (the common case).
     /// Used by the fetch scheduler to build SQL `NOT LIKE` exclusion clauses.
     pub fn acoustid_excluded_db_prefixes(&self) -> Vec<String> {
@@ -761,14 +758,7 @@ impl Config {
                 let resolved = self.resolve_source_config(&sd.path);
                 resolved.is_some_and(|r| !r.enable_acoustid)
             })
-            .map(|sd| {
-                let p = sd.path.display().to_string();
-                if p.is_empty() {
-                    "corpus".to_string()
-                } else {
-                    format!("corpus/{}", p)
-                }
-            })
+            .map(|sd| sd.path.display().to_string())
             .collect()
     }
 }

@@ -72,6 +72,24 @@ pub fn resolve_relative(path: &std::path::Path) -> anyhow::Result<std::path::Pat
     })
 }
 
+/// Convert an absolute path to a zone-relative path for DB storage, returning
+/// an error if the path is not within the zone's directory.
+///
+/// This is a convenience wrapper around `get_resolver().to_zone_relative()`.
+pub fn resolve_zone_relative(
+    path: &std::path::Path,
+    zone: mm_meta::db_types::Zone,
+) -> anyhow::Result<std::path::PathBuf> {
+    let resolver = get_resolver();
+    resolver.to_zone_relative(path, zone).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Path {} does not match zone {:?}. Check config.kdl roots.",
+            path.display(),
+            zone,
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

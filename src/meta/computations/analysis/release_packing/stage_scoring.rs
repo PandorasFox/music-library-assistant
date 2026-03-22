@@ -404,7 +404,7 @@ pub fn execute_pack_releases(
     let mut pinned_dir_releases: HashMap<String, String> = HashMap::new();
     for sd in &config.source_dirs {
         if let Some(ref release_id) = sd.pinned_release {
-            let dir_path = format!("corpus/{}", sd.path.display());
+            let dir_path = sd.path.display().to_string();
             pinned_dir_releases.insert(dir_path, release_id.clone());
             all_release_ids.insert(release_id.clone());
         }
@@ -1168,7 +1168,7 @@ pub fn execute_score_release_candidates(
         .source_dirs
         .iter()
         .filter(|sd| sd.pinned_release.as_deref() == Some(release_id))
-        .map(|sd| format!("corpus/{}", sd.path.display()))
+        .map(|sd| sd.path.display().to_string())
         .collect();
 
     let (mut score_rows, assigned_inodes, target_dirs, optimal_pairs) =

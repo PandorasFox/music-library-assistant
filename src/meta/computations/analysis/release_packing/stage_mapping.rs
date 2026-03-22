@@ -161,7 +161,7 @@ pub fn execute_compute_release_mappings(
                 if let Some(ref release_id) = sd.pinned_release {
                     map.entry(release_id.clone())
                         .or_default()
-                        .push(format!("corpus/{}", sd.path.display()));
+                        .push(sd.path.display().to_string());
                 }
             }
             map

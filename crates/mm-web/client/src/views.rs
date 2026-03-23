@@ -1028,11 +1028,14 @@ pub fn render_config_editor(config: &serde_json::Value) -> Node {
 
     // Root-level fields.
     let mut root_items = Vec::new();
-    if let Some(root) = config.get("root").and_then(|v| v.as_str()) {
-        root_items.push(config_field_readonly("root", root));
+    if let Some(root) = config.get("storage_root").and_then(|v| v.as_str()) {
+        root_items.push(config_field_readonly("storage root", root));
     }
-    if let Some(legacy) = config.get("legacy_enabled") {
-        root_items.push(config_field_bool("legacy_enabled", legacy.as_bool().unwrap_or(false)));
+    if let Some(root) = config.get("libraries_root").and_then(|v| v.as_str()) {
+        root_items.push(config_field_readonly("libraries root", root));
+    }
+    if let Some(root) = config.get("stash_root").and_then(|v| v.as_str()) {
+        root_items.push(config_field_readonly("stash root", root));
     }
     sections.push(titled_section("General", root_items));
 

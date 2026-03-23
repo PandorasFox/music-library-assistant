@@ -253,6 +253,9 @@ pub fn generate_feat_suffix(
 /// Handles multi-value tags cleanly: for a given tag name, drops values present
 /// in current but absent from desired, adds values present in desired but absent
 /// from current, leaves shared values untouched.
+///
+/// When the value count is unchanged (same number of values being removed and
+/// added), pairs them as `replace_tag` ops instead of separate drop+add.
 fn compute_tag_diff(
     inode: i64,
     desired: &[(String, String)],
@@ -272,16 +275,28 @@ fn compute_tag_diff(
             .unwrap_or_default();
         let desired_set: HashSet<&str> = desired_values.iter().copied().collect();
 
-        // Drop values in current but not in desired
-        for val in &current_values {
-            if !desired_set.contains(val) {
+        let to_drop: Vec<&str> = current_values
+            .iter()
+            .filter(|v| !desired_set.contains(*v))
+            .copied()
+            .collect();
+        let to_add: Vec<&str> = desired_set
+            .iter()
+            .filter(|v| !current_values.contains(*v))
+            .copied()
+            .collect();
+
+        if to_drop.len() == to_add.len() {
+            // Same count changing: pair as replacements.
+            for (old, new) in to_drop.iter().zip(to_add.iter()) {
+                ops.push(TagOp::replace_tag(inode, tag_name, *old, *new));
+            }
+        } else {
+            // Count differs: explicit drops and adds.
+            for val in &to_drop {
                 ops.push(TagOp::drop_tag(inode, tag_name, *val));
             }
-        }
-
-        // Add values in desired but not in current
-        for val in &desired_set {
-            if !current_values.contains(val) {
+            for val in &to_add {
                 ops.push(TagOp::add_tag(inode, tag_name, *val));
             }
         }

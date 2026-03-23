@@ -1881,12 +1881,19 @@ async fn do_approve_releases(release_ids_json: &str) -> Result<(), JsValue> {
 
     for ad in decisions {
         let key = mm_ui::decision_keys::mb_release_approval(ad.release_id);
+        let mutations: Vec<Mutation> = ad
+            .per_inode_ops
+            .into_iter()
+            .map(|ops| {
+                Mutation::ApplyTagOps(ApplyTagOpsMutation {
+                    ops,
+                    zone: mm_meta::db_types::Zone::Corpus,
+                })
+            })
+            .collect();
         let decision = Decision {
             label: ad.label,
-            mutations: vec![Mutation::ApplyTagOps(ApplyTagOpsMutation {
-                ops: ad.ops,
-                zone: mm_meta::db_types::Zone::Corpus,
-            })],
+            mutations,
         };
         api::tx_add(&key, &decision).await?;
     }

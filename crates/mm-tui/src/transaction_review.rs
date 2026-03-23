@@ -286,11 +286,12 @@ fn decision_details_to_summaries(
     details
         .into_iter()
         .map(|d| {
-            let diff_entries = d
-                .mutations
-                .iter()
-                .flat_map(|m| m.diff_entries())
-                .collect();
+            let diff_entries = mm_meta::mutations::coalesce_diff_entries(
+                d.mutations
+                    .iter()
+                    .flat_map(|m| m.diff_entries())
+                    .collect(),
+            );
 
             DecisionSummary {
                 key: d.key,

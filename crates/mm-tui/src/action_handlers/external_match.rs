@@ -582,10 +582,17 @@ impl App {
         let approved = decisions.len();
         for ad in decisions {
             let key = mm_ui::decision_keys::mb_release_approval(ad.release_id);
-            let decision = gesture.decide(&ad.label, vec![Mutation::ApplyTagOps(ApplyTagOpsMutation {
-                ops: ad.ops,
-                zone: mm_meta::db_types::Zone::Corpus,
-            })]);
+            let mutations: Vec<Mutation> = ad
+                .per_inode_ops
+                .into_iter()
+                .map(|ops| {
+                    Mutation::ApplyTagOps(ApplyTagOpsMutation {
+                        ops,
+                        zone: mm_meta::db_types::Zone::Corpus,
+                    })
+                })
+                .collect();
+            let decision = gesture.decide(&ad.label, mutations);
             let _ = crate::operator_decisions::stage_decision(
                 self,
                 key,

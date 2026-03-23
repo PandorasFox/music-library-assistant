@@ -957,7 +957,9 @@ pub fn render_transaction_review(
         let key_json = serde_json::to_string(&d.key).unwrap_or_default();
         let escaped_key = key_json.replace('\'', "\\'");
 
-        let diff_entries: Vec<_> = d.mutations.iter().flat_map(|m| m.diff_entries()).collect();
+        let diff_entries = mm_meta::mutations::coalesce_diff_entries(
+            d.mutations.iter().flat_map(|m| m.diff_entries()).collect(),
+        );
 
         let mut decision_items = vec![
             div()

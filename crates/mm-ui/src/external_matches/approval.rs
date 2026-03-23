@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use mm_meta::config::CreditRoutingConfig;
 use mm_meta::external::musicbrainz::MbCacheBundle;
 use mm_meta::external::tag_generation::{generate_tag_ops, MbTagInput};
+use mm_meta::mutations::TagOp;
 use mm_meta::views::external_matches::{ApprovalDecision, ReleaseApprovalInput};
 
 /// Build approval decisions from selected releases + staging data.
@@ -37,7 +38,7 @@ pub fn build_release_approval_decisions(
         };
         let total_media = release.media.len() as u32;
 
-        let mut ops = Vec::new();
+        let mut per_inode_ops: Vec<Vec<TagOp>> = Vec::new();
         for t in &rd.tracks {
             let Some(recording) = bundle.recordings.get(&t.recording_id) else {
                 skipped += 1;
@@ -53,17 +54,20 @@ pub fn build_release_approval_decisions(
                 total_media,
                 current_tags: inode_tags.get(&t.inode).cloned().unwrap_or_default(),
             };
-            ops.extend(generate_tag_ops(
+            let inode_ops = generate_tag_ops(
                 &input,
                 recording,
                 release,
                 &bundle.artists,
                 locales,
                 routing,
-            ));
+            );
+            if !inode_ops.is_empty() {
+                per_inode_ops.push(inode_ops);
+            }
         }
 
-        if ops.is_empty() {
+        if per_inode_ops.is_empty() {
             continue;
         }
 
@@ -74,7 +78,7 @@ pub fn build_release_approval_decisions(
         decisions.push(ApprovalDecision {
             release_id: rd.release_id.clone(),
             label,
-            ops,
+            per_inode_ops,
         });
     }
 

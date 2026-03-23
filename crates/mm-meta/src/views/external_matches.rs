@@ -194,10 +194,11 @@ pub struct ApprovalTrackInput {
 /// A computed approval decision ready for staging.
 ///
 /// Produced by the shared approval builder, consumed by
-/// client-specific staging code.
+/// client-specific staging code. Each inner Vec is the ops for one inode,
+/// mapped 1:1 to an `ApplyTagOpsMutation`.
 #[derive(Debug, Clone)]
 pub struct ApprovalDecision {
     pub release_id: String,
     pub label: String,
-    pub ops: Vec<crate::mutations::TagOp>,
+    pub per_inode_ops: Vec<Vec<crate::mutations::TagOp>>,
 }

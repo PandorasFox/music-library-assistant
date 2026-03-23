@@ -119,6 +119,55 @@ impl DiffEntry {
             new_value: new_value.to_string(),
         }
     }
+
+    /// Parse the `[inode] TAG` label format, returning `(inode_str, tag_name)`.
+    fn parse_inode_label(&self) -> Option<(&str, &str)> {
+        let rest = self.label.strip_prefix('[')?;
+        let bracket = rest.find(']')?;
+        let inodes = &rest[..bracket];
+        let tag = rest[bracket + 1..].trim_start();
+        if tag.is_empty() { return None; }
+        Some((inodes, tag))
+    }
+}
+
+/// Coalesce diff entries for display: group entries with the same
+/// `(tag_name, new_value)` across inodes into a single line with
+/// merged inode lists. Preserves first-seen order. Entries without
+/// `[inode] TAG` label format pass through unchanged.
+pub fn coalesce_diff_entries(entries: Vec<DiffEntry>) -> Vec<DiffEntry> {
+    use std::collections::HashMap;
+
+    let mut result: Vec<DiffEntry> = Vec::with_capacity(entries.len());
+    // key: (tag_name, new_value) → index into result
+    let mut seen: HashMap<(String, String), usize> = HashMap::new();
+
+    for entry in entries {
+        let parsed = entry.parse_inode_label()
+            .map(|(inodes, tag)| (inodes.to_string(), tag.to_string()));
+
+        if let Some((inodes, tag_name)) = parsed {
+            let key = (tag_name.clone(), entry.new_value.clone());
+            if let Some(&idx) = seen.get(&key) {
+                // Merge: append inodes to existing label.
+                let existing = &mut result[idx];
+                let bracket_end = existing.label.find(']').unwrap();
+                existing.label.insert_str(bracket_end, &format!(", {}", inodes));
+                // If old values differ, show the varying one as empty
+                // (the new value is what matters for the grouped view).
+                if existing.old_value != entry.old_value {
+                    existing.old_value = "\u{2026}".to_string(); // ellipsis
+                }
+            } else {
+                seen.insert(key, result.len());
+                result.push(entry);
+            }
+        } else {
+            result.push(entry);
+        }
+    }
+
+    result
 }
 
 /// Extract filename from a path for use as a diff label.

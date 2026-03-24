@@ -15,7 +15,7 @@ path = "src/lib.rs"
 mm-meta = { path = "../mm-meta" }
 mm-ui = { path = "../mm-ui" }
 
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "signal", "fs"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"

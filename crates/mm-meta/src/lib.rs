@@ -35,3 +35,4 @@ pub mod views;
 pub mod witch_types;
 pub mod protocol;
 pub mod wire;
+pub mod client;

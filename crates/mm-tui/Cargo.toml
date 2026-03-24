@@ -28,6 +28,9 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 # Signal handling
 signal-hook = "0.3"
 
+# Async RPC bridge (UI thread ↔ background socket client)
+tokio = { version = "1", features = ["sync", "rt", "net"] }
+
 # Error handling
 anyhow = "1.0"
 

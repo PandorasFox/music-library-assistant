@@ -17,6 +17,7 @@ pub(crate) mod action_handlers;
 pub(crate) mod active_view;
 pub(crate) mod input;
 pub(crate) mod packing_colors;
+mod rpc;
 mod suspended_views;
 mod tag_editor_ops;
 mod tick;
@@ -105,11 +106,10 @@ pub(crate) struct App {
     /// The active view and its state. One variant is active at a time.
     pub(crate) view: ActiveView,
 
-    // Socket connection to the Witch server + protocol state.
-    socket: std::os::unix::net::UnixStream,
+    // RPC bridge to the Witch server (async socket on background thread).
+    rpc: rpc::RpcHandle,
     session_token: Option<mm_meta::auth::SessionToken>,
     cached_config: Option<Arc<Config>>,
-    next_request_id: u64,
 
     /// Client-side path resolver for root-relative ↔ absolute path conversion.
     /// Constructed from config after login.
@@ -152,28 +152,24 @@ pub(crate) struct App {
 }
 
 impl App {
-    /// Create a new App with a socket connection and session token.
+    /// Create a new App with an RPC handle and session token.
     fn new(
-        mut socket: std::os::unix::net::UnixStream,
+        rpc: rpc::RpcHandle,
         session_token: mm_meta::auth::SessionToken,
         art_picker: widgets::AlbumArtPicker,
     ) -> Self {
-        // Pre-fetch status and config before constructing App (avoids placeholder issues).
+        // Pre-fetch status and config via the RPC handle (avoids placeholder issues).
         let token = session_token.clone();
-        let mut next_id = 1u64;
 
         let cached_status: WitchStatus = {
             let req = mm_meta::wire::WireRequest::Authenticated {
-                request_id: next_id,
+                request_id: 0,
                 token: token.clone(),
                 body: Box::new(mm_meta::protocol::AuthenticatedBody::Query(
                     mm_meta::protocol::QueryPayload::Status,
                 )),
             };
-            next_id += 1;
-            mm_meta::wire::write_frame(&mut socket, &req).expect("status query write");
-            let resp: mm_meta::wire::WireResponse =
-                mm_meta::wire::read_frame(&mut socket).expect("status query read");
+            let resp = rpc.send_blocking(req).expect("initial status query");
             match resp {
                 mm_meta::wire::WireResponse::Authenticated { result, .. } => match *result {
                     Ok(mm_meta::protocol::AuthenticatedResponse::Query(qr)) => match *qr {
@@ -188,16 +184,13 @@ impl App {
 
         let config: Config = {
             let req = mm_meta::wire::WireRequest::Authenticated {
-                request_id: next_id,
+                request_id: 0,
                 token: token.clone(),
                 body: Box::new(mm_meta::protocol::AuthenticatedBody::Query(
                     mm_meta::protocol::QueryPayload::Config,
                 )),
             };
-            next_id += 1;
-            mm_meta::wire::write_frame(&mut socket, &req).expect("config query write");
-            let resp: mm_meta::wire::WireResponse =
-                mm_meta::wire::read_frame(&mut socket).expect("config query read");
+            let resp = rpc.send_blocking(req).expect("initial config query");
             match resp {
                 mm_meta::wire::WireResponse::Authenticated { result, .. } => match *result {
                     Ok(mm_meta::protocol::AuthenticatedResponse::Query(qr)) => match *qr {
@@ -220,10 +213,9 @@ impl App {
             view: ActiveView::Insights(insights_view::InsightsViewState::new(
                 insights_view::InsightsViewData::new(),
             )),
-            socket,
+            rpc,
             session_token: Some(session_token),
             cached_config,
-            next_request_id: next_id,
             resolver,
             view_stack: Vec::new(),
             last_lateral_view: widgets::LateralView::Health,
@@ -821,15 +813,12 @@ impl App {
         &mut self,
         body: mm_meta::protocol::UnauthenticatedBody,
     ) -> Result<mm_meta::protocol::UnauthenticatedResponse, mm_meta::protocol::ProtocolError> {
-        let id = self.next_id();
         let req = mm_meta::wire::WireRequest::Unauthenticated {
-            request_id: id,
+            request_id: 0,
             body,
         };
-        mm_meta::wire::write_frame(&mut self.socket, &req)
-            .map_err(|e| mm_meta::protocol::ProtocolError::Internal(format!("socket write: {e}")))?;
-        let resp: mm_meta::wire::WireResponse = mm_meta::wire::read_frame(&mut self.socket)
-            .map_err(|e| mm_meta::protocol::ProtocolError::Internal(format!("socket read: {e}")))?;
+        let resp = self.rpc.send_blocking(req)
+            .map_err(|e| mm_meta::protocol::ProtocolError::Internal(e.to_string()))?;
         match resp {
             mm_meta::wire::WireResponse::Unauthenticated { result, .. } => result,
             _ => Err(mm_meta::protocol::ProtocolError::Internal(
@@ -891,12 +880,6 @@ impl App {
 // ============================================================================
 
 impl App {
-    fn next_id(&mut self) -> u64 {
-        let id = self.next_request_id;
-        self.next_request_id += 1;
-        id
-    }
-
     fn send_authenticated(
         &mut self,
         body: mm_meta::protocol::AuthenticatedBody,
@@ -905,16 +888,13 @@ impl App {
             .session_token
             .clone()
             .expect("send_authenticated called before login");
-        let id = self.next_id();
         let req = mm_meta::wire::WireRequest::Authenticated {
-            request_id: id,
+            request_id: 0,
             token,
             body: Box::new(body),
         };
-        mm_meta::wire::write_frame(&mut self.socket, &req)
-            .map_err(|e| mm_meta::protocol::ProtocolError::Internal(format!("socket write: {e}")))?;
-        let resp: mm_meta::wire::WireResponse = mm_meta::wire::read_frame(&mut self.socket)
-            .map_err(|e| mm_meta::protocol::ProtocolError::Internal(format!("socket read: {e}")))?;
+        let resp = self.rpc.send_blocking(req)
+            .map_err(|e| mm_meta::protocol::ProtocolError::Internal(e.to_string()))?;
         let result = match resp {
             mm_meta::wire::WireResponse::Authenticated { result, .. } => *result,
             _ => Err(mm_meta::protocol::ProtocolError::Internal(
@@ -1216,8 +1196,11 @@ pub fn run_tui(
     // Init the image picker (env-based detection, no stdin probing).
     let art_picker = widgets::AlbumArtPicker::init();
 
+    // Hand socket to the async RPC thread (ownership transfer).
+    let rpc = rpc::start_rpc_thread(socket);
+
     // Config + DB now guaranteed. App fetches config via protocol.
-    let mut app = App::new(socket, session_token, art_picker);
+    let mut app = App::new(rpc, session_token, art_picker);
 
     // Check if the Witch is already Ready (no startup maintenance needed)
     // or if she's running maintenance (Reconciling/Vacuuming)

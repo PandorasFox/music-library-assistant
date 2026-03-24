@@ -1215,6 +1215,7 @@ mod tests {
 
     fn make_track(title: &str, rec_title: &str, position: u32, length: Option<i64>) -> musicbrainz::MbTrack {
         musicbrainz::MbTrack {
+            id: String::new(),
             position,
             number: position.to_string(),
             title: title.to_string(),

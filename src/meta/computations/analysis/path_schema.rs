@@ -48,6 +48,17 @@ pub fn execute_detect_path_tag_mismatches(
         return Result::success(computation, Vec::new());
     }
 
+    // Skip MB-tagged files (externally authoritative tags)
+    let mb_tagged_inodes = {
+        let mb = &config.opinions.external_matching.mb_tag_names;
+        let inodes: std::collections::HashSet<i64> = read_only_db
+            .get_mb_tagged_inodes(&mb.track, &mb.release)
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        inodes
+    };
+
     // Load all corpus audio files with their tags.
     let files_with_tags = match read_only_db.get_all_audio_files_with_tags(Zone::Corpus, false) {
         Ok(f) => f,
@@ -70,6 +81,9 @@ pub fn execute_detect_path_tag_mismatches(
     let mut value_mismatches = 0;
 
     for (audio_file, tag_map) in &files_with_tags {
+        if mb_tagged_inodes.contains(&audio_file.inode()) {
+            continue;
+        }
         let corpus_path = audio_file.path();
         let relative_path = Path::new(corpus_path);
 

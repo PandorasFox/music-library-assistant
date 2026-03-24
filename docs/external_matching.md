@@ -51,6 +51,20 @@ Currently "Dismiss" in the review modal skips the entry for the current session 
 - Integration with `DeriveExternalMatches` to filter out ignored matches before signal emission
 - UI affordance to view/clear ignored matches
 
+## MusicBrainz Tag Names
+
+MM writes three MusicBrainz entity IDs as Vorbis Comment tags when a match is approved:
+
+| Tag (default) | MB Entity | Written When |
+|--------------|-----------|-------------|
+| `MUSICBRAINZ_RECORDING` | Recording MBID | Always (identifies the abstract audio work) |
+| `MUSICBRAINZ_RELEASE` | Release MBID | Always (identifies the album/single/EP) |
+| `MUSICBRAINZ_TRACK` | Track MBID | When available in MB data (identifies the track's slot on a release) |
+
+Tag names are configurable via `mb-tag-names` in the `external-matching` config block. See `docs/CONFIGURATION.md` for the full reference and Picard-compatible presets.
+
+**Health check elision**: Files with both `track` and `release` MB tags present are considered "fully MusicBrainz-tagged" and are automatically excluded from tag-based health checks (missing tags, canonicity, compound tags, inconsistent album artist, disc extraction, path-tag mismatches). A `MusicBrainzTagged` signal is emitted for these files, providing a count of externally-authoritative vs locally-comprehended corpus files.
+
 ### Stage 4 (future): Multi-Source, Release Bin-Packing & Discogs
 
 - Extend to MusicBrainz (tier-2 lookups from recording IDs → release metadata) and Discogs

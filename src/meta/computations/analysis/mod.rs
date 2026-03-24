@@ -161,6 +161,12 @@ pub enum Computation {
     /// DeployedHealthy (correctly deployed). Runs after DeriveDeployHealthSignals.
     DeriveCorpusDeployStatus,
 
+    /// Detect files with fully-applied MusicBrainz release tags.
+    ///
+    /// Checks for presence of both configured track + release MB tags.
+    /// Emits MusicBrainzTagged per-file signals; clears when tags removed.
+    DetectMusicBrainzTagged,
+
     /// Detect disc values extractable from ALBUM or TRACKNUMBER tags.
     ///
     /// Pass 1: Scans ALBUM tags for patterns like "Album Name, Disc 2".
@@ -303,6 +309,7 @@ impl Computation {
             Computation::DetectReleaseOverlaps => "Detecting release overlaps",
             Computation::DeriveDeployHealthSignals { .. } => "Deriving deploy health",
             Computation::DeriveCorpusDeployStatus => "Deriving corpus deploy status",
+            Computation::DetectMusicBrainzTagged => "Detecting MusicBrainz-tagged files",
             Computation::DetectDiscExtractions => "Detecting disc extractions",
             Computation::DetectPathTagMismatches => "Detecting path-tag mismatches",
             Computation::PackReleases => "Packing releases",
@@ -378,6 +385,9 @@ impl Computation {
             ),
             Computation::DeriveCorpusDeployStatus => {
                 execute_derive_corpus_deploy_status(ctx)
+            }
+            Computation::DetectMusicBrainzTagged => {
+                execute_detect_musicbrainz_tagged(ctx)
             }
             Computation::DetectDiscExtractions => {
                 execute_detect_disc_extractions(ctx)

@@ -7,7 +7,7 @@
 pub use mm_meta::config::{
     read_shared_config, AlbumArtOpinions, CanonicalizationOpinions, Config, CreditRoutingConfig,
     DiscExtractionOpinions, DuplicateAnalysisOpinions, ExternalMatchingConfig,
-    HealthDetectionOpinions, Opinions, PackingWeights, PerformanceOpinions,
+    HealthDetectionOpinions, MbTagNameConfig, Opinions, PackingWeights, PerformanceOpinions,
     QualityResolutionOpinions, RelationRouting, ReleasePackingOpinions, SharedConfig,
     SidecarDeployMode, SourceDir, StartupOpinions, StartupView, TagSplittingOpinions,
 };

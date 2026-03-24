@@ -589,11 +589,11 @@ struct TrackReleaseIdentity {
     title: String,
     isrc: String,
     catalog_number: String,
-    /// MUSICBRAINZ_TRACKID (recording MBID)
+    /// Recording MBID (tag name from MbTagNameConfig::recording)
     mb_recording_id: String,
-    /// MUSICBRAINZ_ALBUMID (release MBID)
+    /// Release MBID (tag name from MbTagNameConfig::release)
     mb_release_id: String,
-    /// MUSICBRAINZ_RELEASETRACKID (release-track MBID)
+    /// Track-on-release MBID (tag name from MbTagNameConfig::track)
     mb_track_id: String,
 }
 
@@ -749,6 +749,7 @@ pub fn execute_analyze_fingerprint_overlaps(
         .fingerprint_similarity_threshold;
     let duration_tolerance_ms = config.opinions.duplicate_analysis.duration_tolerance_ms;
     let elide_variant_titles = config.opinions.duplicate_analysis.elide_variant_titles;
+    let mb_tag_names = &config.opinions.external_matching.mb_tag_names;
 
     // Get all FingerprintOverlap signals
     let fp_dup_signals = read_only_db
@@ -850,9 +851,9 @@ pub fn execute_analyze_fingerprint_overlaps(
                     catalog_number: find_tag_in_map(&tag_map, "catalognumber")
                         .map(|s| s.to_string())
                         .unwrap_or_default(),
-                    mb_recording_id: tag_map.get("MUSICBRAINZ_TRACKID").cloned().unwrap_or_default(),
-                    mb_release_id: tag_map.get("MUSICBRAINZ_ALBUMID").cloned().unwrap_or_default(),
-                    mb_track_id: tag_map.get("MUSICBRAINZ_RELEASETRACKID").cloned().unwrap_or_default(),
+                    mb_recording_id: tag_map.get(&mb_tag_names.recording).cloned().unwrap_or_default(),
+                    mb_release_id: tag_map.get(&mb_tag_names.release).cloned().unwrap_or_default(),
+                    mb_track_id: tag_map.get(&mb_tag_names.track).cloned().unwrap_or_default(),
                 });
             }
 

@@ -168,6 +168,7 @@ mod tests {
 
     fn make_track(title: &str, position: u32, length: Option<i64>) -> musicbrainz::MbTrack {
         musicbrainz::MbTrack {
+            id: String::new(),
             position,
             number: position.to_string(),
             title: title.to_string(),
@@ -346,6 +347,7 @@ mod tests {
 
         // Track title differs, but recording title matches
         let track = musicbrainz::MbTrack {
+            id: String::new(),
             position: 1,
             number: "1".to_string(),
             title: "Different Track Title".to_string(),

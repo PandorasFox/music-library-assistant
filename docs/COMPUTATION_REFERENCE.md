@@ -71,7 +71,8 @@ This follows the same pattern as `pending_mutation_phases` (used for two-stage d
 | ScheduleContentAnalysis | Orchestrator: spawns all detection computations |
 | DetectFingerprintOverlaps | Find tracks with identical fingerprints |
 | DetectDuplicateInodes | Find tracks sharing same inode |
-| DetectMissingTags | Find tracks missing required tags. Routes ALBUM-only-missing (with ARTIST+TITLE) to MissingAlbumSingleSignal; checks ExpectedMissingTag for suppression |
+| DetectMusicBrainzTagged | Detect files with fully-applied MusicBrainz release tags (both configured track + release tags present). Emits MusicBrainzTagged per-file signals. Reconcile-based: clears when tags removed |
+| DetectMissingTags | Find tracks missing required tags. Routes ALBUM-only-missing (with ARTIST+TITLE) to MissingAlbumSingleSignal; checks ExpectedMissingTag for suppression. Skips MusicBrainz-tagged files |
 | DetectMetadataDuplicates | Find tracks with identical tag sets |
 | DetectTagCanonicalizations | Find tag canonicalization opportunities |
 | DetectInconsistentAlbumArtist | Find inconsistent album_artist across albums. Skips groups where any track has `COMPILATION=0` |
@@ -129,9 +130,10 @@ This follows the same pattern as `pending_mutation_phases` (used for two-stage d
 | Computation | Spawns | Signals Emitted | Signals Cleared |
 |-------------|--------|-----------------|-----------------|
 | ScheduleContentAnalysis | All detection computations (except fingerprint-dependent: AnalyzeFingerprintOverlaps and DetectCrossSourceOverlaps are deferred phases of DetectFingerprintOverlaps) | — | — |
+| DetectMusicBrainzTagged | — | MusicBrainzTagged | MusicBrainzTagged (via hash-based corpus reconciliation). Queries corpus_tags for inodes with both configured MB track + release tags present. Tag-based health computations (DetectMissingTags, DetectTagCanonicalizations, DetectCompoundTagValues, DetectInconsistentAlbumArtist, DetectDiscExtractions, DetectPathTagMismatches) load this inode set and skip MB-tagged files |
 | DetectFingerprintOverlaps | Defers AnalyzeFingerprintOverlaps + DetectCrossSourceOverlaps (DependentAnalysis pipeline barrier) | FingerprintOverlap | FingerprintOverlap (stale) |
 | DetectDuplicateInodes | — | DuplicateInode | DuplicateInode (stale) |
-| DetectMissingTags | — | MissingTag, MissingAlbumSingleSignal | MissingTag (via hash-based reconciliation), MissingAlbumSingleSignal (via hash-based reconciliation). Files with ALBUM missing but ARTIST+TITLE present are routed to MissingAlbumSingleSignal (keyed by lowercased artist) instead of MissingTag. Checks ExpectedMissingTag to suppress known-acceptable missing-album inodes |
+| DetectMissingTags | — | MissingTag, MissingAlbumSingleSignal | MissingTag (via hash-based reconciliation), MissingAlbumSingleSignal (via hash-based reconciliation). Files with ALBUM missing but ARTIST+TITLE present are routed to MissingAlbumSingleSignal (keyed by lowercased artist) instead of MissingTag. Checks ExpectedMissingTag to suppress known-acceptable missing-album inodes. Skips MusicBrainz-tagged files |
 | DetectMetadataDuplicates | — | MetadataDuplicate | MetadataDuplicate (via hash-based reconciliation) |
 | DetectTagCanonicalizations | — | TagCanonicity | TagCanonicity (via hash-based reconciliation). Loads `strip_album_format_suffixes` from config for album collision detection. Skips collision groups where any variant has a CanonicalTag signal |
 | DetectCompoundTagValues | DetectCompoundTagsForInode (per inode) | — | CompoundTag (all, before spawning) |

@@ -19,7 +19,10 @@ impl Database {
     /// Only considers corpus files.
     /// Returns Vec of (album_value, artist_context, isrc, catalog_number).
     ///
-    pub fn get_album_data_for_collision_detection(&self) -> Result<Vec<AlbumCollisionRow>> {
+    pub fn get_album_data_for_collision_detection(
+        &self,
+        mb_release_tag_name: &str,
+    ) -> Result<Vec<AlbumCollisionRow>> {
         use mm_utils::tag_names::compound_tag_sql_in;
 
         let album_artist_in = compound_tag_sql_in("ALBUM", "ARTIST");
@@ -56,7 +59,7 @@ impl Database {
                    AND UPPER(date.tag_name) = 'DATE'
                LEFT JOIN corpus_tags mb_release
                    ON album.inode = mb_release.inode
-                   AND UPPER(mb_release.tag_name) = 'MUSICBRAINZ_ALBUMID'
+                   AND UPPER(mb_release.tag_name) = UPPER(?1)
                WHERE UPPER(album.tag_name) = 'ALBUM'
                    AND album.tag_value IS NOT NULL
                    AND album.tag_value != ''"#
@@ -64,7 +67,7 @@ impl Database {
 
         let mut stmt = self.conn.prepare(&sql)?;
 
-        let rows = stmt.query_map(params![], |row| {
+        let rows = stmt.query_map(params![mb_release_tag_name], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -81,6 +84,35 @@ impl Database {
             result.push(row?);
         }
         Ok(result)
+    }
+
+    /// Get corpus inodes that have BOTH configured MB track + release tags present.
+    ///
+    /// A file is considered "fully MB-tagged" only when both tags are present,
+    /// indicating it has been matched to a specific MusicBrainz release.
+    pub fn get_mb_tagged_inodes(
+        &self,
+        mb_track_tag_name: &str,
+        mb_release_tag_name: &str,
+    ) -> Result<Vec<i64>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT ct_track.inode
+               FROM corpus_tags ct_track
+               INNER JOIN files f ON ct_track.inode = f.inode AND f.zone = 'corpus'
+               INNER JOIN corpus_tags ct_release
+                   ON ct_track.inode = ct_release.inode
+                   AND UPPER(ct_release.tag_name) = UPPER(?2)
+                   AND ct_release.tag_value IS NOT NULL
+                   AND ct_release.tag_value != ''
+               WHERE UPPER(ct_track.tag_name) = UPPER(?1)
+                   AND ct_track.tag_value IS NOT NULL
+                   AND ct_track.tag_value != ''"#,
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![mb_track_tag_name, mb_release_tag_name],
+            |row| row.get(0),
+        )?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
     }
 
     // ========================================================================

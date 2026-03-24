@@ -374,6 +374,23 @@ pub fn apply_config_edits_to_kdl(
         }
     }
 
+    // --- MB Tag Names ---
+    let old_tn = &old_config.opinions.external_matching.mb_tag_names;
+    let new_tn = &new_config.opinions.external_matching.mb_tag_names;
+    if new_tn != old_tn {
+        let em_block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_EXTERNAL_MATCHING);
+        let tn_block = ensure_child_block(em_block, MbTagNameConfig::KDL_MB_TAG_NAMES);
+        if new_tn.recording != old_tn.recording {
+            set_or_create_string_node(tn_block, MbTagNameConfig::KDL_RECORDING, &new_tn.recording);
+        }
+        if new_tn.release != old_tn.release {
+            set_or_create_string_node(tn_block, MbTagNameConfig::KDL_RELEASE, &new_tn.release);
+        }
+        if new_tn.track != old_tn.track {
+            set_or_create_string_node(tn_block, MbTagNameConfig::KDL_TRACK, &new_tn.track);
+        }
+    }
+
     // --- Disc Extraction ---
     let old_de = &old_config.opinions.disc_extraction;
     let new_de = &new_config.opinions.disc_extraction;

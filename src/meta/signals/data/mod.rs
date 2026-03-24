@@ -171,6 +171,15 @@ pub struct ExpectedMissingTagSignal {
     pub inode: i64,
 }
 
+/// File has been fully matched to a MusicBrainz release (has both release + track tags).
+///
+/// Files with this signal are elided from tag-based health checks (missing tags,
+/// canonicity, compound tags, etc.) because their tags are externally authoritative.
+#[derive(Debug, Clone)]
+pub struct MusicBrainzTaggedSignal {
+    pub inode: i64,
+}
+
 // --- Signals with extra flat columns ---
 
 /// File in index but no longer exists in corpus.
@@ -416,6 +425,7 @@ impl_content_hash!(MissingFileSignal => [path, replaced_by_inode]);
 impl_content_hash!(MovedFileSignal => [path, old_path, old_zone, new_zone]);
 impl_content_hash!(LosslessRemuxSignal => [path, file_type]);
 impl_content_hash!(ExpectedMissingTagSignal => []);
+impl_content_hash!(MusicBrainzTaggedSignal => []);
 
 // Corpus signals — blob
 impl_content_hash!(OutOfBandTagSyncSignal => blob(mismatches));

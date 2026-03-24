@@ -410,6 +410,9 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
                 ExternalMatchingConfig::KDL_CREDIT_ROUTING => {
                     parse_credit_routing(child, &mut opinions.credit_routing);
                 }
+                MbTagNameConfig::KDL_MB_TAG_NAMES => {
+                    parse_mb_tag_names(child, &mut opinions.mb_tag_names);
+                }
                 _ => {}
             }
         }
@@ -466,6 +469,34 @@ fn parse_credit_routing(node: &kdl::KdlNode, config: &mut CreditRoutingConfig) {
                 composer: get_bool("composer"),
             };
             config.routing.insert(name.to_string(), routing);
+        }
+    }
+}
+
+/// Parse mb-tag-names block: configurable Vorbis Comment names for MB entity IDs.
+///
+/// ```kdl
+/// mb-tag-names {
+///     recording "MUSICBRAINZ_RECORDING"
+///     release "MUSICBRAINZ_RELEASE"
+///     track "MUSICBRAINZ_TRACK"
+/// }
+/// ```
+fn parse_mb_tag_names(node: &kdl::KdlNode, config: &mut MbTagNameConfig) {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            let val = child
+                .entries()
+                .first()
+                .and_then(|e| e.value().as_string())
+                .map(|s| s.to_uppercase());
+            let Some(val) = val else { continue };
+            match child.name().value() {
+                MbTagNameConfig::KDL_RECORDING => config.recording = val,
+                MbTagNameConfig::KDL_RELEASE => config.release = val,
+                MbTagNameConfig::KDL_TRACK => config.track = val,
+                _ => {}
+            }
         }
     }
 }

@@ -525,6 +525,7 @@ impl App {
         let config = self.config();
         let locales = config.opinions.external_matching.preferred_locales.clone();
         let routing = config.opinions.external_matching.credit_routing.clone();
+        let tag_names = config.opinions.external_matching.mb_tag_names.clone();
 
         // Collect unique IDs for batch loading
         let mut release_ids: Vec<String> = Vec::new();
@@ -560,6 +561,7 @@ impl App {
             &staging.inode_tags,
             &locales,
             &routing,
+            &tag_names,
         );
 
         if decisions.is_empty() {

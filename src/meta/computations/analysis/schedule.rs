@@ -37,6 +37,7 @@ pub fn execute_schedule_content_analysis(
     // Tag-sensitive computations
     if run_all || s.contains(RecomputationScope::TAGS) {
         spawn.extend([
+            Computation::DetectMusicBrainzTagged,
             Computation::DetectMissingTags,
             Computation::DetectTagCanonicalizations,
             Computation::DetectInconsistentAlbumArtist,

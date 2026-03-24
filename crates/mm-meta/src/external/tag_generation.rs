@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::config::CreditRoutingConfig;
+use crate::config::{CreditRoutingConfig, MbTagNameConfig};
 use crate::external::musicbrainz::{
     resolve_artist_name, join_artist_credits_localized,
     MbArtist, MbArtistCredit, MbArtistRef, MbRecording, MbRelease,
@@ -47,6 +47,7 @@ pub fn generate_tag_ops(
     artists: &HashMap<String, MbArtist>,
     locales: &[String],
     routing: &CreditRoutingConfig,
+    tag_names: &MbTagNameConfig,
 ) -> Vec<TagOp> {
     let mut desired: Vec<(String, String)> = Vec::new();
 
@@ -59,18 +60,38 @@ pub fn generate_tag_ops(
     };
     desired.push(("TITLE".to_string(), title));
 
-    // ARTIST: individual tags per artist (decomposed, not joined)
+    // ARTIST / ARTISTS: Navidrome singular/plural convention.
+    // Singular = display string (joinphrase-based), plural = individual decomposed values.
+    // Only emit both forms when there are actually multiple artists.
     let individual_artists = extract_individual_artists(
         recording, artists, locales, routing,
     );
-    for artist_name in &individual_artists {
-        desired.push(("ARTIST".to_string(), artist_name.clone()));
+    if individual_artists.len() > 1 {
+        let recording_artists: Vec<(String, Option<MbArtist>)> = recording
+            .artist_credit
+            .iter()
+            .map(|c| {
+                let artist = artists.get(&c.artist.id).cloned();
+                (c.artist.id.clone(), artist)
+            })
+            .collect();
+        let artist_display =
+            join_artist_credits_localized(&recording.artist_credit, &recording_artists, locales);
+        desired.push(("ARTIST".to_string(), artist_display));
+        for artist_name in &individual_artists {
+            desired.push(("ARTISTS".to_string(), artist_name.clone()));
+        }
+    } else {
+        for artist_name in &individual_artists {
+            desired.push(("ARTIST".to_string(), artist_name.clone()));
+        }
     }
 
     // ALBUM: release title
     desired.push(("ALBUM".to_string(), release.title.clone()));
 
-    // ALBUMARTIST: joined release-level credits (the one legitimate joined field)
+    // ALBUMARTIST / ALBUMARTISTS: Navidrome singular/plural convention.
+    // Singular = display string, plural = individual release-level credits.
     let release_artists: Vec<(String, Option<MbArtist>)> = release
         .artist_credit
         .iter()
@@ -79,9 +100,19 @@ pub fn generate_tag_ops(
             (c.artist.id.clone(), artist)
         })
         .collect();
-    let album_artist =
+    let album_artist_display =
         join_artist_credits_localized(&release.artist_credit, &release_artists, locales);
-    desired.push(("ALBUMARTIST".to_string(), album_artist));
+    desired.push(("ALBUMARTIST".to_string(), album_artist_display));
+    if release.artist_credit.len() > 1 {
+        for credit in &release.artist_credit {
+            let resolved = resolve_artist_name(
+                credit,
+                artists.get(&credit.artist.id),
+                locales,
+            );
+            desired.push(("ALBUMARTISTS".to_string(), resolved));
+        }
+    }
 
     // TRACKNUMBER
     desired.push((
@@ -97,15 +128,29 @@ pub fn generate_tag_ops(
         ));
     }
 
-    // MB IDs
+    // MB IDs (using configured tag names)
     desired.push((
-        "MUSICBRAINZ_RELEASEID".to_string(),
+        tag_names.release.clone(),
         input.release_id.clone(),
     ));
     desired.push((
-        "MUSICBRAINZ_RECORDINGID".to_string(),
+        tag_names.recording.clone(),
         input.recording_id.clone(),
     ));
+    // Track ID: look up from release media by position
+    let track_id = release
+        .media
+        .iter()
+        .find(|m| m.position == input.medium_position)
+        .and_then(|m| m.tracks.iter().find(|t| t.position == input.track_position))
+        .map(|t| t.id.as_str())
+        .unwrap_or("");
+    if !track_id.is_empty() {
+        desired.push((
+            tag_names.track.clone(),
+            track_id.to_string(),
+        ));
+    }
 
     compute_tag_diff(input.inode, &desired, &input.current_tags)
 }

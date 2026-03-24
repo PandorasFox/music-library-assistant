@@ -556,6 +556,15 @@ impl_corpus_signal!(ExpectedMissingTagSignal, "signal_expected_missing_tag",
     fields: [inode],
 );
 
+impl_corpus_signal!(MusicBrainzTaggedSignal, "signal_musicbrainz_tagged",
+    "CREATE TABLE IF NOT EXISTS signal_musicbrainz_tagged (
+        inode INTEGER PRIMARY KEY,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )",
+    insert_sql: "INSERT OR REPLACE INTO signal_musicbrainz_tagged (inode) VALUES (?1)",
+    fields: [inode],
+);
+
 impl_corpus_signal!(MissingFileSignal, "signal_missing_file",
     "CREATE TABLE IF NOT EXISTS signal_missing_file (
         inode INTEGER PRIMARY KEY,

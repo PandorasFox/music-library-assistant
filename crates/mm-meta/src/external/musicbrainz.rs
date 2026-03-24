@@ -131,6 +131,9 @@ pub struct MbMedium {
 /// A track within a medium (position + recording reference).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MbTrack {
+    /// Track MBID (the track-on-release identifier, distinct from the recording MBID).
+    #[serde(default)]
+    pub id: String,
     /// Track position within the medium (1-indexed).
     pub position: u32,
     /// Track number as printed (e.g., "A1", "3", etc.).

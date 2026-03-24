@@ -239,6 +239,12 @@ external-matching {
     mb-cache-ttl-days 30
     preferred-locales "en" "ja"
 
+    mb-tag-names {
+        recording "MUSICBRAINZ_RECORDING"
+        release "MUSICBRAINZ_RELEASE"
+        track "MUSICBRAINZ_TRACK"
+    }
+
     credit-routing {
         performer { artist true; title false; composer false }
         vocal { artist true; title true; composer false }
@@ -258,8 +264,62 @@ external-matching {
 | `auto-enrich-on-match` | bool | `true` | Auto-trigger MB enrichment when AcoustID matches arrive |
 | `mb-cache-ttl-days` | u32 | `30` | Days before re-fetching MB cache entries |
 | `preferred-locales` | string list | `[]` | BCP 47 locale preference order for artist names |
+| `mb-tag-names` | sub-block | *(see below)* | Vorbis Comment tag names for MusicBrainz entity IDs |
 | `credit-routing` | sub-block | *(see above)* | Per-relation-type routing to tag destinations |
 | `feat-format` | string | `"feat. {artists}"` | Format string for vocalist title suffix |
+
+#### `mb-tag-names` Sub-block
+
+Configures which Vorbis Comment tag names MM writes for MusicBrainz entity IDs. All reading and writing of MB tags uses these configured names.
+
+| KDL Name | Type | Default | Description |
+|----------|------|---------|-------------|
+| `recording` | string | `"MUSICBRAINZ_RECORDING"` | Tag name for the recording MBID |
+| `release` | string | `"MUSICBRAINZ_RELEASE"` | Tag name for the release MBID |
+| `track` | string | `"MUSICBRAINZ_TRACK"` | Tag name for the track-on-release MBID |
+
+**MB-tagged file detection**: A file is considered "fully MusicBrainz-tagged" when it has both the `track` and `release` tags present. These files are automatically elided from tag-based health checks (missing tags, canonicity, compound tags, etc.) since their tags are externally authoritative.
+
+##### Tag Name Mapping
+
+MM defaults to clean entity names that map 1:1 to MusicBrainz concepts. The standard Picard names are confusing (e.g., `MUSICBRAINZ_TRACKID` is actually the *recording* ID, not the track ID).
+
+| MB Entity | MM Default | Picard Standard | Notes |
+|-----------|-----------|-----------------|-------|
+| Recording | `MUSICBRAINZ_RECORDING` | `MUSICBRAINZ_TRACKID` | Picard name is misleading |
+| Release | `MUSICBRAINZ_RELEASE` | `MUSICBRAINZ_ALBUMID` | Picard name is misleading |
+| Track (on release) | `MUSICBRAINZ_TRACK` | `MUSICBRAINZ_RELEASETRACKID` | — |
+
+##### Picard-Compatible Config
+
+To use standard Picard tag names (for interop with files tagged by MusicBrainz Picard):
+
+```kdl
+mb-tag-names {
+    recording "MUSICBRAINZ_TRACKID"
+    release "MUSICBRAINZ_ALBUMID"
+    track "MUSICBRAINZ_RELEASETRACKID"
+}
+```
+
+##### Navidrome Persistent ID Config
+
+When using MM's default tag names, configure Navidrome to read them for persistent IDs. In your Navidrome config:
+
+```
+ND_PID_TRACK=musicbrainz_track|albumid,discnumber,tracknumber,title
+ND_PID_ALBUM=musicbrainz_release|albumartistid,album,albumversion,releasedate
+```
+
+Or in `navidrome.toml`:
+
+```toml
+[Scanner]
+PID.Track = "musicbrainz_track|albumid,discnumber,tracknumber,title"
+PID.Album = "musicbrainz_release|albumartistid,album,albumversion,releasedate"
+```
+
+If using Picard-compatible tag names, Navidrome's defaults work out of the box (no config needed).
 
 ### `disc-extraction` Block
 

@@ -85,6 +85,29 @@ opinions {
     // }
 
     // -------------------------------------------------------------------------
+    // External Matching - MusicBrainz / AcoustID
+    // -------------------------------------------------------------------------
+    // external-matching {
+    //     acoustid-api-key "your-key-here"
+    //     mb-base-url "https://musicbrainz.org/ws/2"
+    //
+    //     // MusicBrainz tag names written to corpus files.
+    //     // Defaults are clean entity names; override for Picard interop.
+    //     mb-tag-names {
+    //         recording "MUSICBRAINZ_RECORDING"
+    //         release "MUSICBRAINZ_RELEASE"
+    //         track "MUSICBRAINZ_TRACK"
+    //     }
+    //
+    //     // --- Picard-compatible tag names ---
+    //     // mb-tag-names {
+    //     //     recording "MUSICBRAINZ_TRACKID"
+    //     //     release "MUSICBRAINZ_ALBUMID"
+    //     //     track "MUSICBRAINZ_RELEASETRACKID"
+    //     // }
+    // }
+
+    // -------------------------------------------------------------------------
     // Duplicate Analysis - Fingerprint-based duplicate detection
     // -------------------------------------------------------------------------
     duplicate-analysis {

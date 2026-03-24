@@ -227,6 +227,7 @@ signal_registry! {
             ReleasePacking(ReleasePackingSignal, "release_packing"),
             UnmatchedCorpusTrack(UnmatchedCorpusTrackSignal, "unmatched_corpus_track"),
             ExpectedMissingTag(ExpectedMissingTagSignal, "expected_missing_tag"),
+            MusicBrainzTagged(MusicBrainzTaggedSignal, "musicbrainz_tagged"),
         }
         inherent {
             CorruptFile(CorruptFileSignal, "corrupt_file"),

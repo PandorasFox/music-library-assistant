@@ -127,8 +127,9 @@ pub fn get_album_artist_collisions(db: &ReadOnlyDb<'_>) -> Result<Vec<TagCollisi
 pub fn get_album_collisions(
     db: &ReadOnlyDb<'_>,
     strip_format_suffixes: bool,
+    mb_release_tag_name: &str,
 ) -> Result<Vec<TagCollision>> {
-    let rows = db.get_album_data_for_collision_detection()?;
+    let rows = db.get_album_data_for_collision_detection(mb_release_tag_name)?;
 
     // Group by (normalized_artist, normalized_album)
     // For each group, track: variant -> (count, isrcs, catalog_numbers)
@@ -181,7 +182,7 @@ struct VariantData {
     count: usize,
     isrcs: HashSet<String>,
     catalog_numbers: HashSet<String>,
-    /// MusicBrainz release IDs (MUSICBRAINZ_ALBUMID).
+    /// MusicBrainz release IDs (configured tag name, default MUSICBRAINZ_RELEASE).
     mb_release_ids: HashSet<String>,
     /// Release years extracted from `year` and/or `date` tags.
     years: HashSet<u16>,

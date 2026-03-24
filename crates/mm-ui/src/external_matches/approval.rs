@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use mm_meta::config::CreditRoutingConfig;
+use mm_meta::config::{CreditRoutingConfig, MbTagNameConfig};
 use mm_meta::external::musicbrainz::MbCacheBundle;
 use mm_meta::external::tag_generation::{generate_tag_ops, MbTagInput};
 use mm_meta::mutations::TagOp;
@@ -27,6 +27,7 @@ pub fn build_release_approval_decisions(
     inode_tags: &HashMap<i64, Vec<(String, String)>>,
     locales: &[String],
     routing: &CreditRoutingConfig,
+    tag_names: &MbTagNameConfig,
 ) -> (Vec<ApprovalDecision>, usize) {
     let mut decisions = Vec::new();
     let mut skipped = 0usize;
@@ -61,6 +62,7 @@ pub fn build_release_approval_decisions(
                 &bundle.artists,
                 locales,
                 routing,
+                tag_names,
             );
             if !inode_ops.is_empty() {
                 per_inode_ops.push(inode_ops);

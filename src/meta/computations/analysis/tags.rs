@@ -23,6 +23,75 @@ use crate::meta::signals::registry::TypedSignalWrite;
 use super::{Computation, Result};
 
 // ============================================================================
+// MusicBrainz-Tagged Detection
+// ============================================================================
+
+/// Load the set of MB-tagged inodes (files with both configured track + release tags).
+///
+/// Used by tag-based health computations to elide externally-authoritative files.
+fn load_mb_tagged_inodes(
+    read_only_db: &ReadOnlyDb<'_>,
+    config: &crate::config::Config,
+) -> std::collections::HashSet<i64> {
+    let mb = &config.opinions.external_matching.mb_tag_names;
+    read_only_db
+        .get_mb_tagged_inodes(&mb.track, &mb.release)
+        .unwrap_or_default()
+        .into_iter()
+        .collect()
+}
+
+/// Execute DetectMusicBrainzTagged — emit per-file signals for MB-matched files.
+///
+/// Reconciles against current state: emits for newly-tagged files, clears for
+/// files whose MB tags were removed.
+pub fn execute_detect_musicbrainz_tagged(
+    ctx: &ComputationContext<'_>,
+) -> Result {
+    use crate::meta::signals::data::MusicBrainzTaggedSignal;
+
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
+
+    let computation = Computation::DetectMusicBrainzTagged;
+
+    let sender = require_sender!(computation);
+
+    let config = require_config!(ctx, computation);
+
+    let mb = &config.opinions.external_matching.mb_tag_names;
+    let mb_inodes = read_only_db
+        .get_mb_tagged_inodes(&mb.track, &mb.release)
+        .unwrap_or_default();
+
+    let computed: Vec<helpers::ComputedCorpusSignal> = mb_inodes
+        .into_iter()
+        .map(|inode| {
+            helpers::ComputedCorpusSignal::new(
+                inode,
+                TypedSignalWrite::MusicBrainzTagged(MusicBrainzTaggedSignal { inode }),
+            )
+        })
+        .collect();
+
+    let stats = helpers::reconcile_corpus_signals::<MusicBrainzTaggedSignal>(
+        read_only_db,
+        &sender,
+        computed,
+        witness,
+    );
+
+    log_general(format!(
+        "[COMPUTE] DetectMusicBrainzTagged: {} tagged files ({} new, {} cleared)",
+        stats.unchanged + stats.new,
+        stats.new,
+        stats.cleared,
+    ));
+
+    Result::success(computation, Vec::new())
+}
+
+// ============================================================================
 // Missing Tags Detection
 // ============================================================================
 
@@ -86,11 +155,17 @@ pub fn execute_detect_missing_tags(
             .collect()
     };
 
+    // Skip MB-tagged files (externally authoritative tags)
+    let mb_tagged_inodes = load_mb_tagged_inodes(read_only_db, config);
+
     let mut groups: HashMap<String, (HashSet<String>, Vec<i64>)> = HashMap::new();
     // artist_key (lowercased) -> (display_artist, Vec<SingleTrackInfo>)
     let mut album_single_groups: HashMap<String, (String, Vec<SingleTrackInfo>)> = HashMap::new();
 
     for (inode, path, album, present_tags_str, artist, title) in tracks_with_tags {
+        if mb_tagged_inodes.contains(&inode) {
+            continue;
+        }
         let present_tags: HashSet<String> = present_tags_str
             .unwrap_or_default()
             .split(',')
@@ -234,6 +309,10 @@ pub fn execute_detect_tag_canonicalizations(
     let config = require_config!(ctx, computation);
 
     let strip_format_suffixes = config.opinions.canonicalization.strip_album_format_suffixes;
+    let mb_release_tag_name = &config.opinions.external_matching.mb_tag_names.release;
+
+    // Skip MB-tagged files (externally authoritative tags)
+    let mb_tagged_inodes = load_mb_tagged_inodes(read_only_db, config);
 
     let mut computed: Vec<ComputedAggregateSignal> = Vec::new();
 
@@ -252,11 +331,18 @@ pub fn execute_detect_tag_canonicalizations(
                 continue;
             }
 
-            // Get inodes for all variants in this collision
+            // Get inodes for all variants in this collision, excluding MB-tagged files
             let variant_refs: Vec<&str> = collision.variants.iter().map(|s| s.as_str()).collect();
-            let inodes = read_only_db
+            let inodes: Vec<i64> = read_only_db
                 .get_inodes_for_tag_values_in::<crate::zones::CorpusZone>(&collision.tag_name, &variant_refs)
-                .unwrap_or_default();
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|inode| !mb_tagged_inodes.contains(inode))
+                .collect();
+
+            if inodes.is_empty() {
+                continue;
+            }
 
             // Build sorted variant tuples (count DESC)
             let mut variants: Vec<(String, usize)> = collision.variant_counts.into_iter().collect();
@@ -278,7 +364,7 @@ pub fn execute_detect_tag_canonicalizations(
     if let Ok(collisions) = get_album_artist_collisions(read_only_db) {
         collect_collision_signals(collisions);
     }
-    if let Ok(collisions) = get_album_collisions(read_only_db, strip_format_suffixes) {
+    if let Ok(collisions) = get_album_collisions(read_only_db, strip_format_suffixes, mb_release_tag_name) {
         collect_collision_signals(collisions);
     }
     if let Ok(collisions) = get_genre_collisions(read_only_db) {
@@ -315,6 +401,8 @@ pub fn execute_detect_compound_tag_values(
 
     let computation = Computation::DetectCompoundTagValues;
 
+    let config = require_config!(ctx, computation);
+
     // Query dirty inodes instead of all corpus inodes
     let dirty_inodes = match read_only_db.get_dirty_inodes(COMPOUND_TAG_COMPUTATION) {
         Ok(inodes) => inodes,
@@ -332,13 +420,17 @@ pub fn execute_detect_compound_tag_values(
         return Result::success(computation, Vec::new());
     }
 
+    // Skip MB-tagged files (externally authoritative tags)
+    let mb_tagged_inodes = load_mb_tagged_inodes(read_only_db, config);
+
     // Note: We do NOT clear existing signals here. Each per-inode computation will
     // emit or clear its own signal as appropriate. Signals for unchanged inodes
     // (not in dirty list) are preserved.
 
-    // Spawn per-inode computations only for dirty inodes
+    // Spawn per-inode computations only for dirty inodes (excluding MB-tagged)
     let spawn: Vec<Computation> = dirty_inodes
         .into_iter()
+        .filter(|inode| !mb_tagged_inodes.contains(inode))
         .map(|inode| Computation::DetectCompoundTagsForInode { inode })
         .collect();
 
@@ -628,6 +720,11 @@ pub fn execute_detect_inconsistent_album_artist(
 
     let sender = require_sender!(computation);
 
+    let config = require_config!(ctx, computation);
+
+    // Skip MB-tagged files (externally authoritative tags)
+    let mb_tagged_inodes = load_mb_tagged_inodes(read_only_db, config);
+
     let issues = match detect_inconsistent_album_artist(read_only_db) {
         Ok(i) => i,
         Err(e) => {
@@ -640,7 +737,12 @@ pub fn execute_detect_inconsistent_album_artist(
 
     let mut computed: Vec<ComputedAggregateSignal> = Vec::new();
 
-    for issue in issues {
+    for mut issue in issues {
+        // Filter out MB-tagged inodes
+        issue.inodes.retain(|inode| !mb_tagged_inodes.contains(inode));
+        if issue.inodes.is_empty() {
+            continue;
+        }
         let mut artist_variants: Vec<(String, usize)> = issue.artist_variants.into_iter().collect();
         artist_variants.sort_by(|a, b| b.1.cmp(&a.1));
 
@@ -696,6 +798,11 @@ pub fn execute_detect_disc_extractions(
 
     let sender = require_sender!(computation);
 
+    let config = require_config!(ctx, computation);
+
+    // Skip MB-tagged files (externally authoritative tags)
+    let mb_tagged_inodes = load_mb_tagged_inodes(read_only_db, config);
+
     let mut computed: Vec<ComputedAggregateSignal> = Vec::new();
 
     // ── Pass 1: Album tag patterns ──────────────────────────────────────
@@ -716,6 +823,9 @@ pub fn execute_detect_disc_extractions(
     let mut album_groups: HashMap<String, (String, String, String, Vec<i64>)> = HashMap::new();
 
     for (inode, album_value) in album_entries {
+        if mb_tagged_inodes.contains(&inode) {
+            continue;
+        }
         if let Some(caps) = disc_re.captures(&album_value) {
             let dn = caps[1].trim_start_matches('0');
             let disc_number = if dn.is_empty() { "0" } else { dn }.to_string();
@@ -789,6 +899,9 @@ pub fn execute_detect_disc_extractions(
     let mut tracknum_groups: HashMap<String, TrackNumGroup> = HashMap::new();
 
     for (inode, tracknumber, album, album_artist) in tracknum_entries {
+        if mb_tagged_inodes.contains(&inode) {
+            continue;
+        }
         if let Some(caps) = tracknum_re.captures(&tracknumber) {
             let prefix = caps[1].to_string();
             let digits = caps[2].trim_start_matches('0');

@@ -421,6 +421,38 @@ impl CreditRoutingConfig {
     }
 }
 
+/// Configurable Vorbis Comment tag names for MusicBrainz entity IDs.
+///
+/// Defaults to sane names (`MUSICBRAINZ_RECORDING`, `MUSICBRAINZ_RELEASE`,
+/// `MUSICBRAINZ_TRACK`). Can be set to Picard-standard names for interop:
+/// `MUSICBRAINZ_TRACKID`, `MUSICBRAINZ_ALBUMID`, `MUSICBRAINZ_RELEASETRACKID`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MbTagNameConfig {
+    /// Tag name for the recording MBID.
+    pub recording: String,
+    /// Tag name for the release MBID.
+    pub release: String,
+    /// Tag name for the track-on-release MBID.
+    pub track: String,
+}
+
+impl Default for MbTagNameConfig {
+    fn default() -> Self {
+        Self {
+            recording: "MUSICBRAINZ_RECORDING".to_string(),
+            release: "MUSICBRAINZ_RELEASE".to_string(),
+            track: "MUSICBRAINZ_TRACK".to_string(),
+        }
+    }
+}
+
+impl MbTagNameConfig {
+    pub const KDL_MB_TAG_NAMES: &str = "mb-tag-names";
+    pub const KDL_RECORDING: &str = "recording";
+    pub const KDL_RELEASE: &str = "release";
+    pub const KDL_TRACK: &str = "track";
+}
+
 /// Configuration for external metadata matching (AcoustID, MusicBrainz).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExternalMatchingConfig {
@@ -433,6 +465,7 @@ pub struct ExternalMatchingConfig {
     pub preferred_locales: Vec<String>,
     pub tag_templates: Vec<(String, String)>,
     pub credit_routing: CreditRoutingConfig,
+    pub mb_tag_names: MbTagNameConfig,
 }
 
 impl Default for ExternalMatchingConfig {
@@ -447,6 +480,7 @@ impl Default for ExternalMatchingConfig {
             preferred_locales: Vec::new(),
             tag_templates: Vec::new(),
             credit_routing: CreditRoutingConfig::default(),
+            mb_tag_names: MbTagNameConfig::default(),
         }
     }
 }

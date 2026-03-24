@@ -673,6 +673,22 @@ fn render_deploy_preview(data: &DeployModalData) -> Node {
     let active = initial_tab(data);
     let mut sections = Vec::new();
 
+    // Action buttons at top.
+    if data.total_operations() > 0 {
+        sections.push(
+            div()
+                .class("mm-buttons")
+                .child(
+                    html::button()
+                        .class("mm-btn")
+                        .attr("style", "border-color:var(--c-green)")
+                        .attr("onclick", "window.__mm_stage_deploy()")
+                        .text("Stage Deploy"),
+                )
+                .into(),
+        );
+    }
+
     // Summary line.
     let total_ops = data.total_operations();
     sections.push(kv("Operations", &format!("{} total", total_ops)));

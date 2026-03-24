@@ -83,7 +83,6 @@ use ratatui::{backend::CrosstermBackend, Frame, Terminal};
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use mm_meta::config::Config;
 use mm_meta::paths::PathResolver;
@@ -132,9 +131,8 @@ pub(crate) struct App {
     prev_error_generation: u64,
     prev_config_generation: u64,
 
-    /// Cached WitchStatus — refreshed once per loop iteration (1s TTL).
+    /// Cached WitchStatus — populated by server-pushed events.
     cached_status: WitchStatus,
-    cached_status_at: Instant,
 
     /// Terminal image rendering: picker for protocol detection + image cache.
     pub(crate) art_picker: widgets::AlbumArtPicker,
@@ -225,7 +223,6 @@ impl App {
             prev_error_generation: 0,
             prev_config_generation: 0,
             cached_status,
-            cached_status_at: Instant::now(),
             art_picker,
             art_cache: widgets::AlbumArtCache::new(),
             tab_click_rects: Vec::new(),
@@ -233,8 +230,6 @@ impl App {
             session_expired: false,
         }
     }
-
-    const STATUS_TTL: Duration = Duration::from_secs(1);
 
     /// Get a snapshot of the current config from the Witch (cached).
     pub(crate) fn config(&mut self) -> Arc<Config> {
@@ -246,33 +241,9 @@ impl App {
         arc
     }
 
-    /// Return a reference to the cached WitchStatus (refreshed once per loop iteration).
+    /// Return a reference to the cached WitchStatus (populated by server-pushed events).
     pub(crate) fn witch_status(&self) -> &WitchStatus {
         &self.cached_status
-    }
-
-    /// Refresh the cached WitchStatus if the TTL has elapsed.
-    fn refresh_status(&mut self) {
-        if self.session_token.is_none() {
-            return; // On login screen — no session to refresh.
-        }
-        if self.cached_status_at.elapsed() >= Self::STATUS_TTL {
-            // Use send_authenticated directly (not query()) so InvalidSession
-            // sets session_expired instead of panicking.
-            let body = mm_meta::protocol::AuthenticatedBody::Query(
-                mm_meta::protocol::QueryPayload::Status,
-            );
-            match self.send_authenticated(body) {
-                Ok(mm_meta::protocol::AuthenticatedResponse::Query(qr)) => {
-                    if let mm_meta::protocol::QueryResponse::Status(s) = *qr {
-                        self.cached_status = s;
-                        self.cached_status_at = Instant::now();
-                    }
-                }
-                // InvalidSession → session_expired flag already set by send_authenticated
-                _ => {}
-            }
-        }
     }
 
     /// Whether the Transaction tab should be visible in the lateral view ring.
@@ -851,7 +822,6 @@ impl App {
         match result {
             Ok(UnauthenticatedResponse::Auth(AuthResponse::Token(token))) => {
                 self.session_token = Some(token);
-                self.cached_status_at = Instant::now() - Self::STATUS_TTL;
                 self.complete_startup();
             }
             Ok(UnauthenticatedResponse::Auth(AuthResponse::Failed(msg))) => {
@@ -1244,7 +1214,14 @@ fn run_app<B: ratatui::backend::Backend>(
     }
 
     loop {
-        app.refresh_status();
+        // Drain pushed status events from the Witch (replaces polling)
+        while let Some(event) = app.rpc.try_recv_event() {
+            match event {
+                mm_meta::witch_types::WitchEvent::StatusChanged(status) => {
+                    app.cached_status = status;
+                }
+            }
+        }
 
         if app.session_expired {
             app.enter_login_screen(Some("Session expired — please log in again"));

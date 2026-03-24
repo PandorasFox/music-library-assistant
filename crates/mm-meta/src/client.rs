@@ -4,6 +4,9 @@
 //! each get a unique `request_id`; the reader task routes responses back
 //! via parked oneshot channels.
 //!
+//! Server-pushed events (`WireResponse::Event`) are forwarded to a
+//! broadcast channel — callers subscribe via [`WitchClient::subscribe_events`].
+//!
 //! Used by both mm-web (directly in async context) and mm-tui (via
 //! RpcHandle on a background thread with a single-threaded runtime).
 
@@ -15,10 +18,11 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use tokio::io::{BufReader, BufWriter};
 use tokio::net::UnixStream;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 
 use crate::protocol::UnauthenticatedBody;
 use crate::wire::{read_frame_async, write_frame_async, WireRequest, WireResponse};
+use crate::witch_types::WitchEvent;
 
 /// Multiplexed async client for the Witch socket protocol.
 #[derive(Clone)]
@@ -29,6 +33,8 @@ pub struct WitchClient {
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<WireResponse>>>>,
     /// Next request ID (atomic counter).
     next_id: Arc<AtomicU64>,
+    /// Broadcast channel for server-pushed events.
+    event_tx: broadcast::Sender<WitchEvent>,
 }
 
 impl WitchClient {
@@ -57,6 +63,7 @@ impl WitchClient {
         let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<WireResponse>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let (request_tx, mut request_rx) = mpsc::unbounded_channel::<WireRequest>();
+        let (event_tx, _) = broadcast::channel::<WitchEvent>(16);
 
         // Writer task: drains request_tx → writes frames to socket
         let writer_handle = tokio::spawn(async move {
@@ -67,18 +74,26 @@ impl WitchClient {
             }
         });
 
-        // Reader task: reads response frames → dispatches to parked oneshot
+        // Reader task: routes responses to parked oneshots, events to broadcast
         let pending_clone = Arc::clone(&pending);
+        let event_tx_clone = event_tx.clone();
         let reader_handle = tokio::spawn(async move {
             loop {
                 let resp: WireResponse = match read_frame_async(&mut reader).await {
                     Ok(r) => r,
                     Err(_) => return,
                 };
-                let id = resp.request_id();
-                let mut map = pending_clone.lock().await;
-                if let Some(tx) = map.remove(&id) {
-                    let _ = tx.send(resp);
+                match resp {
+                    WireResponse::Event(event) => {
+                        let _ = event_tx_clone.send(event);
+                    }
+                    other => {
+                        let id = other.request_id();
+                        let mut map = pending_clone.lock().await;
+                        if let Some(tx) = map.remove(&id) {
+                            let _ = tx.send(other);
+                        }
+                    }
                 }
             }
         });
@@ -91,7 +106,13 @@ impl WitchClient {
             request_tx,
             pending,
             next_id: Arc::new(AtomicU64::new(1)),
+            event_tx,
         }
+    }
+
+    /// Subscribe to server-pushed events.
+    pub fn subscribe_events(&self) -> broadcast::Receiver<WitchEvent> {
+        self.event_tx.subscribe()
     }
 
     /// Verify the Witch is reachable by sending a SetupQuery.

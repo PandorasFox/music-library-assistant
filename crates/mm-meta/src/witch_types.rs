@@ -199,3 +199,19 @@ pub struct WitchStatus {
     /// Increments each time config is mutated.
     pub config_generation: u64,
 }
+
+// ============================================================================
+// WitchEvent — Server-Pushed State Changes
+// ============================================================================
+
+/// Event pushed from the Witch to all connected clients.
+///
+/// Replaces status polling: the Witch broadcasts after any meaningful
+/// state change in its run loop. Clients diff generation counters in the
+/// contained `WitchStatus` to detect what changed — same logic as before,
+/// just push-driven instead of poll-driven.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum WitchEvent {
+    /// Full status snapshot after a state change.
+    StatusChanged(WitchStatus),
+}

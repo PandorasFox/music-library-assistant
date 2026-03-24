@@ -211,6 +211,10 @@ pub struct Witch {
     /// Increments when config is mutated.
     config_generation: u64,
 
+    /// Broadcast channel for pushing status events to all connected clients.
+    /// Per-connection handlers subscribe via the socket listener.
+    event_tx: tokio::sync::broadcast::Sender<crate::meta::witch_types::WitchEvent>,
+
     /// Decision key kinds with staged decisions in the active transaction.
     /// Used by the insights view to hide entries already handled.
     handled_sources: std::collections::HashSet<crate::meta::decisions::DecisionKeyKind>,
@@ -336,6 +340,7 @@ impl Witch {
             computations_generation: 0,
             error_generation: 0,
             config_generation: 0,
+            event_tx: tokio::sync::broadcast::channel(16).0,
             handled_sources: std::collections::HashSet::new(),
             observed_inodes: ObservedInodes::new(),
             log_thread_handle,
@@ -437,7 +442,7 @@ impl Witch {
 
         // Spawn the Unix domain socket listener. Binds synchronously — the
         // socket is ready for connections when this returns.
-        she.socket_listener_handle = socket::spawn_listener(cmd_tx);
+        she.socket_listener_handle = socket::spawn_listener(cmd_tx, she.event_tx.clone());
 
         if she.socket_listener_handle.is_none() {
             eprintln!("ERROR: Failed to bind socket (is XDG_RUNTIME_DIR set?)");
@@ -467,14 +472,18 @@ impl Witch {
         let mut housekeeping = tokio::time::interval(Duration::from_millis(100));
 
         loop {
+            let mut broadcast_status = false;
+
             tokio::select! {
                 Some(cmd) = cmd_rx.recv() => {
+                    broadcast_status = true;
                     if self.dispatch_command(cmd) { return; }
                     while let Ok(cmd) = cmd_rx.try_recv() {
                         if self.dispatch_command(cmd) { return; }
                     }
                 }
                 Some(hades::HadesMessage::Result(result)) = self.hades.message_rx.recv() => {
+                    broadcast_status = true;
                     self.process_task_result(result);
                     while let Ok(hades::HadesMessage::Result(r)) = self.hades.message_rx.try_recv() {
                         self.process_task_result(r);
@@ -482,12 +491,14 @@ impl Witch {
                     self.post_drain_bookkeeping();
                 }
                 Some(msg) = self.fs_watcher.message_rx.recv() => {
+                    broadcast_status = true;
                     self.process_watcher_message(msg);
                     while let Ok(msg) = self.fs_watcher.message_rx.try_recv() {
                         self.process_watcher_message(msg);
                     }
                 }
                 msg = recv_optional(&mut self.scheduler_message_rx) => {
+                    broadcast_status = true;
                     let mut msgs = Vec::new();
                     if let Some(msg) = msg {
                         msgs.push(msg);
@@ -509,6 +520,12 @@ impl Witch {
                 self.update_state();
                 self.check_startup_transitions();
                 self.maybe_trigger_derivation();
+            }
+
+            // Push status snapshot to all connected clients after any real activity
+            if broadcast_status {
+                use crate::meta::witch_types::WitchEvent;
+                let _ = self.event_tx.send(WitchEvent::StatusChanged(self.publish_status()));
             }
         }
     }

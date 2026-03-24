@@ -21,6 +21,7 @@ use crate::protocol::{
     AuthenticatedBody, AuthenticatedResponse, ProtocolError, UnauthenticatedBody,
     UnauthenticatedResponse,
 };
+use crate::witch_types::WitchEvent;
 
 // ============================================================================
 // Wire Envelope Types
@@ -76,6 +77,8 @@ pub enum WireResponse {
     Ack {
         request_id: u64,
     },
+    /// Unsolicited server push — not a response to any client request.
+    Event(WitchEvent),
 }
 
 impl WireResponse {
@@ -84,6 +87,7 @@ impl WireResponse {
             Self::Authenticated { request_id, .. } => *request_id,
             Self::Unauthenticated { request_id, .. } => *request_id,
             Self::Ack { request_id } => *request_id,
+            Self::Event(_) => 0,
         }
     }
 }

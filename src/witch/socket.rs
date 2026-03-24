@@ -6,8 +6,8 @@
 //!
 //! - **Reader task**: reads `WireRequest` frames and spawns a dispatch task
 //!   per request, allowing multiple requests to be in-flight concurrently.
-//! - **Writer task**: drains completed `WireResponse` frames back to the
-//!   client as dispatch tasks finish.
+//! - **Writer task**: drains completed `WireResponse` frames and pushed
+//!   `WitchEvent` broadcasts back to the client.
 //!
 //! Connection close exits the handler task. No explicit cleanup needed —
 //! channels drop naturally.
@@ -16,6 +16,7 @@ use std::io;
 use std::path::PathBuf;
 
 use crate::meta::wire::{self, WireRequest, WireResponse};
+use crate::meta::witch_types::WitchEvent;
 
 use super::handle::HandleCommand;
 
@@ -58,6 +59,7 @@ pub fn socket_path() -> Option<PathBuf> {
 /// is not set (no socket in that case — in-process only).
 pub(super) fn spawn_listener(
     cmd_tx: tokio::sync::mpsc::UnboundedSender<HandleCommand>,
+    event_tx: tokio::sync::broadcast::Sender<WitchEvent>,
 ) -> Option<SocketListenerHandle> {
     let path = socket_path()?;
 
@@ -92,7 +94,7 @@ pub(super) fn spawn_listener(
         .expect("Failed to convert UnixListener to tokio");
 
     let task = tokio::spawn(async move {
-        run_listener(listener, cmd_tx).await;
+        run_listener(listener, cmd_tx, event_tx).await;
     });
 
     Some(SocketListenerHandle {
@@ -105,13 +107,15 @@ pub(super) fn spawn_listener(
 async fn run_listener(
     listener: tokio::net::UnixListener,
     cmd_tx: tokio::sync::mpsc::UnboundedSender<HandleCommand>,
+    event_tx: tokio::sync::broadcast::Sender<WitchEvent>,
 ) {
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
                 let cmd_tx = cmd_tx.clone();
+                let event_rx = event_tx.subscribe();
                 tokio::spawn(async move {
-                    handle_connection(stream, cmd_tx).await;
+                    handle_connection(stream, cmd_tx, event_rx).await;
                 });
             }
             Err(e) => {
@@ -125,6 +129,7 @@ async fn run_listener(
 async fn handle_connection(
     stream: tokio::net::UnixStream,
     cmd_tx: tokio::sync::mpsc::UnboundedSender<HandleCommand>,
+    mut event_rx: tokio::sync::broadcast::Receiver<WitchEvent>,
 ) {
     let (read_half, write_half) = tokio::io::split(stream);
     let mut reader = tokio::io::BufReader::new(read_half);
@@ -155,11 +160,29 @@ async fn handle_connection(
             }
         } => {}
 
-        // Writer: drain completed responses to the socket.
+        // Writer: interleave completed responses and pushed events.
         _ = async {
-            while let Some(response) = resp_rx.recv().await {
-                if wire::write_frame_async(&mut writer, &response).await.is_err() {
-                    return;
+            loop {
+                tokio::select! {
+                    Some(response) = resp_rx.recv() => {
+                        if wire::write_frame_async(&mut writer, &response).await.is_err() {
+                            return;
+                        }
+                    }
+                    result = event_rx.recv() => {
+                        match result {
+                            Ok(event) => {
+                                let frame = WireResponse::Event(event);
+                                if wire::write_frame_async(&mut writer, &frame).await.is_err() {
+                                    return;
+                                }
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                // Client fell behind — stale snapshots skipped, next recv is fresh
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                        }
+                    }
                 }
             }
         } => {}

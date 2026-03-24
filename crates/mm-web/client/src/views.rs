@@ -385,6 +385,9 @@ pub fn render_external_matches_page(data: &ExternalMatchesData, status: Option<&
 
 /// Render fetch progress from WitchStatus (polled section).
 pub fn render_fetch_progress_section(status: &WitchStatus) -> Node {
+    let mut sections = Vec::new();
+
+    // Metadata fetch (AcoustID + MusicBrainz)
     if let Some(ref progress) = status.external_fetch_progress {
         let a = &progress.acoustid;
         let m = &progress.mb;
@@ -410,11 +413,34 @@ pub fn render_fetch_progress_section(status: &WitchStatus) -> Node {
                 &format!("{:.1} aid/s, {:.1} mb/s", progress.acoustid_rps, progress.mb_rps),
             ));
         }
-        titled_section("External Fetch (active)", items)
+        sections.push(titled_section("External Fetch (active)", items));
     } else if status.is_external_fetch_active {
-        titled_section("External Fetch", vec![kv("status", "Starting...")])
+        sections.push(titled_section("External Fetch", vec![kv("status", "Starting...")]));
+    }
+
+    // Cover art fetch
+    if let Some(ref ca) = status.cover_art_progress {
+        sections.push(titled_section(
+            if status.is_cover_art_fetch_active { "Cover Art (active)" } else { "Cover Art (done)" },
+            vec![
+                kv("releases", &format!("{}/{}", ca.processed, ca.total_releases)),
+                kv("written", &format!("{}", ca.images_written)),
+                kv("skipped", &format!("{}", ca.images_skipped)),
+                kv("upgraded", &format!("{}", ca.images_upgraded)),
+            ],
+        ));
+    } else if status.is_cover_art_fetch_active {
+        sections.push(titled_section("Cover Art", vec![kv("status", "Starting...")]));
+    }
+
+    if sections.is_empty() {
+        div().into()
     } else {
-        titled_section("External Fetch", vec![kv("status", "Idle")])
+        let mut container = div();
+        for s in sections {
+            container = container.child(s);
+        }
+        container.into()
     }
 }
 

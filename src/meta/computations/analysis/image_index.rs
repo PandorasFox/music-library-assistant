@@ -50,8 +50,19 @@ pub fn execute_index_observed_images(
         images.len(),
     ));
 
-    // Spawn the slow metadata analysis as a follow-up — doesn't gate derivation.
-    let spawn = vec![Computation::AnalyzeImageMetadata { images: images.to_vec() }];
+    // Spawn chunked metadata analysis — fans out across rayon thread pool.
+    // Each chunk is an independent computation so image decoding parallelizes.
+    const CHUNK_SIZE: usize = 64;
+    let spawn: Vec<Computation> = images
+        .chunks(CHUNK_SIZE)
+        .map(|chunk| Computation::AnalyzeImageMetadata { images: chunk.to_vec() })
+        .collect();
+
+    log_general(format!(
+        "[COMPUTE] IndexObservedImages: spawning {} AnalyzeImageMetadata chunks",
+        spawn.len(),
+    ));
+
     Result::success(computation, spawn)
 }
 

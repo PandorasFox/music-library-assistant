@@ -4,7 +4,6 @@
 //! is visually identical to an existing sidecar (same art, better fidelity).
 
 use image::imageops::FilterType;
-use image::GenericImageView;
 
 /// 64-bit difference hash (dHash).
 ///

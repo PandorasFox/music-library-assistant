@@ -1799,11 +1799,6 @@ impl Witch {
             .is_some_and(|h| h.is_cover_art_active())
     }
 
-    /// Latest progress snapshot from the cover art fetch.
-    pub fn cover_art_progress(&self) -> Option<&external_fetch::CoverArtProgress> {
-        self.cover_art_progress.as_ref()
-    }
-
     /// Queue release bin-packing analysis (operator-initiated).
     ///
     /// Analyzes cached MusicBrainz data and assigns corpus files to releases

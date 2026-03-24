@@ -8,7 +8,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 mm-ui = { path = "../../mm-ui" }
-mm-meta = { path = "../../mm-meta" }
+mm-meta = { path = "../../mm-meta", default-features = false }
 
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

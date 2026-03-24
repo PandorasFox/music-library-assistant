@@ -16,7 +16,7 @@ use std::io;
 use std::path::PathBuf;
 
 use crate::meta::wire::{self, WireRequest, WireResponse};
-use crate::meta::witch_types::WitchEvent;
+use mm_meta::witch_types::WitchEvent;
 
 use super::handle::HandleCommand;
 

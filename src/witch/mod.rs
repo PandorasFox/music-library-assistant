@@ -213,7 +213,7 @@ pub struct Witch {
 
     /// Broadcast channel for pushing status events to all connected clients.
     /// Per-connection handlers subscribe via the socket listener.
-    event_tx: tokio::sync::broadcast::Sender<crate::meta::witch_types::WitchEvent>,
+    event_tx: tokio::sync::broadcast::Sender<mm_meta::witch_types::WitchEvent>,
 
     /// Decision key kinds with staged decisions in the active transaction.
     /// Used by the insights view to hide entries already handled.
@@ -524,7 +524,7 @@ impl Witch {
 
             // Push status snapshot to all connected clients after any real activity
             if broadcast_status {
-                use crate::meta::witch_types::WitchEvent;
+                use mm_meta::witch_types::WitchEvent;
                 let _ = self.event_tx.send(WitchEvent::StatusChanged(self.publish_status()));
             }
         }

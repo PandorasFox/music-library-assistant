@@ -634,7 +634,7 @@ pub fn execute_detect_compound_tags_for_inode(
         path: corpus_path,
         compounds,
     });
-    let new_hash = signal.content_hash() as i64;
+    let new_hash = signal.content_hash();
     let existing_hash = read_only_db.corpus_signal_inode_hash::<CompoundTagSignal>(inode);
     if existing_hash != Some(new_hash) {
         sender.write_typed_signal(signal, witness);

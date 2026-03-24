@@ -14,24 +14,6 @@
 use rusqlite::{Connection, Result};
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
-/// Compute a deterministic hash from bincode-serialized bytes.
-///
-/// Uses FNV-1a (64-bit), a simple non-cryptographic hash with a fixed algorithm.
-/// Unlike `DefaultHasher`, FNV-1a is stable across Rust compiler versions —
-/// `DefaultHasher`'s algorithm is explicitly not guaranteed stable, so stored
-/// hash values could silently become stale after a toolchain update, triggering
-/// spurious re-emission of every signal.
-fn compute_blob_hash(bytes: &[u8]) -> i64 {
-    const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
-    const FNV_PRIME: u64 = 0x00000100000001B3;
-
-    let mut hash = FNV_OFFSET_BASIS;
-    for &byte in bytes {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    hash as i64
-}
 
 // ============================================================================
 // Traits
@@ -208,11 +190,21 @@ macro_rules! impl_corpus_signal {
             const TABLE_NAME: &'static str = $table;
 
             fn insert(&self, conn: &Connection) -> Result<()> {
+                use crate::meta::signals::registry::SignalContentHash;
+                let hash = self.content_hash_value();
                 conn.execute(
                     $insert_sql,
-                    rusqlite::params![$(field_value!(self, $field $(, $via)?)),*],
+                    rusqlite::params![$(field_value!(self, $field $(, $via)?),)* hash],
                 )?;
                 Ok(())
+            }
+
+            fn query_inode_hashes(conn: &Connection) -> Result<HashMap<i64, i64>> {
+                let mut stmt = conn.prepare(
+                    concat!("SELECT inode, data_hash FROM ", $table)
+                )?;
+                let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+                rows.collect()
             }
 
             fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
@@ -243,9 +235,10 @@ macro_rules! impl_corpus_signal {
             const TABLE_NAME: &'static str = $table;
 
             fn insert(&self, conn: &Connection) -> Result<()> {
+                use crate::meta::signals::registry::SignalContentHash;
                 let data = bincode::serialize(&self.$blob_field)
                     .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-                let hash = compute_blob_hash(&data);
+                let hash = self.content_hash_value();
                 conn.execute(
                     $insert_sql,
                     rusqlite::params![$(field_value!(self, $field $(, $via)?),)* data, hash],
@@ -329,9 +322,10 @@ macro_rules! impl_aggregate_signal {
             const TABLE_NAME: &'static str = $table;
 
             fn insert(&self, conn: &Connection) -> Result<()> {
+                use crate::meta::signals::registry::SignalContentHash;
                 let data = bincode::serialize(&self.$blob_field)
                     .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-                let hash = compute_blob_hash(&data);
+                let hash = self.content_hash_value();
                 conn.execute(
                     $insert_sql,
                     rusqlite::params![$(field_value!(self, $field $(, $via)?),)* data, hash],
@@ -483,9 +477,10 @@ impl_corpus_signal!(FileInCorpusSignal, "signal_file_in_corpus",
         inode INTEGER PRIMARY KEY,
         path TEXT NOT NULL,
         generation INTEGER NOT NULL DEFAULT 0,
+        data_hash INTEGER NOT NULL DEFAULT 0,
         discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )",
-    insert_sql: "INSERT OR REPLACE INTO signal_file_in_corpus (inode, path, generation) VALUES (?1, ?2, ?3)",
+    insert_sql: "INSERT OR REPLACE INTO signal_file_in_corpus (inode, path, generation, data_hash) VALUES (?1, ?2, ?3, ?4)",
     fields: [inode, path, generation],
 );
 
@@ -493,9 +488,10 @@ impl_corpus_signal!(UnindexedFileSignal, "signal_unindexed_file",
     "CREATE TABLE IF NOT EXISTS signal_unindexed_file (
         inode INTEGER PRIMARY KEY,
         path TEXT NOT NULL,
+        data_hash INTEGER NOT NULL DEFAULT 0,
         discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )",
-    insert_sql: "INSERT OR REPLACE INTO signal_unindexed_file (inode, path) VALUES (?1, ?2)",
+    insert_sql: "INSERT OR REPLACE INTO signal_unindexed_file (inode, path, data_hash) VALUES (?1, ?2, ?3)",
     fields: [inode, path],
 );
 
@@ -505,9 +501,10 @@ impl_corpus_signal!(HealthyFileSignal, "signal_healthy_file",
     "CREATE TABLE IF NOT EXISTS signal_healthy_file (
         inode INTEGER PRIMARY KEY,
         path TEXT NOT NULL,
+        data_hash INTEGER NOT NULL DEFAULT 0,
         discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )",
-    insert_sql: "INSERT OR REPLACE INTO signal_healthy_file (inode, path) VALUES (?1, ?2)",
+    insert_sql: "INSERT OR REPLACE INTO signal_healthy_file (inode, path, data_hash) VALUES (?1, ?2, ?3)",
     fields: [inode, path],
 );
 
@@ -521,9 +518,10 @@ impl_corpus_signal!(CorruptFileSignal, "signal_corrupt_file",
     "CREATE TABLE IF NOT EXISTS signal_corrupt_file (
         inode INTEGER PRIMARY KEY,
         path TEXT NOT NULL,
+        data_hash INTEGER NOT NULL DEFAULT 0,
         discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )",
-    insert_sql: "INSERT OR REPLACE INTO signal_corrupt_file (inode, path) VALUES (?1, ?2)",
+    insert_sql: "INSERT OR REPLACE INTO signal_corrupt_file (inode, path, data_hash) VALUES (?1, ?2, ?3)",
     fields: [inode, path],
 );
 
@@ -531,9 +529,10 @@ impl_corpus_signal!(MtimeOnlyMismatchSignal, "signal_mtime_only_mismatch",
     "CREATE TABLE IF NOT EXISTS signal_mtime_only_mismatch (
         inode INTEGER PRIMARY KEY,
         path TEXT NOT NULL,
+        data_hash INTEGER NOT NULL DEFAULT 0,
         discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )",
-    insert_sql: "INSERT OR REPLACE INTO signal_mtime_only_mismatch (inode, path) VALUES (?1, ?2)",
+    insert_sql: "INSERT OR REPLACE INTO signal_mtime_only_mismatch (inode, path, data_hash) VALUES (?1, ?2, ?3)",
     fields: [inode, path],
 );
 
@@ -541,27 +540,30 @@ impl_corpus_signal!(MissingDirectorySignal, "signal_missing_directory",
     "CREATE TABLE IF NOT EXISTS signal_missing_directory (
         inode INTEGER PRIMARY KEY,
         path TEXT NOT NULL,
+        data_hash INTEGER NOT NULL DEFAULT 0,
         discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )",
-    insert_sql: "INSERT OR REPLACE INTO signal_missing_directory (inode, path) VALUES (?1, ?2)",
+    insert_sql: "INSERT OR REPLACE INTO signal_missing_directory (inode, path, data_hash) VALUES (?1, ?2, ?3)",
     fields: [inode, path],
 );
 
 impl_corpus_signal!(ExpectedMissingTagSignal, "signal_expected_missing_tag",
     "CREATE TABLE IF NOT EXISTS signal_expected_missing_tag (
         inode INTEGER PRIMARY KEY,
+        data_hash INTEGER NOT NULL DEFAULT 0,
         discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )",
-    insert_sql: "INSERT OR REPLACE INTO signal_expected_missing_tag (inode) VALUES (?1)",
+    insert_sql: "INSERT OR REPLACE INTO signal_expected_missing_tag (inode, data_hash) VALUES (?1, ?2)",
     fields: [inode],
 );
 
 impl_corpus_signal!(MusicBrainzTaggedSignal, "signal_musicbrainz_tagged",
     "CREATE TABLE IF NOT EXISTS signal_musicbrainz_tagged (
         inode INTEGER PRIMARY KEY,
+        data_hash INTEGER NOT NULL DEFAULT 0,
         discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )",
-    insert_sql: "INSERT OR REPLACE INTO signal_musicbrainz_tagged (inode) VALUES (?1)",
+    insert_sql: "INSERT OR REPLACE INTO signal_musicbrainz_tagged (inode, data_hash) VALUES (?1, ?2)",
     fields: [inode],
 );
 
@@ -570,9 +572,10 @@ impl_corpus_signal!(MissingFileSignal, "signal_missing_file",
         inode INTEGER PRIMARY KEY,
         path TEXT NOT NULL,
         replaced_by_inode INTEGER,
+        data_hash INTEGER NOT NULL DEFAULT 0,
         discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )",
-    insert_sql: "INSERT OR REPLACE INTO signal_missing_file (inode, path, replaced_by_inode) VALUES (?1, ?2, ?3)",
+    insert_sql: "INSERT OR REPLACE INTO signal_missing_file (inode, path, replaced_by_inode, data_hash) VALUES (?1, ?2, ?3, ?4)",
     fields: [inode, path, replaced_by_inode],
 );
 
@@ -583,9 +586,10 @@ impl_corpus_signal!(MovedFileSignal, "signal_moved_file",
         old_path TEXT NOT NULL,
         old_zone TEXT NOT NULL DEFAULT 'corpus',
         new_zone TEXT NOT NULL DEFAULT 'corpus',
+        data_hash INTEGER NOT NULL DEFAULT 0,
         discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )",
-    insert_sql: "INSERT OR REPLACE INTO signal_moved_file (inode, path, old_path, old_zone, new_zone) VALUES (?1, ?2, ?3, ?4, ?5)",
+    insert_sql: "INSERT OR REPLACE INTO signal_moved_file (inode, path, old_path, old_zone, new_zone, data_hash) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
     fields: [inode, path, old_path, old_zone, new_zone],
 );
 
@@ -594,9 +598,10 @@ impl_corpus_signal!(LosslessRemuxSignal, "signal_lossless_remux",
         inode INTEGER PRIMARY KEY,
         path TEXT NOT NULL,
         file_type TEXT NOT NULL,
+        data_hash INTEGER NOT NULL DEFAULT 0,
         discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )",
-    insert_sql: "INSERT OR REPLACE INTO signal_lossless_remux (inode, path, file_type) VALUES (?1, ?2, ?3)",
+    insert_sql: "INSERT OR REPLACE INTO signal_lossless_remux (inode, path, file_type, data_hash) VALUES (?1, ?2, ?3, ?4)",
     fields: [inode, path, file_type],
 );
 
@@ -605,9 +610,10 @@ impl_corpus_signal!(DeployReadySignal, "signal_deploy_ready",
         inode INTEGER PRIMARY KEY,
         path TEXT NOT NULL,
         deploy_path TEXT NOT NULL,
+        data_hash INTEGER NOT NULL DEFAULT 0,
         discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )",
-    insert_sql: "INSERT OR REPLACE INTO signal_deploy_ready (inode, path, deploy_path) VALUES (?1, ?2, ?3)",
+    insert_sql: "INSERT OR REPLACE INTO signal_deploy_ready (inode, path, deploy_path, data_hash) VALUES (?1, ?2, ?3, ?4)",
     fields: [inode, path, deploy_path],
 );
 
@@ -616,9 +622,10 @@ impl_corpus_signal!(DeployedHealthySignal, "signal_deployed_healthy",
         inode INTEGER PRIMARY KEY,
         path TEXT NOT NULL,
         library_path TEXT NOT NULL,
+        data_hash INTEGER NOT NULL DEFAULT 0,
         discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )",
-    insert_sql: "INSERT OR REPLACE INTO signal_deployed_healthy (inode, path, library_path) VALUES (?1, ?2, ?3)",
+    insert_sql: "INSERT OR REPLACE INTO signal_deployed_healthy (inode, path, library_path, data_hash) VALUES (?1, ?2, ?3, ?4)",
     fields: [inode, path, library_path],
 );
 

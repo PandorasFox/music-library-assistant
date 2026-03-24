@@ -209,7 +209,7 @@ pub(super) struct ComputedAggregateSignal {
 impl ComputedAggregateSignal {
     /// Create a new computed signal, auto-computing the content hash.
     pub fn new(key: String, typed_data: TypedSignalWrite) -> Self {
-        let content_hash = typed_data.content_hash() as i64;
+        let content_hash = typed_data.content_hash();
         Self {
             key,
             typed_data,
@@ -230,7 +230,7 @@ pub(super) struct ComputedCorpusSignal {
 impl ComputedCorpusSignal {
     /// Create a new computed corpus signal, auto-computing the content hash.
     pub fn new(inode: i64, typed_data: TypedSignalWrite) -> Self {
-        let content_hash = typed_data.content_hash() as i64;
+        let content_hash = typed_data.content_hash();
         Self {
             inode,
             typed_data,
@@ -313,25 +313,6 @@ pub(super) fn reconcile_corpus_signals<S: CorpusSignalStore>(
         .corpus_signal_inode_hashes::<S>()
         .unwrap_or_default();
 
-    // Scalar-only types return an empty hash map from query_inode_hashes.
-    // Detect this by also fetching the inode list. If there are inodes but
-    // no hashes, we're dealing with a scalar type.
-    let existing_inodes_vec: Vec<i64> = if existing_hashes.is_empty() {
-        read_only_db
-            .corpus_signal_all_inodes::<S>()
-            .unwrap_or_default()
-    } else {
-        Vec::new() // not needed when we have hashes
-    };
-
-    let use_hashes = !existing_hashes.is_empty() || existing_inodes_vec.is_empty();
-
-    let existing_inodes: HashSet<i64> = if use_hashes {
-        existing_hashes.keys().copied().collect()
-    } else {
-        existing_inodes_vec.into_iter().collect()
-    };
-
     let computed_inodes: HashSet<i64> = computed.iter().map(|s| s.inode).collect();
 
     let mut cleared = 0;
@@ -340,35 +321,25 @@ pub(super) fn reconcile_corpus_signals<S: CorpusSignalStore>(
     let mut unchanged = 0;
 
     // Stale: exist in DB but not computed -> clear
-    for &inode in &existing_inodes {
+    for &inode in existing_hashes.keys() {
         if !computed_inodes.contains(&inode) {
             sender.clear_corpus_signal::<S>(inode, witness);
             cleared += 1;
         }
     }
 
-    // For each computed signal: check hash or existence to decide write vs skip
+    // For each computed signal: check hash to decide write vs skip
     let mut batch: Vec<TypedSignalWrite> = Vec::new();
     for signal in &computed {
-        if use_hashes {
-            match existing_hashes.get(&signal.inode) {
-                Some(&existing_hash) if existing_hash == signal.content_hash => {
-                    unchanged += 1;
-                }
-                Some(_) => {
-                    batch.push(signal.typed_data.clone());
-                    updated += 1;
-                }
-                None => {
-                    batch.push(signal.typed_data.clone());
-                    new += 1;
-                }
-            }
-        } else {
-            // Scalar-only: existence check
-            if existing_inodes.contains(&signal.inode) {
+        match existing_hashes.get(&signal.inode) {
+            Some(&existing_hash) if existing_hash == signal.content_hash => {
                 unchanged += 1;
-            } else {
+            }
+            Some(_) => {
+                batch.push(signal.typed_data.clone());
+                updated += 1;
+            }
+            None => {
                 batch.push(signal.typed_data.clone());
                 new += 1;
             }

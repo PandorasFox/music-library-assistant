@@ -14,6 +14,17 @@ use crate::db::table_schema::{TableEntry, TableKind};
 /// BLOB signals hash serialized bytes; scalar signals hash field values.
 pub trait SignalContentHash {
     fn content_hash_fields(&self, hasher: &mut std::hash::DefaultHasher);
+
+    /// Compute a deterministic content hash for DB storage and reconciliation.
+    ///
+    /// Both `insert()` (writes to `data_hash` column) and `reconcile_*_signals()`
+    /// (computes expected hash) call this, ensuring hash comparison is consistent.
+    fn content_hash_value(&self) -> i64 {
+        use std::hash::Hasher;
+        let mut hasher = std::hash::DefaultHasher::new();
+        self.content_hash_fields(&mut hasher);
+        hasher.finish() as i64
+    }
 }
 
 /// Declares the complete signal registry.
@@ -78,17 +89,16 @@ macro_rules! signal_registry {
 
             /// Compute a content hash for change detection.
             ///
-            /// Includes the enum discriminant for type safety.
-            pub fn content_hash(&self) -> u64 {
-                use std::hash::{Hash, Hasher};
-                let mut hasher = std::hash::DefaultHasher::new();
-                std::mem::discriminant(self).hash(&mut hasher);
+            /// Delegates to the concrete type's `content_hash_value()` so the hash
+            /// matches what `insert()` stores in the `data_hash` column. No enum
+            /// discriminant is included — reconciliation is always per-signal-type,
+            /// so the discriminant would only cause hash mismatches.
+            pub fn content_hash(&self) -> i64 {
                 match self {
-                    $(Self::$m_variant(s) => s.content_hash_fields(&mut hasher),)*
-                    $(Self::$i_variant(s) => s.content_hash_fields(&mut hasher),)*
-                    $(Self::$a_variant(s) => s.content_hash_fields(&mut hasher),)*
+                    $(Self::$m_variant(s) => s.content_hash_value(),)*
+                    $(Self::$i_variant(s) => s.content_hash_value(),)*
+                    $(Self::$a_variant(s) => s.content_hash_value(),)*
                 }
-                hasher.finish()
             }
         }
 

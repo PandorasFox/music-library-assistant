@@ -51,6 +51,7 @@ pub fn router(state: AppState) -> Router {
         .route("/status", get(api::queries::status))
         .route("/config", get(api::queries::config))
         .route("/config-kdl", get(api::queries::config_kdl))
+        .route("/dir-config", get(api::queries::dir_config))
         .route("/queries/{name}", get(api::queries::domain_query).post(api::queries::domain_query))
         // Transactions
         .route("/tx/start", post(api::transactions::start))

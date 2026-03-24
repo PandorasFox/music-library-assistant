@@ -27,13 +27,15 @@ pub enum TreeBrowserAction {
     /// Edit single file (Enter on file)
     EditFile(String),
 
-    /// Open directory config panel (C on source root)
+    /// Open directory config editor (C on corpus directory).
+    /// Carries the relative path. The app layer fetches config via protocol
+    /// and opens the editor.
     OpenDirConfig(String),
 
-    /// Save dir config edits (Enter on Save button)
+    /// Save dir config edits (Enter on Save button in panel).
     SaveDirConfig,
 
-    /// Close dir config panel (Esc or Discard)
+    /// Close dir config panel (Esc or Discard button).
     CloseDirConfig,
 
     /// Review pending transaction (R key with pending dir config edits)

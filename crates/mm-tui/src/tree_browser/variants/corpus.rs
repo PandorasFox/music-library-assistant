@@ -36,16 +36,118 @@ pub enum CorpusBrowserFocus {
     TreeBrowser,
     /// Focus is on the search bar
     SearchBar,
-    /// Focus is on the config panel
-    ConfigPanel,
+    /// Focus is on the dir config editor panel
+    DirConfigPanel,
 }
 
-/// Focus within the config panel
+/// Focus within the dir config panel (fields vs buttons).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PanelFocus {
+pub enum DirConfigPanelFocus {
     #[default]
     Fields,
     Buttons,
+}
+
+/// TUI-specific state layered on top of mm-ui's DirConfigEditorState.
+#[derive(Debug)]
+pub struct DirConfigPanel {
+    pub editor: mm_ui::dir_config_editor::DirConfigEditorState,
+    /// 0=libraries, 1=can_stash_dupes, 2=interior_dupes, 3=path_schema, 4=enable_acoustid, 5=pinned_release
+    pub field_cursor: usize,
+    pub focus: DirConfigPanelFocus,
+    pub button_cursor: usize,
+    pub lib_cursor: Option<usize>,
+    pub text_input: Option<TextInputState>,
+}
+
+impl DirConfigPanel {
+    /// Render the dir config panel using the shared DetailPanel widget.
+    pub fn render(&self, f: &mut Frame, area: Rect) {
+        let e = &self.editor;
+        let orig = &e.original;
+
+        let orig_libs = orig.as_ref().map(|s| &s.libraries[..]).unwrap_or(&[]);
+        let orig_csd = orig.as_ref().and_then(|s| s.can_stash_dupes);
+        let orig_id = orig.as_ref().and_then(|s| s.interior_dupes);
+        let orig_ps = orig.as_ref().and_then(|s| s.path_schema.as_ref().map(|p| p.template.clone()));
+        let orig_ea = orig.as_ref().and_then(|s| s.enable_acoustid);
+        let orig_pr = orig.as_ref().and_then(|s| s.pinned_release.clone());
+
+        let fields = vec![
+            DetailField {
+                label: "Libraries",
+                widget: if e.libraries.is_empty() {
+                    DetailWidget::Text { value: "(none)", edited: false }
+                } else {
+                    DetailWidget::StringItems {
+                        items: &e.libraries,
+                        cursor: self.lib_cursor,
+                        edited: e.libraries != orig_libs,
+                    }
+                },
+            },
+            DetailField {
+                label: "Can stash dupes",
+                widget: DetailWidget::OptBool {
+                    value: e.can_stash_dupes,
+                    edited: e.can_stash_dupes != orig_csd,
+                },
+            },
+            DetailField {
+                label: "Interior dupes",
+                widget: DetailWidget::OptBool {
+                    value: e.interior_dupes,
+                    edited: e.interior_dupes != orig_id,
+                },
+            },
+            DetailField {
+                label: "Path schema",
+                widget: DetailWidget::Text {
+                    value: e.path_schema.as_deref().unwrap_or("(inherit)"),
+                    edited: e.path_schema != orig_ps,
+                },
+            },
+            DetailField {
+                label: "AcoustID lookup",
+                widget: DetailWidget::OptBool {
+                    value: e.enable_acoustid,
+                    edited: e.enable_acoustid != orig_ea,
+                },
+            },
+            DetailField {
+                label: "Pinned release",
+                widget: DetailWidget::Text {
+                    value: e.pinned_release.as_deref().unwrap_or("(none)"),
+                    edited: e.pinned_release != orig_pr,
+                },
+            },
+        ];
+
+        let buttons = vec![
+            PanelButton {
+                label: "Save",
+                color: Color::Green,
+                selected: self.focus == DirConfigPanelFocus::Buttons && self.button_cursor == 0,
+            },
+            PanelButton {
+                label: "Discard",
+                color: Color::Red,
+                selected: self.focus == DirConfigPanelFocus::Buttons && self.button_cursor == 1,
+            },
+        ];
+
+        let params = DetailPanelParams {
+            title: &format!("Config: {}", e.source_path.display()),
+            border_color: Color::Cyan,
+            fields: &fields,
+            field_cursor: self.field_cursor,
+            buttons: &buttons,
+            focus_on_buttons: self.focus == DirConfigPanelFocus::Buttons,
+            hint: None,
+        };
+
+        render_detail_panel(f, area, &params);
+    }
 }
 
 /// Search result state
@@ -62,135 +164,6 @@ impl SearchState {
     pub fn clear(&mut self) {
         self.matches.clear();
         self.first_match_idx = None;
-    }
-}
-
-/// Per-field help text for the directory config panel.
-const DIR_FIELD_HELP: [&[&str]; 6] = [
-    &["TODO"], // 0: Libraries
-    &["TODO"], // 1: Can stash dupes
-    &["TODO"], // 2: Interior dupes
-    &["TODO"], // 3: Path schema
-    &["TODO"], // 4: AcoustID lookup
-    &["TODO"], // 5: Pinned release
-];
-
-/// State for the directory config panel.
-#[derive(Debug)]
-pub struct DirConfigPanelState {
-    /// Which source directory we're editing (relative path).
-    pub source_path: PathBuf,
-    // Editable copies (None = inherit from parent):
-    pub libraries: Vec<String>,
-    pub can_stash_dupes: Option<bool>,
-    pub interior_dupes: Option<bool>,
-    pub path_schema: Option<String>,
-    pub enable_acoustid: Option<bool>,
-    pub pinned_release: Option<String>,
-    // Originals for dirty checking:
-    pub orig_libraries: Vec<String>,
-    pub orig_can_stash_dupes: Option<bool>,
-    pub orig_interior_dupes: Option<bool>,
-    pub orig_path_schema: Option<String>,
-    pub orig_enable_acoustid: Option<bool>,
-    pub orig_pinned_release: Option<String>,
-    // UI state:
-    /// 0=libraries, 1=can_stash_dupes, 2=interior_dupes, 3=path_schema, 4=enable_acoustid, 5=pinned_release
-    pub field_cursor: usize,
-    pub focus: PanelFocus,
-    pub button_cursor: usize,
-    pub lib_cursor: Option<usize>,
-    pub text_input: Option<TextInputState>,
-    pub wizard_state: WizardState,
-}
-
-impl DirConfigPanelState {
-    /// Whether the panel has any edits compared to the original values.
-    pub fn has_edits(&self) -> bool {
-        self.libraries != self.orig_libraries
-            || self.can_stash_dupes != self.orig_can_stash_dupes
-            || self.interior_dupes != self.orig_interior_dupes
-            || self.path_schema != self.orig_path_schema
-            || self.enable_acoustid != self.orig_enable_acoustid
-            || self.pinned_release != self.orig_pinned_release
-    }
-
-    /// Render the config panel.
-    pub fn render_config_panel(&self, f: &mut Frame, area: Rect) {
-        let fields = vec![
-            DetailField {
-                label: "Libraries",
-                widget: if self.libraries.is_empty() {
-                    DetailWidget::Text { value: "(none)", edited: false }
-                } else {
-                    DetailWidget::StringItems {
-                        items: &self.libraries,
-                        cursor: self.lib_cursor,
-                        edited: self.libraries != self.orig_libraries,
-                    }
-                },
-            },
-            DetailField {
-                label: "Can stash dupes",
-                widget: DetailWidget::OptBool {
-                    value: self.can_stash_dupes,
-                    edited: self.can_stash_dupes != self.orig_can_stash_dupes,
-                },
-            },
-            DetailField {
-                label: "Interior dupes",
-                widget: DetailWidget::OptBool {
-                    value: self.interior_dupes,
-                    edited: self.interior_dupes != self.orig_interior_dupes,
-                },
-            },
-            DetailField {
-                label: "Path schema",
-                widget: DetailWidget::Text {
-                    value: self.path_schema.as_deref().unwrap_or("(inherit)"),
-                    edited: self.path_schema != self.orig_path_schema,
-                },
-            },
-            DetailField {
-                label: "AcoustID lookup",
-                widget: DetailWidget::OptBool {
-                    value: self.enable_acoustid,
-                    edited: self.enable_acoustid != self.orig_enable_acoustid,
-                },
-            },
-            DetailField {
-                label: "Pinned release",
-                widget: DetailWidget::Text {
-                    value: self.pinned_release.as_deref().unwrap_or("(none)"),
-                    edited: self.pinned_release != self.orig_pinned_release,
-                },
-            },
-        ];
-
-        let buttons = vec![
-            PanelButton {
-                label: "Save",
-                color: Color::Green,
-                selected: self.focus == PanelFocus::Buttons && self.button_cursor == 0,
-            },
-            PanelButton {
-                label: "Discard",
-                color: Color::Red,
-                selected: self.focus == PanelFocus::Buttons && self.button_cursor == 1,
-            },
-        ];
-
-        let params = DetailPanelParams {
-            title: &format!("Config: {}", self.source_path.display()),
-            border_color: Color::Cyan,
-            fields: &fields,
-            field_cursor: self.field_cursor,
-            buttons: &buttons,
-            focus_on_buttons: self.focus == PanelFocus::Buttons,
-            hint: None,
-        };
-
-        render_detail_panel(f, area, &params);
     }
 }
 
@@ -211,8 +184,8 @@ pub struct CorpusBrowserVariant {
     match_selection_mode: bool,
     /// Index in matches list when selecting
     match_selection_idx: usize,
-    /// Directory config panel state (open when Some)
-    pub config_panel: Option<DirConfigPanelState>,
+    /// Dir config editor panel (open when Some).
+    pub dir_config_panel: Option<DirConfigPanel>,
     /// Relative paths of dirs with staged config edits (for [*] marker).
     pending_edit_paths: HashSet<PathBuf>,
     /// Wizard state for Z-key packing info popup/pane.
@@ -253,7 +226,7 @@ impl CorpusBrowserVariant {
             search: SearchState::default(),
             match_selection_mode: false,
             match_selection_idx: 0,
-            config_panel: None,
+            dir_config_panel: None,
             pending_edit_paths: HashSet::new(),
             wizard_state: WizardState::default(),
             wizard_offer: None,
@@ -277,14 +250,14 @@ impl CorpusBrowserVariant {
         &self.corpus_dir_rel
     }
 
-    /// Set focus to config panel.
-    pub fn set_focus_config_panel(&mut self) {
-        self.focus = CorpusBrowserFocus::ConfigPanel;
-    }
-
     /// Set focus to tree browser.
     pub fn set_focus_tree(&mut self) {
         self.focus = CorpusBrowserFocus::TreeBrowser;
+    }
+
+    /// Set focus to dir config panel.
+    pub fn set_focus_dir_config_panel(&mut self) {
+        self.focus = CorpusBrowserFocus::DirConfigPanel;
     }
 
     /// Set the pending edit paths (relative paths of dirs with staged config edits).
@@ -433,22 +406,19 @@ impl CorpusBrowserVariant {
             return true;
         }
 
-        // Config panel escape
-        if self.focus == CorpusBrowserFocus::ConfigPanel {
-            if let Some(ref mut panel) = self.config_panel {
-                // If in text input, cancel input
+        // Dir config panel escape
+        if self.focus == CorpusBrowserFocus::DirConfigPanel {
+            if let Some(ref mut panel) = self.dir_config_panel {
                 if panel.text_input.is_some() {
                     panel.text_input = None;
                     return true;
                 }
-                // If focus is on buttons, go back to fields
-                if panel.focus == PanelFocus::Buttons {
-                    panel.focus = PanelFocus::Fields;
+                if panel.focus == DirConfigPanelFocus::Buttons {
+                    panel.focus = DirConfigPanelFocus::Fields;
                     return true;
                 }
             }
-            // Close panel
-            self.config_panel = None;
+            self.dir_config_panel = None;
             self.focus = CorpusBrowserFocus::TreeBrowser;
             return true;
         }
@@ -475,8 +445,8 @@ impl CorpusBrowserVariant {
 
     /// Check if variant wants to capture navigation keys.
     pub fn wants_navigation_keys(&self) -> bool {
-        self.filter_active
-            || self.focus == CorpusBrowserFocus::ConfigPanel
+        self.focus == CorpusBrowserFocus::DirConfigPanel
+            || self.filter_active
             || self.match_selection_mode
             || self.focus == CorpusBrowserFocus::SearchBar
             || !self.search.matches.is_empty()
@@ -491,10 +461,10 @@ impl CorpusBrowserVariant {
     ) -> VariantInputResult {
         let none = VariantInputResult { tree_action: None, browser_action: None };
 
-        // Config panel has priority when focused
-        if self.focus == CorpusBrowserFocus::ConfigPanel {
+        // Dir config panel has priority when focused
+        if self.focus == CorpusBrowserFocus::DirConfigPanel {
             return VariantInputResult {
-                tree_action: self.handle_config_panel_input(action),
+                tree_action: self.handle_dir_config_input(action),
                 browser_action: None,
             };
         }
@@ -531,11 +501,11 @@ impl CorpusBrowserVariant {
             };
         }
 
-        // Route based on focus
+        // Route based on focus (DirConfigPanel handled by early return above)
         let tree_action = match self.focus {
             CorpusBrowserFocus::SearchBar => self.handle_search_bar_input(action, browser),
             CorpusBrowserFocus::TreeBrowser => self.handle_tree_browser_input(action, browser),
-            CorpusBrowserFocus::ConfigPanel => unreachable!(),
+            CorpusBrowserFocus::DirConfigPanel => unreachable!(),
         };
         VariantInputResult { tree_action, browser_action: None }
     }
@@ -577,7 +547,7 @@ impl CorpusBrowserVariant {
                     None
                 }
             }
-            // C opens dir config panel on any corpus directory
+            // C opens dir config editor on any corpus directory
             InputAction::Char('C') => {
                 if let Some(entry) = browser.current_entry() {
                     if entry.is_dir && entry.path.starts_with(&self.corpus_dir_rel) {
@@ -631,9 +601,11 @@ impl CorpusBrowserVariant {
         }
     }
 
-    /// Handle input when config panel is focused.
-    fn handle_config_panel_input(&mut self, action: &InputAction) -> Option<TreeBrowserAction> {
-        let panel = match self.config_panel {
+    /// Handle input when dir config panel is focused.
+    fn handle_dir_config_input(&mut self, action: &InputAction) -> Option<TreeBrowserAction> {
+        use mm_ui::dir_config_editor::DirConfigEditorState;
+
+        let panel = match self.dir_config_panel {
             Some(ref mut p) => p,
             None => return None,
         };
@@ -643,19 +615,23 @@ impl CorpusBrowserVariant {
             match action {
                 InputAction::Confirm => {
                     let value = input.value().to_string();
-                    if panel.field_cursor == 3 {
-                        panel.path_schema = if value.is_empty() { None } else { Some(value) };
-                    } else if panel.field_cursor == 5 {
-                        panel.pinned_release = if value.is_empty() { None } else { Some(value) };
-                    } else if !value.is_empty() {
-                        if let Some(cursor) = panel.lib_cursor {
-                            if cursor < panel.libraries.len() {
-                                panel.libraries[cursor] = value;
+                    match panel.field_cursor {
+                        0 => {
+                            // Libraries: edit existing or add new
+                            if !value.is_empty() {
+                                if let Some(cursor) = panel.lib_cursor {
+                                    if cursor < panel.editor.libraries.len() {
+                                        panel.editor.libraries[cursor] = value;
+                                    }
+                                } else {
+                                    panel.editor.libraries.push(value);
+                                    panel.lib_cursor = Some(panel.editor.libraries.len() - 1);
+                                }
                             }
-                        } else {
-                            panel.libraries.push(value);
-                            panel.lib_cursor = Some(panel.libraries.len() - 1);
                         }
+                        3 => panel.editor.path_schema = if value.is_empty() { None } else { Some(value) },
+                        5 => panel.editor.pinned_release = if value.is_empty() { None } else { Some(value) },
+                        _ => {}
                     }
                     panel.text_input = None;
                     return None;
@@ -672,63 +648,39 @@ impl CorpusBrowserVariant {
         }
 
         // Button focus
-        if panel.focus == PanelFocus::Buttons {
+        if panel.focus == DirConfigPanelFocus::Buttons {
             match action {
-                InputAction::NavLeft => {
-                    if panel.button_cursor > 0 {
-                        panel.button_cursor -= 1;
-                    }
-                    return None;
-                }
-                InputAction::NavRight => {
-                    if panel.button_cursor < 1 {
-                        panel.button_cursor += 1;
-                    }
-                    return None;
-                }
-                InputAction::NavUp => {
-                    panel.focus = PanelFocus::Fields;
-                    return None;
-                }
+                InputAction::NavLeft => { if panel.button_cursor > 0 { panel.button_cursor -= 1; } None }
+                InputAction::NavRight => { if panel.button_cursor < 1 { panel.button_cursor += 1; } None }
+                InputAction::NavUp => { panel.focus = DirConfigPanelFocus::Fields; None }
                 InputAction::Confirm => {
                     if panel.button_cursor == 0 {
-                        return Some(TreeBrowserAction::SaveDirConfig);
+                        Some(TreeBrowserAction::SaveDirConfig)
                     } else {
-                        return Some(TreeBrowserAction::CloseDirConfig);
+                        Some(TreeBrowserAction::CloseDirConfig)
                     }
                 }
-                InputAction::Cancel => {
-                    panel.focus = PanelFocus::Fields;
-                    return None;
-                }
-                _ => return None,
+                InputAction::Cancel => { panel.focus = DirConfigPanelFocus::Fields; None }
+                _ => None,
             }
-        }
-
-        // Field focus
-        match action {
-            InputAction::NavUp => {
-                panel.wizard_state.dismiss();
-                if panel.field_cursor == 0 {
-                    if let Some(ref mut cursor) = panel.lib_cursor {
-                        if *cursor > 0 {
-                            *cursor -= 1;
-                        } else {
-                            panel.lib_cursor = None;
-                        }
-                    }
-                } else {
-                    panel.field_cursor -= 1;
-                    panel.lib_cursor = None;
-                }
-                None
-            }
-            InputAction::NavDown => {
-                panel.wizard_state.dismiss();
-                if panel.field_cursor == 0 {
-                    if !panel.libraries.is_empty() {
+        } else {
+            // Field navigation
+            match action {
+                InputAction::NavUp => {
+                    if panel.field_cursor == 0 {
                         if let Some(ref mut cursor) = panel.lib_cursor {
-                            if *cursor + 1 < panel.libraries.len() {
+                            if *cursor > 0 { *cursor -= 1; } else { panel.lib_cursor = None; }
+                        }
+                    } else {
+                        panel.field_cursor -= 1;
+                        panel.lib_cursor = None;
+                    }
+                    None
+                }
+                InputAction::NavDown => {
+                    if panel.field_cursor == 0 && !panel.editor.libraries.is_empty() {
+                        if let Some(ref mut cursor) = panel.lib_cursor {
+                            if *cursor + 1 < panel.editor.libraries.len() {
                                 *cursor += 1;
                             } else {
                                 panel.field_cursor = 1;
@@ -737,91 +689,70 @@ impl CorpusBrowserVariant {
                         } else {
                             panel.lib_cursor = Some(0);
                         }
-                    } else {
-                        panel.field_cursor = 1;
+                    } else if panel.field_cursor < 5 {
+                        panel.field_cursor += 1;
+                        panel.lib_cursor = None;
                     }
-                } else if panel.field_cursor < 5 {
-                    panel.field_cursor += 1;
+                    None
                 }
-                None
-            }
-            InputAction::CycleNext => {
-                panel.focus = PanelFocus::Buttons;
-                panel.button_cursor = 0;
-                None
-            }
-            InputAction::Confirm | InputAction::Toggle => {
-                match panel.field_cursor {
-                    0 => {
-                        if let Some(cursor) = panel.lib_cursor {
-                            if cursor < panel.libraries.len() {
-                                let mut input = TextInputState::new();
-                                input.set_value(panel.libraries[cursor].clone());
-                                panel.text_input = Some(input);
+                InputAction::CycleNext => {
+                    panel.focus = DirConfigPanelFocus::Buttons;
+                    panel.button_cursor = 0;
+                    None
+                }
+                InputAction::Confirm | InputAction::Toggle => {
+                    match panel.field_cursor {
+                        0 => {
+                            if let Some(cursor) = panel.lib_cursor {
+                                if cursor < panel.editor.libraries.len() {
+                                    let mut input = TextInputState::new();
+                                    input.set_value(panel.editor.libraries[cursor].clone());
+                                    panel.text_input = Some(input);
+                                }
                             }
                         }
-                    }
-                    1 => {
-                        panel.can_stash_dupes = cycle_opt_bool(panel.can_stash_dupes);
-                    }
-                    2 => {
-                        panel.interior_dupes = cycle_opt_bool(panel.interior_dupes);
-                    }
-                    3 => {
-                        let mut input = TextInputState::new();
-                        if let Some(ref schema) = panel.path_schema {
-                            input.set_value(schema.clone());
+                        1 => panel.editor.can_stash_dupes = DirConfigEditorState::cycle_opt_bool(panel.editor.can_stash_dupes),
+                        2 => panel.editor.interior_dupes = DirConfigEditorState::cycle_opt_bool(panel.editor.interior_dupes),
+                        3 => {
+                            let mut input = TextInputState::new();
+                            if let Some(ref schema) = panel.editor.path_schema {
+                                input.set_value(schema.clone());
+                            }
+                            panel.text_input = Some(input);
                         }
-                        panel.text_input = Some(input);
-                    }
-                    4 => {
-                        panel.enable_acoustid = cycle_opt_bool(panel.enable_acoustid);
-                    }
-                    5 => {
-                        let mut input = TextInputState::new();
-                        if let Some(ref release) = panel.pinned_release {
-                            input.set_value(release.clone());
+                        4 => panel.editor.enable_acoustid = DirConfigEditorState::cycle_opt_bool(panel.editor.enable_acoustid),
+                        5 => {
+                            let mut input = TextInputState::new();
+                            if let Some(ref release) = panel.editor.pinned_release {
+                                input.set_value(release.clone());
+                            }
+                            panel.text_input = Some(input);
                         }
-                        panel.text_input = Some(input);
+                        _ => {}
                     }
-                    _ => {}
+                    None
                 }
-                None
-            }
-            InputAction::Char('n') => {
-                if panel.field_cursor == 0 {
+                InputAction::Char('n') if panel.field_cursor == 0 => {
                     panel.lib_cursor = None;
                     panel.text_input = Some(TextInputState::new());
+                    None
                 }
-                None
-            }
-            InputAction::Char('x') => {
-                if panel.field_cursor == 0 {
+                InputAction::Char('x') if panel.field_cursor == 0 => {
                     if let Some(cursor) = panel.lib_cursor {
-                        if cursor < panel.libraries.len() {
-                            panel.libraries.remove(cursor);
-                            if panel.libraries.is_empty() {
+                        if cursor < panel.editor.libraries.len() {
+                            panel.editor.libraries.remove(cursor);
+                            if panel.editor.libraries.is_empty() {
                                 panel.lib_cursor = None;
-                            } else if cursor >= panel.libraries.len() {
-                                panel.lib_cursor = Some(panel.libraries.len() - 1);
+                            } else if cursor >= panel.editor.libraries.len() {
+                                panel.lib_cursor = Some(panel.editor.libraries.len() - 1);
                             }
                         }
                     }
+                    None
                 }
-                None
+                InputAction::Cancel => Some(TreeBrowserAction::CloseDirConfig),
+                _ => None,
             }
-            InputAction::Char('z') | InputAction::Char('Z') => {
-                let help = DIR_FIELD_HELP[panel.field_cursor];
-                if !help.is_empty() {
-                    let lines: Vec<Line<'static>> =
-                        help.iter().map(|s| Line::raw(s.to_string())).collect();
-                    let offer = WizardOffer::Popup(lines);
-                    panel.wizard_state.advance(&offer);
-                }
-                None
-            }
-            InputAction::Cancel => Some(TreeBrowserAction::CloseDirConfig),
-            _ => None,
         }
     }
 
@@ -1196,14 +1127,5 @@ impl CorpusBrowserVariant {
 
         f.render_widget(Clear, modal_area);
         f.render_widget(Paragraph::new(all_lines).block(block), modal_area);
-    }
-}
-
-/// Cycle an Option<bool> through None → Some(true) → Some(false) → None.
-fn cycle_opt_bool(v: Option<bool>) -> Option<bool> {
-    match v {
-        None => Some(true),
-        Some(true) => Some(false),
-        Some(false) => None,
     }
 }

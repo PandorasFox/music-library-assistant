@@ -98,14 +98,25 @@ impl ObservedInodes {
 
 /// Build the zone→root list for watcher start commands.
 ///
-/// Always includes corpus. Includes library if its directory exists on disk.
-fn watched_zones() -> Vec<(crate::db::types::Zone, std::path::PathBuf)> {
+/// Always includes corpus. Includes library if its directory exists on disk,
+/// filtered to only configured deployment directories.
+fn watched_zones(config: Option<&crate::config::Config>) -> Vec<fs_thread::WatchedZone> {
     let resolver = crate::corpus::paths::get_resolver();
-    let mut zones = vec![(crate::db::types::Zone::Corpus, resolver.corpus_dir())];
+    let mut zones = vec![fs_thread::WatchedZone {
+        zone: crate::db::types::Zone::Corpus,
+        root: resolver.corpus_dir(),
+        allowed_subdirs: None,
+    }];
 
     let libraries_dir = resolver.libraries_dir();
     if libraries_dir.is_dir() {
-        zones.push((crate::db::types::Zone::Library, libraries_dir));
+        let allowed_subdirs = config
+            .map(crate::meta::computations::helpers::get_configured_library_names);
+        zones.push(fs_thread::WatchedZone {
+            zone: crate::db::types::Zone::Library,
+            root: libraries_dir,
+            allowed_subdirs,
+        });
     }
 
     zones
@@ -614,6 +625,11 @@ impl Witch {
                                         .unwrap_or_default();
                                     QueryResponse::ConfigKdl(kdl)
                                 }
+                                QueryPayload::GetDirConfig(path) => {
+                                    let sd = w.read_config(|c| c.get_raw_source_dir(&path).cloned())
+                                        .ok_or(ProtocolError::NotReady)?;
+                                    QueryResponse::DirConfig(sd)
+                                }
                                 QueryPayload::Domain(_) => {
                                     unreachable!("domain queries handled above")
                                 }
@@ -973,7 +989,9 @@ impl Witch {
             crate::logging::log_general("[WITCH] Watcher poll triggered — re-walking zones");
         } else {
             self.watcher_state = WatcherState::InitialScan;
-            self.fs_watcher.start(watched_zones(), db_cache);
+            let config = self.shared_config.as_ref()
+                .map(|sc| config::read_shared_config(sc));
+            self.fs_watcher.start(watched_zones(config.as_deref()), db_cache);
             crate::logging::log_general("[WITCH] Watcher started — initial scan in progress");
         }
 

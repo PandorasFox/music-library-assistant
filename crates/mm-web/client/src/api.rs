@@ -190,6 +190,15 @@ pub async fn get_config_kdl() -> Result<String, JsValue> {
         .ok_or_else(|| JsValue::from_str("expected string response from /config-kdl"))
 }
 
+/// GET /dir-config?path=... → Option<SourceDir>
+pub async fn get_dir_config(path: &str) -> Result<Option<mm_meta::config::SourceDir>, JsValue> {
+    let url = format!(
+        "/dir-config?path={}",
+        js_sys::encode_uri_component(path)
+    );
+    from_json(get(&url).await?)
+}
+
 /// GET /queries/insights → InsightsData
 pub async fn get_insights() -> Result<InsightsData, JsValue> {
     from_json(get("/queries/insights").await?)

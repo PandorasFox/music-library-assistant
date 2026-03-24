@@ -123,6 +123,8 @@ pub enum QueryPayload {
     Config,
     /// Raw KDL text of config.kdl (for source detection in config editor).
     ConfigKdl,
+    /// Raw source directory config for a specific corpus-relative path.
+    GetDirConfig(PathBuf),
     /// Domain-specific DB query (dispatched to cache thread).
     Domain(Box<crate::domain_queries::DomainQueryPayload>),
 }
@@ -136,6 +138,8 @@ pub enum QueryResponse {
     Config(Box<Config>),
     /// Raw KDL text from config.kdl.
     ConfigKdl(String),
+    /// Raw source directory config (None if no explicit config for this path).
+    DirConfig(Option<crate::config::SourceDir>),
     /// Domain query result.
     Domain(crate::domain_queries::DomainQueryResult),
 }
@@ -188,6 +192,26 @@ impl ProtocolQuery for ConfigQuery {
         match resp {
             QueryResponse::Config(c) => *c,
             _ => unreachable!("protocol bug: expected Config response"),
+        }
+    }
+}
+
+/// Query for the raw source directory config at a specific corpus-relative path.
+pub struct DirConfigQuery {
+    pub path: PathBuf,
+}
+
+impl ProtocolQuery for DirConfigQuery {
+    type Response = Option<crate::config::SourceDir>;
+
+    fn into_payload(self) -> QueryPayload {
+        QueryPayload::GetDirConfig(self.path)
+    }
+
+    fn extract_response(resp: QueryResponse) -> Option<crate::config::SourceDir> {
+        match resp {
+            QueryResponse::DirConfig(sd) => sd,
+            _ => unreachable!("protocol bug: expected DirConfig response"),
         }
     }
 }

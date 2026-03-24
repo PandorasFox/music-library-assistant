@@ -57,6 +57,8 @@ pub enum BrowserAction {
     SelectDirectory(String),
     /// Text search requested. Carries query string.
     RequestSearch(String),
+    /// Open directory config editor. Carries relative path.
+    OpenDirConfig(String),
 }
 
 // ============================================================================

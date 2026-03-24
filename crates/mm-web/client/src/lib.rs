@@ -393,9 +393,23 @@ async fn load_view_for_route(route: &Route) -> Result<Node, JsValue> {
         Route::Search(_) => {
             Ok(views::render_search_view())
         }
-        Route::Files(_) => {
+        Route::Files(ref r) => {
             let data = api::get_directory_listing(None).await?;
-            Ok(views::render_files_view(&data))
+            let mut content = views::render_files_view(&data);
+
+            // If panel=config with a path, overlay the dir config editor
+            if r.panel.as_deref() == Some("config") {
+                if let Some(ref path) = r.path {
+                    let source_dir = api::get_dir_config(path).await?;
+                    let editor = views::render_dir_config_editor(path, &source_dir);
+                    content = mm_ui::html::div()
+                        .child(content)
+                        .child(editor)
+                        .into();
+                }
+            }
+
+            Ok(content)
         }
 
         // -- Overlay views --
@@ -1861,6 +1875,7 @@ async fn do_approve_releases(release_ids_json: &str) -> Result<(), JsValue> {
         .map_err(|e| JsValue::from_str(&format!("deserialize config: {e}")))?;
     let locales = &config.opinions.external_matching.preferred_locales;
     let routing = &config.opinions.external_matching.credit_routing;
+    let tag_names = &config.opinions.external_matching.mb_tag_names;
 
     // Build decisions using shared mm-ui logic.
     let (decisions, _skipped) = build_release_approval_decisions(
@@ -1869,6 +1884,7 @@ async fn do_approve_releases(release_ids_json: &str) -> Result<(), JsValue> {
         &staging.inode_tags,
         locales,
         routing,
+        tag_names,
     );
 
     if decisions.is_empty() {
@@ -2356,5 +2372,161 @@ pub fn mm_expand_dir(path: &str) {
             // Collapse.
             el.set_attribute("style", "display:none").ok();
         }
+    }
+}
+
+// ============================================================================
+// Dir Config Editor
+// ============================================================================
+
+/// Navigate to the dir config editor for a given path.
+#[wasm_bindgen]
+pub fn mm_open_dir_config(path: &str) {
+    use mm_ui::route::{FilesRoute, Route};
+    let route = Route::Files(FilesRoute {
+        path: Some(path.to_string()),
+        panel: Some("config".to_string()),
+        ..Default::default()
+    });
+    navigate_to(&route);
+    spawn_local(async {
+        load_from_hash().await.ok();
+    });
+}
+
+/// Cancel the dir config editor — navigate back to files view.
+#[wasm_bindgen]
+pub fn mm_dir_config_cancel() {
+    use mm_ui::route::{FilesRoute, Route};
+    navigate_to(&Route::Files(FilesRoute::default()));
+    spawn_local(async {
+        load_from_hash().await.ok();
+    });
+}
+
+/// Save dir config edits — reads form values, builds mutation, auto-confirms.
+#[wasm_bindgen]
+pub fn mm_dir_config_save(path: &str) {
+    let dir_path = path.to_string();
+    spawn_local(async move {
+        if let Err(e) = do_dir_config_save(&dir_path).await {
+            web_sys::console::error_1(&format!("dir config save error: {e:?}").into());
+        }
+    });
+}
+
+async fn do_dir_config_save(dir_path: &str) -> Result<(), JsValue> {
+    use mm_meta::config::{Config, SourceDir};
+    use mm_meta::decisions::Decision;
+    use mm_meta::mutations::dir_config_edit::ApplyDirConfigEditMutation;
+    use mm_meta::mutations::Mutation;
+    use std::path::PathBuf;
+
+    let doc = web_sys::window().unwrap().document().unwrap();
+
+    // Read form values
+    let libraries_str = get_input_value(&doc, "dc-libraries");
+    let libraries: Vec<String> = libraries_str
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let can_stash_dupes = parse_tri_state(&doc, "dc-can-stash-dupes");
+    let interior_dupes = parse_tri_state(&doc, "dc-interior-dupes");
+    let enable_acoustid = parse_tri_state(&doc, "dc-enable-acoustid");
+
+    let path_schema_str = get_input_value(&doc, "dc-path-schema");
+    let path_schema = if path_schema_str.is_empty() { None } else { Some(path_schema_str) };
+
+    let pinned_release_str = get_input_value(&doc, "dc-pinned-release");
+    let pinned_release = if pinned_release_str.is_empty() { None } else { Some(pinned_release_str) };
+
+    let source_path = PathBuf::from(dir_path);
+
+    // Fetch current state for old_dir
+    let old_source_dir = api::get_dir_config(dir_path).await?;
+    let old_dir = old_source_dir.unwrap_or_else(|| SourceDir {
+        path: source_path.clone(),
+        libraries: vec![],
+        can_stash_dupes: None,
+        interior_dupes: None,
+        path_schema: None,
+        enable_acoustid: None,
+        pinned_release: None,
+    });
+
+    let new_dir = SourceDir {
+        path: source_path.clone(),
+        libraries,
+        can_stash_dupes,
+        interior_dupes,
+        path_schema: path_schema
+            .as_ref()
+            .and_then(|t| mm_meta::config::path_schema::parse_path_schema(t).ok()),
+        enable_acoustid,
+        pinned_release,
+    };
+
+    // Build new_config with the edit applied
+    let old_config: Config = api_deserialize(&api::get_config_json().await?, "Config")?;
+    let mut new_config = old_config;
+    let mut found = false;
+    for sd in &mut new_config.source_dirs {
+        if sd.path == source_path {
+            *sd = new_dir.clone();
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        new_config.source_dirs.push(new_dir.clone());
+    }
+    new_config.source_dirs.retain(|sd| !sd.is_default());
+
+    let mutation = Mutation::ApplyDirConfigEdit(Box::new(ApplyDirConfigEditMutation {
+        source_path: source_path.clone(),
+        old_dir,
+        new_dir,
+        new_config,
+    }));
+
+    let decision = Decision {
+        label: format!("Dir config: {}", dir_path),
+        mutations: vec![mutation],
+    };
+
+    // Auto-confirm: start transaction, add decision, confirm
+    api::tx_start("Dir config edit").await?;
+    api::tx_add(
+        &mm_ui::decision_keys::dir_config_edit(source_path),
+        &decision,
+    )
+    .await?;
+    api::tx_confirm().await?;
+
+    // Navigate back to files view
+    navigate_to(&mm_ui::route::Route::Files(mm_ui::route::FilesRoute::default()));
+    load_from_hash().await?;
+    Ok(())
+}
+
+fn get_input_value(doc: &web_sys::Document, id: &str) -> String {
+    doc.get_element_by_id(id)
+        .and_then(|el| el.dyn_into::<web_sys::HtmlInputElement>().ok())
+        .map(|el| el.value())
+        .or_else(|| {
+            doc.get_element_by_id(id)
+                .and_then(|el| el.dyn_into::<web_sys::HtmlSelectElement>().ok())
+                .map(|el| el.value())
+        })
+        .unwrap_or_default()
+}
+
+fn parse_tri_state(doc: &web_sys::Document, id: &str) -> Option<bool> {
+    match get_input_value(doc, id).as_str() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
     }
 }

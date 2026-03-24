@@ -76,16 +76,16 @@ fn render_corpus_browser(
     let wizard_offer_snapshot = v.wizard_offer().cloned();
 
     // Determine if we should show art preview:
-    // - Config panel NOT open
+    // - Dir config panel NOT open
     // - Wizard pane NOT showing
     // - Selected entry is a file (not directory)
-    let show_art = v.config_panel.is_none()
+    let show_art = v.dir_config_panel.is_none()
         && !wizard_state.is_showing_pane()
         && browser.current_entry().is_some_and(|e| !e.is_dir);
 
     let mut tree_area = content_area;
 
-    if v.config_panel.is_some() {
+    if v.dir_config_panel.is_some() {
         // Horizontal split: tree (65%) | config panel (35%)
         let h_chunks = Layout::default()
             .direction(Direction::Horizontal)
@@ -96,8 +96,8 @@ fn render_corpus_browser(
         render_corpus_tree(f, h_chunks[0], browser, variant, &pending_edit_paths, &corpus_dir_rel, click_targets);
 
         let BrowserVariant::CorpusBrowser(ref v) = variant;
-        if let Some(ref panel) = v.config_panel {
-            panel.render_config_panel(f, h_chunks[1]);
+        if let Some(ref panel) = v.dir_config_panel {
+            panel.render(f, h_chunks[1]);
         }
     } else if wizard_state.is_showing_pane() {
         // Horizontal split: tree (60%) | wizard pane (40%)
@@ -401,7 +401,7 @@ fn render_tree_pane(
 fn render_hints(f: &mut Frame, area: Rect, browser: &DirectoryBrowser, variant: &BrowserVariant) {
     let BrowserVariant::CorpusBrowser(ref v) = variant;
 
-    let hints = if v.config_panel.is_some() {
+    let hints = if v.dir_config_panel.is_some() {
         Line::from(vec![
             control_colors::nav("^v"),
             control_colors::text(" nav  "),

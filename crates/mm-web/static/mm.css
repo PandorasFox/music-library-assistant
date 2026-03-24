@@ -529,6 +529,13 @@ html, body {
     min-width: 10ch;
 }
 
+.mm-edit-inodes {
+    color: var(--c-magenta);
+    max-width: 30vw;
+    padding-left: 2ch;
+    text-indent: -2ch;
+}
+
 .mm-edit-diff {
     flex: 1;
 }
@@ -877,6 +884,85 @@ html, body {
     padding-left: 1rem;
     border-left: 1px solid var(--c-fg-muted);
     margin-left: 0.4rem;
+}
+
+.mm-dir-config-btn {
+    margin-left: 0.6rem;
+    font-size: 0.75rem;
+    color: var(--c-fg-dim);
+    background: var(--c-bg-alt);
+    border: 1px solid var(--c-fg-muted);
+    border-radius: 3px;
+    padding: 0.1rem 0.4rem;
+    cursor: pointer;
+}
+
+.mm-dir-config-btn:hover {
+    color: var(--c-cyan);
+    border-color: var(--c-cyan);
+}
+
+/* ============================================================
+ * Dir Config Editor
+ * ============================================================ */
+
+.mm-dir-config-editor {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: var(--c-bg);
+    border: 2px solid var(--c-cyan);
+    border-radius: 6px;
+    padding: 1.2rem 1.5rem;
+    min-width: 380px;
+    max-width: 500px;
+    z-index: 100;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+}
+
+.mm-dir-config-editor h3 {
+    margin: 0 0 1rem;
+    color: var(--c-cyan);
+    font-size: 0.95rem;
+}
+
+.mm-dir-config__field {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 0.6rem;
+}
+
+.mm-dir-config__field label {
+    min-width: 120px;
+    color: var(--c-fg-dim);
+    font-size: 0.85rem;
+}
+
+.mm-dir-config__field .mm-input,
+.mm-dir-config__field .mm-select {
+    flex: 1;
+    background: var(--c-bg-alt);
+    border: 1px solid var(--c-fg-muted);
+    border-radius: 3px;
+    color: var(--c-fg);
+    padding: 0.3rem 0.5rem;
+    font-family: inherit;
+    font-size: 0.85rem;
+}
+
+.mm-dir-config__field .mm-input:focus,
+.mm-dir-config__field .mm-select:focus {
+    outline: none;
+    border-color: var(--c-cyan);
+}
+
+.mm-dir-config__buttons {
+    display: flex;
+    gap: 0.6rem;
+    margin-top: 1rem;
+    justify-content: flex-end;
 }
 
 /* ============================================================

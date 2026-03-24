@@ -142,30 +142,6 @@ impl TreeBrowserState {
         &mut self.variant
     }
 
-    // =========================================================================
-    // Config Panel
-    // =========================================================================
-
-    /// Set the config panel state and switch focus to it.
-    pub fn set_config_panel(&mut self, panel: variants::corpus::DirConfigPanelState) {
-        let BrowserVariant::CorpusBrowser(ref mut v) = self.variant;
-        v.config_panel = Some(panel);
-        v.set_focus_config_panel();
-    }
-
-    /// Clear the config panel and return focus to tree.
-    pub fn clear_config_panel(&mut self) {
-        let BrowserVariant::CorpusBrowser(ref mut v) = self.variant;
-        v.config_panel = None;
-        v.set_focus_tree();
-    }
-
-    /// Get a reference to the config panel state, if open.
-    pub fn config_panel(&self) -> Option<&variants::corpus::DirConfigPanelState> {
-        let BrowserVariant::CorpusBrowser(ref v) = self.variant;
-        v.config_panel.as_ref()
-    }
-
     /// Handle mouse click for cursor selection.
     pub fn handle_click(&mut self, x: u16, y: u16) {
         if let Some(id) = self.click_targets.hit_test(x, y) {
@@ -179,5 +155,25 @@ impl TreeBrowserState {
     pub fn set_pending_edit_paths(&mut self, paths: HashSet<std::path::PathBuf>) {
         let BrowserVariant::CorpusBrowser(ref mut v) = self.variant;
         v.set_pending_edit_paths(paths);
+    }
+
+    /// Open the dir config editor panel.
+    pub fn open_dir_config_panel(&mut self, panel: variants::corpus::DirConfigPanel) {
+        let BrowserVariant::CorpusBrowser(ref mut v) = self.variant;
+        v.dir_config_panel = Some(panel);
+        v.set_focus_dir_config_panel();
+    }
+
+    /// Close the dir config editor panel.
+    pub fn close_dir_config_panel(&mut self) {
+        let BrowserVariant::CorpusBrowser(ref mut v) = self.variant;
+        v.dir_config_panel = None;
+        v.set_focus_tree();
+    }
+
+    /// Get a reference to the dir config panel, if open.
+    pub fn dir_config_panel(&self) -> Option<&variants::corpus::DirConfigPanel> {
+        let BrowserVariant::CorpusBrowser(ref v) = self.variant;
+        v.dir_config_panel.as_ref()
     }
 }

@@ -90,6 +90,8 @@ pub fn th() -> Element { el("th") }
 pub fn td() -> Element { el("td") }
 pub fn input() -> Element { el("input") }
 pub fn label() -> Element { el("label") }
+pub fn select() -> Element { el("select") }
+pub fn option() -> Element { el("option") }
 pub fn a() -> Element { el("a") }
 pub fn details() -> Element { el("details") }
 pub fn summary() -> Element { el("summary") }

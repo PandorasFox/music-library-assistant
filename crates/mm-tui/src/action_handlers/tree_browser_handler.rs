@@ -30,8 +30,7 @@ impl HandleAction for tree_browser::TreeBrowserAction {
                 app.handle_lateral_cycle(widgets::LateralView::Files, false);
             }
             tree_browser::TreeBrowserAction::OpenDirConfig(rel_path) => {
-                let abs_path = app.resolver.resolve(std::path::Path::new(&rel_path));
-                app.open_dir_config_panel(abs_path);
+                app.open_dir_config_editor(rel_path);
             }
             tree_browser::TreeBrowserAction::SaveDirConfig => {
                 if let Some(gesture) = witness {
@@ -39,7 +38,7 @@ impl HandleAction for tree_browser::TreeBrowserAction {
                 }
             }
             tree_browser::TreeBrowserAction::CloseDirConfig => {
-                app.close_dir_config_panel();
+                app.close_dir_config_editor();
             }
             tree_browser::TreeBrowserAction::ReviewTransaction => {
                 app.after_staging_decisions();
@@ -49,54 +48,26 @@ impl HandleAction for tree_browser::TreeBrowserAction {
 }
 
 impl App {
-    /// Open a dir config panel for the given absolute corpus directory path.
-    fn open_dir_config_panel(&mut self, abs_path: std::path::PathBuf) {
-        let config = self.config();
-        let corpus_dir = config.storage_root.clone();
-
-        let relative = match abs_path.strip_prefix(&corpus_dir) {
-            Ok(r) => r.to_path_buf(),
-            Err(_) => return,
-        };
-
-        let (libraries, can_stash_dupes, interior_dupes, path_schema, enable_acoustid, pinned_release) =
-            match config.get_raw_source_dir(&relative) {
-                Some(sd) => (
-                    sd.libraries.clone(),
-                    sd.can_stash_dupes,
-                    sd.interior_dupes,
-                    sd.path_schema.as_ref().map(|s| s.template.clone()),
-                    sd.enable_acoustid,
-                    sd.pinned_release.clone(),
-                ),
-                None => {
-                    (vec![], None, None, None, None, None)
-                }
-            };
-        let panel = tree_browser::variants::corpus::DirConfigPanelState {
-            source_path: relative,
-            libraries: libraries.clone(),
-            can_stash_dupes,
-            interior_dupes,
-            path_schema: path_schema.clone(),
-            enable_acoustid,
-            pinned_release: pinned_release.clone(),
-            orig_libraries: libraries,
-            orig_can_stash_dupes: can_stash_dupes,
-            orig_interior_dupes: interior_dupes,
-            orig_path_schema: path_schema,
-            orig_enable_acoustid: enable_acoustid,
-            orig_pinned_release: pinned_release,
+    /// Open the dir config editor for a corpus-relative path.
+    fn open_dir_config_editor(&mut self, rel_path: String) {
+        let source_path = std::path::PathBuf::from(&rel_path);
+        let source_dir = self.query(mm_meta::protocol::DirConfigQuery {
+            path: source_path.clone(),
+        });
+        let editor = mm_ui::dir_config_editor::DirConfigEditorState::new(
+            source_path,
+            source_dir,
+        );
+        let panel = tree_browser::variants::corpus::DirConfigPanel {
+            editor,
             field_cursor: 0,
-            focus: tree_browser::variants::corpus::PanelFocus::default(),
+            focus: tree_browser::variants::corpus::DirConfigPanelFocus::default(),
             button_cursor: 0,
             lib_cursor: None,
             text_input: None,
-            wizard_state: crate::widgets::wizard::WizardState::default(),
         };
-
         if let ActiveView::CorpusBrowser(ref mut browser) = self.view {
-            browser.set_config_panel(panel);
+            browser.open_dir_config_panel(panel);
         }
     }
 
@@ -105,7 +76,7 @@ impl App {
         let (source_path, old_dir, new_dir) = {
             let panel = match self.view {
                 ActiveView::CorpusBrowser(ref browser) => {
-                    match browser.config_panel() {
+                    match browser.dir_config_panel() {
                         Some(p) => p,
                         None => return,
                     }
@@ -113,36 +84,16 @@ impl App {
                 _ => return,
             };
 
-            if !panel.has_edits() {
-                self.close_dir_config_panel();
+            if !panel.editor.has_changes() {
+                self.close_dir_config_editor();
                 return;
             }
 
-            let old_dir = mm_meta::config::SourceDir {
-                path: panel.source_path.clone(),
-                libraries: panel.orig_libraries.clone(),
-                can_stash_dupes: panel.orig_can_stash_dupes,
-                interior_dupes: panel.orig_interior_dupes,
-                path_schema: panel
-                    .orig_path_schema
-                    .as_ref()
-                    .and_then(|t| mm_meta::config::path_schema::parse_path_schema(t).ok()),
-                enable_acoustid: panel.orig_enable_acoustid,
-                pinned_release: panel.orig_pinned_release.clone(),
-            };
-            let new_dir = mm_meta::config::SourceDir {
-                path: panel.source_path.clone(),
-                libraries: panel.libraries.clone(),
-                can_stash_dupes: panel.can_stash_dupes,
-                interior_dupes: panel.interior_dupes,
-                path_schema: panel
-                    .path_schema
-                    .as_ref()
-                    .and_then(|t| mm_meta::config::path_schema::parse_path_schema(t).ok()),
-                enable_acoustid: panel.enable_acoustid,
-                pinned_release: panel.pinned_release.clone(),
-            };
-            (panel.source_path.clone(), old_dir, new_dir)
+            (
+                panel.editor.source_path.clone(),
+                panel.editor.original_source_dir(),
+                panel.editor.to_source_dir(),
+            )
         };
 
         let new_config = {
@@ -185,15 +136,15 @@ impl App {
             decision,
         );
 
-        self.close_dir_config_panel();
+        self.close_dir_config_editor();
         self.sync_browser_pending_edits();
         self.status_message = Some(format!("Dir config staged: {}", source_path.display()));
     }
 
-    /// Close the dir config panel.
-    fn close_dir_config_panel(&mut self) {
+    /// Close the dir config editor panel.
+    fn close_dir_config_editor(&mut self) {
         if let ActiveView::CorpusBrowser(ref mut browser) = self.view {
-            browser.clear_config_panel();
+            browser.close_dir_config_panel();
         }
     }
 

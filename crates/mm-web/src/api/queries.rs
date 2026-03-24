@@ -93,6 +93,28 @@ pub async fn config_kdl(
 }
 
 // ============================================================================
+// GET /dir-config?path=...
+// ============================================================================
+
+pub async fn dir_config(
+    State(state): State<AppState>,
+    BearerToken(token): BearerToken,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let path = params.get("path").cloned().unwrap_or_default();
+    let qr = send_query(
+        &state,
+        token,
+        QueryPayload::GetDirConfig(std::path::PathBuf::from(path)),
+    )
+    .await?;
+    match qr {
+        QueryResponse::DirConfig(sd) => to_json(sd),
+        _ => Err(ApiError::Internal("expected DirConfig response".into())),
+    }
+}
+
+// ============================================================================
 // GET|POST /queries/{name}
 // ============================================================================
 

@@ -982,10 +982,22 @@ pub fn render_transaction_review(
 
         // Render diff entries as a table-like layout.
         for entry in &diff_entries {
+            // Split "[inodes] TAG" labels into purple inodes + cyan tag name.
+            let label_node = if let Some(bracket_end) = entry.label.find(']') {
+                let inodes_part = &entry.label[..=bracket_end];
+                let tag_part = entry.label[bracket_end + 1..].trim_start();
+                span()
+                    .class("mm-edit-field")
+                    .child(span().class("mm-edit-inodes").text(inodes_part))
+                    .text(format!(" {tag_part}"))
+            } else {
+                span().class("mm-edit-field").text(&entry.label)
+            };
+
             decision_items.push(
                 div()
                     .class("mm-edit-row")
-                    .child(span().class("mm-edit-field").text(&entry.label))
+                    .child(label_node)
                     .child(
                         span()
                             .class("mm-edit-diff")
@@ -1646,13 +1658,22 @@ fn render_listing_entry(entry: &serde_json::Value) -> Option<Node> {
         // Escape single quotes in path for the onclick JS string.
         let escaped_path = path.replace('\'', "\\'");
 
+        let config_btn = span()
+            .class("mm-dir-config-btn")
+            .attr(
+                "onclick",
+                format!("event.stopPropagation(); window.__mm_open_dir_config('{escaped_path}')"),
+            )
+            .text("Config");
+
         let header = div()
             .class("mm-dir-header")
             .attr(
                 "onclick",
                 format!("window.__mm_expand_dir('{escaped_path}')"),
             )
-            .child(span().text(format!("{name} ({file_count} files)")));
+            .child(span().text(format!("{name} ({file_count} files)")))
+            .child(config_btn);
 
         let files_container = div()
             .class("mm-dir-files")
@@ -1702,6 +1723,139 @@ pub fn simple_hash(s: &str) -> u64 {
         h = h.wrapping_mul(33).wrapping_add(b as u64);
     }
     h
+}
+
+// ============================================================================
+// Dir config editor overlay
+// ============================================================================
+
+/// Render the directory config editor popup.
+///
+/// `path` is the corpus-relative directory path.
+/// `source_dir` is the current config (None if no explicit config).
+pub fn render_dir_config_editor(path: &str, source_dir: &Option<mm_meta::config::SourceDir>) -> Node {
+    let (libraries, can_stash_dupes, interior_dupes, path_schema, enable_acoustid, pinned_release) =
+        match source_dir {
+            Some(sd) => (
+                sd.libraries.join(", "),
+                sd.can_stash_dupes,
+                sd.interior_dupes,
+                sd.path_schema.as_ref().map(|s| s.template.as_str()).unwrap_or(""),
+                sd.enable_acoustid,
+                sd.pinned_release.as_deref().unwrap_or(""),
+            ),
+            None => (String::new(), None, None, "", None, ""),
+        };
+
+    let escaped_path = path.replace('\'', "\\'");
+
+    let mut rows = Vec::new();
+
+    // Libraries
+    rows.push(
+        div()
+            .class("mm-dir-config__field")
+            .child(html::label().attr("for", "dc-libraries").text("Libraries"))
+            .child(
+                html::input()
+                    .attr("type", "text")
+                    .attr("id", "dc-libraries")
+                    .attr("name", "libraries")
+                    .attr("value", &libraries)
+                    .attr("placeholder", "(none)")
+                    .class("mm-input"),
+            )
+            .into(),
+    );
+
+    // Tri-state booleans
+    for (id, label_text, value) in [
+        ("dc-can-stash-dupes", "Can stash dupes", can_stash_dupes),
+        ("dc-interior-dupes", "Interior dupes", interior_dupes),
+        ("dc-enable-acoustid", "AcoustID lookup", enable_acoustid),
+    ] {
+        let opt_inherit = html::option().attr("value", "inherit").text("(inherit)");
+        let opt_true = html::option().attr("value", "true").text("Yes");
+        let opt_false = html::option().attr("value", "false").text("No");
+        let (opt_inherit, opt_true, opt_false) = match value {
+            None => (opt_inherit.bool_attr("selected"), opt_true, opt_false),
+            Some(true) => (opt_inherit, opt_true.bool_attr("selected"), opt_false),
+            Some(false) => (opt_inherit, opt_true, opt_false.bool_attr("selected")),
+        };
+        rows.push(
+            div()
+                .class("mm-dir-config__field")
+                .child(html::label().attr("for", id).text(label_text))
+                .child(
+                    html::select()
+                        .attr("id", id)
+                        .attr("name", id)
+                        .class("mm-select")
+                        .child(opt_inherit)
+                        .child(opt_true)
+                        .child(opt_false),
+                )
+                .into(),
+        );
+    }
+
+    // Path schema
+    rows.push(
+        div()
+            .class("mm-dir-config__field")
+            .child(html::label().attr("for", "dc-path-schema").text("Path schema"))
+            .child(
+                html::input()
+                    .attr("type", "text")
+                    .attr("id", "dc-path-schema")
+                    .attr("name", "path_schema")
+                    .attr("value", path_schema)
+                    .attr("placeholder", "(inherit)")
+                    .class("mm-input"),
+            )
+            .into(),
+    );
+
+    // Pinned release
+    rows.push(
+        div()
+            .class("mm-dir-config__field")
+            .child(html::label().attr("for", "dc-pinned-release").text("Pinned release"))
+            .child(
+                html::input()
+                    .attr("type", "text")
+                    .attr("id", "dc-pinned-release")
+                    .attr("name", "pinned_release")
+                    .attr("value", pinned_release)
+                    .attr("placeholder", "(none)")
+                    .class("mm-input"),
+            )
+            .into(),
+    );
+
+    let buttons = div()
+        .class("mm-dir-config__buttons")
+        .child(
+            html::button()
+                .class("mm-btn")
+                .attr("style", "border-color:var(--c-green)")
+                .attr("onclick", format!("window.__mm_dir_config_save('{escaped_path}')"))
+                .text("Confirm"),
+        )
+        .child(
+            html::button()
+                .class("mm-btn")
+                .attr("style", "border-color:var(--c-red)")
+                .attr("onclick", "window.__mm_dir_config_cancel()")
+                .text("Cancel"),
+        );
+
+    div()
+        .class("mm-dir-config-editor")
+        .child(h3().text(&format!("Config: {path}")))
+        .children(rows)
+        .child(buttons)
+        .into()
 }
 
 // ============================================================================

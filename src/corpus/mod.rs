@@ -19,6 +19,7 @@
 pub mod codecs;
 pub mod deploy;
 pub mod health;
+pub mod image_hash;
 pub mod metadata;
 pub mod paths;
 pub mod tags;

@@ -1181,7 +1181,7 @@ async fn execute_cover_art_fetch(
                         // Perceptual comparison: only replace if visually identical
                         match std::fs::read(ep) {
                             Ok(existing_bytes) => {
-                                match mm_utils::image_hash::is_visual_match(&existing_bytes, &downloaded.bytes) {
+                                match crate::corpus::image_hash::is_visual_match(&existing_bytes, &downloaded.bytes) {
                                     Ok(true) => {} // proceed to stash + write below
                                     Ok(false) => {
                                         crate::logging::log_general(format!(

@@ -23,7 +23,7 @@ crossterm = "0.28"
 
 # Terminal image rendering
 ratatui-image = { version = "4.2", default-features = false, features = ["crossterm"] }
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
 # Signal handling
 signal-hook = "0.3"

@@ -21,8 +21,10 @@ bincode = "1"
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
 
-# Image metadata (for corpus image indexing)
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
+# Image metadata (for corpus image indexing dimensions)
+imagesize = "0.13"
+# Image decoding (for perceptual hashing in cover art comparison)
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
 # Audio metadata
 symphonia = { version = "0.5", features = ["all"] }

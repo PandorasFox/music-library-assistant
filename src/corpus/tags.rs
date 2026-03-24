@@ -371,8 +371,8 @@ fn mime_type_to_format(mime: Option<&lofty::picture::MimeType>) -> String {
 
 /// Extract image dimensions from an image file on disk.
 ///
-/// Uses the `image` crate's header-only reader — reads only enough bytes
-/// to determine dimensions without decoding the full image.
+/// Uses the `imagesize` crate — reads only the file header to determine
+/// dimensions without decoding any pixel data.
 /// Returns (width, height, format_string). Returns (0, 0, format) if dimensions
 /// can't be determined.
 pub fn image_dimensions(path: &Path) -> (u32, u32, String) {
@@ -388,11 +388,8 @@ pub fn image_dimensions(path: &Path) -> (u32, u32, String) {
     }
     .to_string();
 
-    match image::ImageReader::open(path).and_then(|r| r.with_guessed_format()) {
-        Ok(reader) => match reader.into_dimensions() {
-            Ok((w, h)) => (w, h, format),
-            Err(_) => (0, 0, format),
-        },
+    match imagesize::size(path) {
+        Ok(dims) => (dims.width as u32, dims.height as u32, format),
         Err(_) => (0, 0, format),
     }
 }

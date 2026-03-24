@@ -38,6 +38,7 @@ pub use mm_meta::signals::data::{
     AlternativeReleasePackingData,
     VariousArtistsOverrideData, VariousArtistsOverrideSource,
     PinnedReleaseConflictData,
+    PinnedReleasePackFailureData, UnmatchedPosition,
 };
 
 // ============================================================================

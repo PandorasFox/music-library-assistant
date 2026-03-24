@@ -49,6 +49,7 @@ mod scoring;
 mod hungarian;
 mod mis;
 mod components;
+pub(crate) mod pinned;
 mod stage_scoring;
 mod stage_mapping;
 mod stage_unmatched;

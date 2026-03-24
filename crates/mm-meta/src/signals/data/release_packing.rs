@@ -235,3 +235,31 @@ pub struct PinnedReleaseConflictData {
     pub directories: Vec<String>,
     pub reason: String,
 }
+
+// ============================================================================
+// Pinned Release Pack Failure Data
+// ============================================================================
+
+/// Bincode payload for PinnedReleasePackFailure.
+///
+/// Emitted when a pinned release cannot be fully packed against its directory.
+/// The pin exists but the scoring/assignment didn't cover all tracks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PinnedReleasePackFailureData {
+    pub release_id: String,
+    pub release_title: String,
+    pub release_artist: String,
+    pub dir_path: String,
+    pub total_tracks: usize,
+    pub matched_tracks: usize,
+    /// Track positions that couldn't be matched to corpus files.
+    pub unmatched_positions: Vec<UnmatchedPosition>,
+}
+
+/// A track position in a release that couldn't be matched.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnmatchedPosition {
+    pub medium: i32,
+    pub position: i32,
+    pub title: String,
+}

@@ -304,6 +304,7 @@ signal_registry! {
         AlternativeReleasePacking(AlternativeReleasePackingSignal, "alternative_release_packing"),
         VariousArtistsOverride(VariousArtistsOverrideSignal, "various_artists_override"),
         PinnedReleaseConflict(PinnedReleaseConflictSignal, "pinned_release_conflict"),
+        PinnedReleasePackFailure(PinnedReleasePackFailureSignal, "pinned_release_pack_failure"),
         SameRecordingDifferentRelease(SameRecordingDifferentReleaseSignal, "same_recording_different_release"),
     }
 }

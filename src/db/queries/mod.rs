@@ -620,6 +620,8 @@ impl<'a> ReadOnlyDb<'a> {
         fn get_mb_artist_cache(artist_id: &str) -> Result<Option<(Vec<u8>, i64)>>;
         fn get_packing_manifest() -> Result<Vec<external::PackingManifestRow>>;
         fn get_optimal_packing_scores() -> Result<Vec<external::OptimalPackingScoreRow>>;
+        fn get_optimal_packing_scores_for_release(release_id: &str) -> Result<Vec<external::OptimalPackingScoreRow>>;
+        fn has_packing_scores_for_release(release_id: &str) -> bool;
         fn get_mb_release_cache(release_id: &str) -> Result<Option<(Vec<u8>, i64)>>;
         fn get_external_matches_slim(source_key: i64) -> Result<Vec<external::ExternalMatchRow>>;
         fn get_packing_candidates_for_release(release_id: &str) -> Result<Vec<external::PackingCandidateRow>>;

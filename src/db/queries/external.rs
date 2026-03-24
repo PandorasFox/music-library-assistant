@@ -429,6 +429,53 @@ impl Database {
         Ok(results)
     }
 
+    /// Get optimal packing scores for a single release.
+    pub fn get_optimal_packing_scores_for_release(
+        &self,
+        release_id: &str,
+    ) -> Result<Vec<OptimalPackingScoreRow>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT release_id, inode, recording_id, medium_pos, track_pos, track_title, \
+             medium_format, track_number, score, score_breakdown, match_method, \
+             fingerprint_hex, raw_duration_ms \
+             FROM release_packing_scores WHERE is_optimal = 1 AND release_id = ?1 \
+             ORDER BY medium_pos, track_pos",
+        )?;
+        let rows = stmt.query_map([release_id], |row| {
+            Ok(OptimalPackingScoreRow {
+                release_id: row.get(0)?,
+                inode: row.get(1)?,
+                recording_id: row.get(2)?,
+                medium_pos: row.get(3)?,
+                track_pos: row.get(4)?,
+                track_title: row.get(5)?,
+                medium_format: row.get(6)?,
+                track_number: row.get(7)?,
+                score: row.get(8)?,
+                score_breakdown: row.get(9)?,
+                match_method: row.get(10)?,
+                fingerprint_hex: row.get(11)?,
+                raw_duration_ms: row.get(12)?,
+            })
+        })?;
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Check whether packing scores exist for a specific release.
+    pub fn has_packing_scores_for_release(&self, release_id: &str) -> bool {
+        self.conn()
+            .query_row(
+                "SELECT 1 FROM release_packing_scores WHERE is_optimal = 1 AND release_id = ?1 LIMIT 1",
+                [release_id],
+                |_| Ok(()),
+            )
+            .is_ok()
+    }
+
     // =========================================================================
     // Signal Data Reading (for Release Packing Browser)
     // =========================================================================

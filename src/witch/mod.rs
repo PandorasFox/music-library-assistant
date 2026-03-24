@@ -186,6 +186,10 @@ pub struct Witch {
     pending_computation_phases:
         VecDeque<(crate::meta::computations::PipelineStage, Vec<Computation>)>,
 
+    /// Computations waiting for external fetch to complete before being queued.
+    /// Populated by `handle_fetch_requests()`, drained when fetch scheduler reports done.
+    post_fetch_computations: Vec<Computation>,
+
     /// Handle to the dedicated DB write thread.
     /// Provides stats access and shutdown coordination.
     /// Spawned at construction time — always present.
@@ -337,6 +341,7 @@ impl Witch {
             pending_transaction: None,
             pending_mutation_phases: VecDeque::new(),
             pending_computation_phases: VecDeque::new(),
+            post_fetch_computations: Vec::new(),
             db_thread_handle: write_thread::spawn(),
             cache_thread_handle: cache_witch_handle,
             mutations_generation: 0,
@@ -1143,6 +1148,9 @@ impl Witch {
             self.pending_computation_phases
                 .extend(result.deferred_phases);
         }
+        if !result.fetch_requests.is_empty() {
+            self.handle_fetch_requests(result.fetch_requests);
+        }
     }
 
     /// Post-drain bookkeeping: state transitions after processing task results.
@@ -1310,6 +1318,17 @@ impl Witch {
                 if let Some(ref mut handle) = self.external_fetch {
                     handle.mark_batch_done();
                 }
+                // Drain post-fetch computations (queued by pinned release resolution etc.)
+                if !self.post_fetch_computations.is_empty() {
+                    let comps = std::mem::take(&mut self.post_fetch_computations);
+                    crate::logging::log_general(format!(
+                        "[WITCH] Fetch done, queuing {} post-fetch computations",
+                        comps.len()
+                    ));
+                    for comp in comps {
+                        self.queue_computation_with_label(comp, None);
+                    }
+                }
             }
             external_fetch::SchedulerMessage::CoverArtProgress(progress) => {
                 self.cover_art_progress = Some(progress);
@@ -1323,6 +1342,42 @@ impl Witch {
                 if let Some(ref mut handle) = self.external_fetch {
                     handle.mark_cover_art_done();
                 }
+            }
+        }
+    }
+
+    /// Handle fetch requests from computation results.
+    ///
+    /// Seeds the MB known entity table with the requested release IDs so the
+    /// fetch scheduler will pick them up, then triggers a fetch cycle. The
+    /// `then` computations are stashed in `post_fetch_computations` and queued
+    /// when the scheduler reports AllDone.
+    fn handle_fetch_requests(&mut self, requests: Vec<crate::meta::computations::FetchRequest>) {
+        let mut need_fetch = false;
+        for req in requests {
+            if !req.mb_release_ids.is_empty() {
+                // Seed the known entities table so the scheduler discovers these releases.
+                if let Some(sender) = crate::db::write_thread::signal_sender() {
+                    let now = chrono::Utc::now().timestamp();
+                    for release_id in &req.mb_release_ids {
+                        sender.insert_mb_known_entity(
+                            release_id,
+                            "release",
+                            Some("pinned_release"),
+                            now,
+                        );
+                    }
+                }
+                need_fetch = true;
+            }
+            self.post_fetch_computations.extend(req.then);
+        }
+        if need_fetch {
+            if let Some(ref mut handle) = self.external_fetch {
+                crate::logging::log_general(
+                    "[WITCH] Triggering fetch for pinned release data"
+                );
+                handle.request_fetch();
             }
         }
     }

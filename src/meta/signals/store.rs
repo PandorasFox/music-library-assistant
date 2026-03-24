@@ -1108,6 +1108,19 @@ impl_aggregate_signal!(PinnedReleaseConflictSignal, "signal_pinned_release_confl
     blob_version: 1,
 );
 
+impl_aggregate_signal!(PinnedReleasePackFailureSignal, "signal_pinned_release_pack_failure",
+    "CREATE TABLE IF NOT EXISTS signal_pinned_release_pack_failure (
+        key TEXT PRIMARY KEY,
+        data BLOB NOT NULL,
+        data_hash INTEGER NOT NULL DEFAULT 0,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )",
+    insert_sql: "INSERT OR REPLACE INTO signal_pinned_release_pack_failure (key, data, data_hash) VALUES (?1, ?2, ?3)",
+    fields: [key],
+    blob: data,
+    blob_version: 1,
+);
+
 impl_aggregate_signal!(SameRecordingDifferentReleaseSignal, "signal_same_recording_different_release",
     "CREATE TABLE IF NOT EXISTS signal_same_recording_different_release (
         key TEXT PRIMARY KEY,

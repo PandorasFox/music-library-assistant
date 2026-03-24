@@ -9,6 +9,7 @@ pub use mm_meta::signals::data::{
     AlternativeReleasePackingData,
     VariousArtistsOverrideData,
     PinnedReleaseConflictData,
+    PinnedReleasePackFailureData,
 };
 
 // ============================================================================
@@ -112,6 +113,19 @@ pub struct PinnedReleaseConflictSignal {
 }
 
 // ============================================================================
+// Pinned Release Pack Failure signal (aggregate, key-keyed)
+// ============================================================================
+
+/// A pinned release failed to fully pack against its directory.
+/// Key = `{release_id}:{dir_path}`.
+#[derive(Debug, Clone)]
+pub struct PinnedReleasePackFailureSignal {
+    pub key: String,
+    /// Serialized as bincode BLOB.
+    pub data: PinnedReleasePackFailureData,
+}
+
+// ============================================================================
 // impl_content_hash! invocations for release packing signals
 // ============================================================================
 
@@ -126,3 +140,4 @@ impl_content_hash!(PackingKnotSignal => blob(data));
 impl_content_hash!(AlternativeReleasePackingSignal => blob(data));
 impl_content_hash!(VariousArtistsOverrideSignal => blob(data));
 impl_content_hash!(PinnedReleaseConflictSignal => blob(data));
+impl_content_hash!(PinnedReleasePackFailureSignal => blob(data));

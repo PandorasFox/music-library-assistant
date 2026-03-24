@@ -96,6 +96,22 @@ use observation::ObservationExecute;
 pub use mm_meta::computations::PipelineStage;
 
 // ============================================================================
+// Fetch Requests (computation → Witch → scheduler)
+// ============================================================================
+
+/// A request from a computation to fetch MB entities before continuing.
+///
+/// The Witch sends these to the external fetch scheduler. When all entities
+/// are fetched (or confirmed cached), the `then` computations are queued.
+#[derive(Debug)]
+pub struct FetchRequest {
+    /// MusicBrainz release IDs to ensure are cached.
+    pub mb_release_ids: Vec<String>,
+    /// Computations to queue after fetch completes.
+    pub then: Vec<Computation>,
+}
+
+// ============================================================================
 // Shared Constants
 // ============================================================================
 
@@ -155,6 +171,8 @@ pub struct ComputationResult {
     /// Barrier-separated follow-up phases. Each phase runs only after all
     /// prior work drains (in-flight tasks + db write queue empty).
     pub deferred_phases: VecDeque<(PipelineStage, Vec<Computation>)>,
+    /// Fetch requests — MB entities to fetch before continuing with follow-up computations.
+    pub fetch_requests: Vec<FetchRequest>,
 }
 
 impl ComputationResult {
@@ -166,6 +184,7 @@ impl ComputationResult {
             spawn_derivation: Vec::new(),
             spawn_analysis: Vec::new(),
             deferred_phases: VecDeque::new(),
+            fetch_requests: Vec::new(),
         }
     }
 
@@ -177,6 +196,7 @@ impl ComputationResult {
             spawn_derivation: result.spawn,
             spawn_analysis: Vec::new(),
             deferred_phases: VecDeque::new(),
+            fetch_requests: Vec::new(),
         }
     }
 
@@ -188,6 +208,7 @@ impl ComputationResult {
             spawn_derivation: Vec::new(),
             spawn_analysis: result.spawn,
             deferred_phases: result.deferred_phases,
+            fetch_requests: result.fetch_requests,
         }
     }
 
@@ -248,6 +269,7 @@ pub fn execute_single(
             spawn_derivation: Vec::new(),
             spawn_analysis: Vec::new(),
             deferred_phases: VecDeque::new(),
+            fetch_requests: Vec::new(),
         },
     }
 }

@@ -71,7 +71,7 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
     }
 
     fn additional_computations(&self) -> Vec<Computation> {
-        Vec::new()
+        pinned_release_computations(&self.old_dir, &self.new_dir)
     }
 
     fn specific_signals_to_clear(&self) -> Vec<SignalToClear> {
@@ -147,7 +147,11 @@ impl MutationExecutor for ApplyBatchDirConfigEditsMutation {
     }
 
     fn additional_computations(&self) -> Vec<Computation> {
-        Vec::new()
+        let mut comps = Vec::new();
+        for entry in &self.edits {
+            comps.extend(pinned_release_computations(&entry.old_dir, &entry.new_dir));
+        }
+        comps
     }
 
     fn specific_signals_to_clear(&self) -> Vec<SignalToClear> {
@@ -165,6 +169,42 @@ impl MutationExecutor for ApplyBatchDirConfigEditsMutation {
         }
         scope
     }
+}
+
+/// Compute pin/unpin computations by diffing pinned_release field.
+fn pinned_release_computations(old: &SourceDir, new: &SourceDir) -> Vec<Computation> {
+    use crate::meta::computations::analysis;
+
+    let old_pin = old.pinned_release.as_deref();
+    let new_pin = new.pinned_release.as_deref();
+
+    if old_pin == new_pin {
+        return Vec::new();
+    }
+
+    let mut comps = Vec::new();
+
+    // Unpin old release if it was pinned
+    if let Some(old_id) = old_pin {
+        comps.push(Computation::Analysis(
+            analysis::Computation::InvalidatePinnedRelease {
+                release_id: old_id.to_string(),
+                dir_path: new.path.clone(),
+            },
+        ));
+    }
+
+    // Pin new release if one is set
+    if let Some(new_id) = new_pin {
+        comps.push(Computation::Analysis(
+            analysis::Computation::ResolvePinForDir {
+                release_id: new_id.to_string(),
+                dir_path: new.path.clone(),
+            },
+        ));
+    }
+
+    comps
 }
 
 /// Compute minimal recomputation scope by diffing which SourceDir fields changed.

@@ -254,6 +254,35 @@ pub enum Computation {
     /// per-component within each tier's MIS computation.
     EmitUnmatchedSignals,
 
+    /// Gateway for incremental pinned release packing.
+    ///
+    /// Checks whether MB cache has the release data and scoring exists.
+    /// Routes to fast path (scores exist), warm path (MB cached, needs scoring),
+    /// or cold path (needs fetch first).
+    ResolvePinForDir {
+        release_id: String,
+        dir_path: std::path::PathBuf,
+    },
+
+    /// Commit a pinned release: emit packing signals and invalidate displaced releases.
+    ///
+    /// Runs after scoring confirms full coverage. Emits PackedRelease + ReleasePacking
+    /// signals. Invalidates all releases whose inodes are claimed by the pin.
+    /// If coverage is incomplete, emits PinnedReleasePackFailure instead.
+    CommitPinnedRelease {
+        release_id: String,
+        dir_path: std::path::PathBuf,
+    },
+
+    /// Clean up packing signals for an unpinned release.
+    ///
+    /// Removes PackedRelease, ReleasePacking, and related signals for the
+    /// given release. Leaves the directory bare for the next full repack.
+    InvalidatePinnedRelease {
+        release_id: String,
+        dir_path: std::path::PathBuf,
+    },
+
     /// Derive external match signals from AcoustID lookup results.
     ///
     /// Compares AcoustID recording metadata against corpus tags, emitting
@@ -321,6 +350,9 @@ impl Computation {
             Computation::MapSingleReleases { .. } => "Mapping single-track releases",
             Computation::ResolvePackingComponent { .. } => "Resolving packing component",
             Computation::EmitUnmatchedSignals => "Emitting unmatched signals",
+            Computation::ResolvePinForDir { .. } => "Resolving pinned release",
+            Computation::CommitPinnedRelease { .. } => "Committing pinned release",
+            Computation::InvalidatePinnedRelease { .. } => "Invalidating unpinned release",
             Computation::DeriveExternalMatches => "Deriving external match signals",
             Computation::SeedCompoundTagDirtyInodes { .. } => "Seeding compound tag dirty inodes",
             Computation::IndexObservedImages { .. } => "Registering observed images",
@@ -420,6 +452,15 @@ impl Computation {
             Computation::EmitUnmatchedSignals => {
                 execute_emit_unmatched_signals(ctx)
             }
+            Computation::ResolvePinForDir { ref release_id, ref dir_path } => {
+                release_packing::pinned::execute_resolve_pin_for_dir(ctx, release_id, dir_path)
+            }
+            Computation::CommitPinnedRelease { ref release_id, ref dir_path } => {
+                release_packing::pinned::execute_commit_pinned_release(ctx, release_id, dir_path)
+            }
+            Computation::InvalidatePinnedRelease { ref release_id, ref dir_path } => {
+                release_packing::pinned::execute_invalidate_pinned_release(ctx, release_id, dir_path)
+            }
             Computation::DeriveExternalMatches => {
                 execute_derive_external_matches(ctx)
             }
@@ -454,6 +495,8 @@ pub struct Result {
     /// Barrier-separated follow-up phases. Each phase runs only after all
     /// prior work drains. Only used by pipeline orchestrators (e.g., PackReleases).
     pub deferred_phases: VecDeque<(super::PipelineStage, Vec<super::Computation>)>,
+    /// Fetch requests — MB entities to fetch before continuing with `then` computations.
+    pub fetch_requests: Vec<super::FetchRequest>,
 }
 
 impl Result {
@@ -464,6 +507,7 @@ impl Result {
             error: None,
             spawn,
             deferred_phases: VecDeque::new(),
+            fetch_requests: Vec::new(),
         }
     }
 
@@ -474,6 +518,7 @@ impl Result {
             error: Some(error),
             spawn: Vec::new(),
             deferred_phases: VecDeque::new(),
+            fetch_requests: Vec::new(),
         }
     }
 
@@ -492,6 +537,22 @@ impl Result {
             error: None,
             spawn,
             deferred_phases: VecDeque::from(deferred_phases),
+            fetch_requests: Vec::new(),
+        }
+    }
+
+    /// Create a result that requests MB entities be fetched before continuing.
+    pub fn needs_fetch(
+        computation: Computation,
+        fetch_requests: Vec<super::FetchRequest>,
+    ) -> Self {
+        Self {
+            _computation: computation,
+            success: true,
+            error: None,
+            spawn: Vec::new(),
+            deferred_phases: VecDeque::new(),
+            fetch_requests,
         }
     }
 }

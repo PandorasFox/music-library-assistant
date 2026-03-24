@@ -187,6 +187,7 @@ fn run_hades(
                                 recomputation_scope:
                                     crate::meta::recomputation::RecomputationScope::EMPTY,
                                 deferred_phases: VecDeque::new(),
+                                fetch_requests: Vec::new(),
                             }
                         }
                     };

@@ -414,4 +414,6 @@ pub(super) struct TaskResult {
     /// Barrier-separated follow-up computation phases (pipeline orchestrators only).
     pub deferred_phases:
         std::collections::VecDeque<(crate::meta::computations::PipelineStage, Vec<Computation>)>,
+    /// Fetch requests — MB entities to fetch, then queue follow-up computations.
+    pub fetch_requests: Vec<crate::meta::computations::FetchRequest>,
 }

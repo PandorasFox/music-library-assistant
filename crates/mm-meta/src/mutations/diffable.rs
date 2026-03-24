@@ -278,7 +278,7 @@ impl_diffable_struct!(Opinions {
 
 impl_diffable_struct!(SourceDir {
     path, libraries, can_stash_dupes, interior_dupes, path_schema, enable_acoustid,
-    pinned_release,
+    pinned_release, cover_art_sanctity,
 });
 
 // HashMap<String, RelationRouting> needs the HashMap impl + RelationRouting: Debug + PartialEq.

@@ -2507,7 +2507,11 @@ async fn do_dir_config_save(dir_path: &str) -> Result<(), JsValue> {
 
     let cover_art_sanctity = {
         let val = get_input_value(&doc, "dc-cover-art-sanctity");
-        mm_meta::config::CoverArtSanctity::from_str(&val)
+        // "inherit" → None (no per-dir override); known values → Some(variant)
+        match val.as_str() {
+            "inherit" => None,
+            other => mm_meta::config::CoverArtSanctity::from_str(other),
+        }
     };
 
     let source_path = PathBuf::from(dir_path);

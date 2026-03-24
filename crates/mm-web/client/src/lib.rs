@@ -2505,6 +2505,11 @@ async fn do_dir_config_save(dir_path: &str) -> Result<(), JsValue> {
     let pinned_release_str = get_input_value(&doc, "dc-pinned-release");
     let pinned_release = if pinned_release_str.is_empty() { None } else { Some(pinned_release_str) };
 
+    let cover_art_sanctity = {
+        let val = get_input_value(&doc, "dc-cover-art-sanctity");
+        mm_meta::config::CoverArtSanctity::from_str(&val)
+    };
+
     let source_path = PathBuf::from(dir_path);
 
     // Fetch current state for old_dir
@@ -2517,6 +2522,7 @@ async fn do_dir_config_save(dir_path: &str) -> Result<(), JsValue> {
         path_schema: None,
         enable_acoustid: None,
         pinned_release: None,
+        cover_art_sanctity: None,
     });
 
     let new_dir = SourceDir {
@@ -2529,6 +2535,7 @@ async fn do_dir_config_save(dir_path: &str) -> Result<(), JsValue> {
             .and_then(|t| mm_meta::config::path_schema::parse_path_schema(t).ok()),
         enable_acoustid,
         pinned_release,
+        cover_art_sanctity,
     };
 
     // Build new_config with the edit applied

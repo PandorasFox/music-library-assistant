@@ -1888,7 +1888,7 @@ pub fn simple_hash(s: &str) -> u64 {
 /// `path` is the corpus-relative directory path.
 /// `source_dir` is the current config (None if no explicit config).
 pub fn render_dir_config_editor(path: &str, source_dir: &Option<mm_meta::config::SourceDir>) -> Node {
-    let (libraries, can_stash_dupes, interior_dupes, path_schema, enable_acoustid, pinned_release) =
+    let (libraries, can_stash_dupes, interior_dupes, path_schema, enable_acoustid, pinned_release, cover_art_sanctity) =
         match source_dir {
             Some(sd) => (
                 sd.libraries.join(", "),
@@ -1897,8 +1897,9 @@ pub fn render_dir_config_editor(path: &str, source_dir: &Option<mm_meta::config:
                 sd.path_schema.as_ref().map(|s| s.template.as_str()).unwrap_or(""),
                 sd.enable_acoustid,
                 sd.pinned_release.as_deref().unwrap_or(""),
+                sd.cover_art_sanctity,
             ),
-            None => (String::new(), None, None, "", None, ""),
+            None => (String::new(), None, None, "", None, "", None),
         };
 
     let escaped_path = path.replace('\'', "\\'");
@@ -1949,6 +1950,35 @@ pub fn render_dir_config_editor(path: &str, source_dir: &Option<mm_meta::config:
                         .child(opt_true)
                         .child(opt_false),
                 )
+                .into(),
+        );
+    }
+
+    // Cover art sanctity (4-state: inherit, dont-touch, replace-if-better, replace-always)
+    {
+        use mm_meta::config::CoverArtSanctity;
+        let opts = [
+            ("inherit", "(inherit)", cover_art_sanctity.is_none()),
+            ("dont-touch", "Don't touch", cover_art_sanctity == Some(CoverArtSanctity::DontTouch)),
+            ("replace-if-better", "Replace if better", cover_art_sanctity == Some(CoverArtSanctity::ReplaceIfBetter)),
+            ("replace-always", "Replace always", cover_art_sanctity == Some(CoverArtSanctity::ReplaceAlways)),
+        ];
+        let mut sel = html::select()
+            .attr("id", "dc-cover-art-sanctity")
+            .attr("name", "dc-cover-art-sanctity")
+            .class("mm-select");
+        for (val, label_text, selected) in opts {
+            let mut opt = html::option().attr("value", val).text(label_text);
+            if selected {
+                opt = opt.bool_attr("selected");
+            }
+            sel = sel.child(opt);
+        }
+        rows.push(
+            div()
+                .class("mm-dir-config__field")
+                .child(html::label().attr("for", "dc-cover-art-sanctity").text("Cover art sanctity"))
+                .child(sel)
                 .into(),
         );
     }

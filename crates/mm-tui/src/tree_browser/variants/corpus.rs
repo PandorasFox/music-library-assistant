@@ -52,7 +52,7 @@ pub enum DirConfigPanelFocus {
 #[derive(Debug)]
 pub struct DirConfigPanel {
     pub editor: mm_ui::dir_config_editor::DirConfigEditorState,
-    /// 0=libraries, 1=can_stash_dupes, 2=interior_dupes, 3=path_schema, 4=enable_acoustid, 5=pinned_release
+    /// 0=libraries, 1=can_stash_dupes, 2=interior_dupes, 3=path_schema, 4=enable_acoustid, 5=pinned_release, 6=cover_art_sanctity
     pub field_cursor: usize,
     pub focus: DirConfigPanelFocus,
     pub button_cursor: usize,
@@ -72,6 +72,7 @@ impl DirConfigPanel {
         let orig_ps = orig.as_ref().and_then(|s| s.path_schema.as_ref().map(|p| p.template.clone()));
         let orig_ea = orig.as_ref().and_then(|s| s.enable_acoustid);
         let orig_pr = orig.as_ref().and_then(|s| s.pinned_release.clone());
+        let orig_cas = orig.as_ref().and_then(|s| s.cover_art_sanctity);
 
         let fields = vec![
             DetailField {
@@ -119,6 +120,13 @@ impl DirConfigPanel {
                 widget: DetailWidget::Text {
                     value: e.pinned_release.as_deref().unwrap_or("(none)"),
                     edited: e.pinned_release != orig_pr,
+                },
+            },
+            DetailField {
+                label: "Cover art sanctity",
+                widget: DetailWidget::Text {
+                    value: mm_ui::dir_config_editor::DirConfigEditorState::sanctity_display(e.cover_art_sanctity),
+                    edited: e.cover_art_sanctity != orig_cas,
                 },
             },
         ];
@@ -728,6 +736,7 @@ impl CorpusBrowserVariant {
                             }
                             panel.text_input = Some(input);
                         }
+                        6 => panel.editor.cover_art_sanctity = DirConfigEditorState::cycle_cover_art_sanctity(panel.editor.cover_art_sanctity),
                         _ => {}
                     }
                     None

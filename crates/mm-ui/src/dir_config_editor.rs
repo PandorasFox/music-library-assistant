@@ -131,4 +131,28 @@ impl DirConfigEditorState {
             Some(false) => None,
         }
     }
+
+    /// Cycle cover art sanctity: None → DontTouch → ReplaceIfBetter → ReplaceAlways → None.
+    pub fn cycle_cover_art_sanctity(
+        v: Option<mm_meta::config::CoverArtSanctity>,
+    ) -> Option<mm_meta::config::CoverArtSanctity> {
+        use mm_meta::config::CoverArtSanctity;
+        match v {
+            None => Some(CoverArtSanctity::DontTouch),
+            Some(CoverArtSanctity::DontTouch) => Some(CoverArtSanctity::ReplaceIfBetter),
+            Some(CoverArtSanctity::ReplaceIfBetter) => Some(CoverArtSanctity::ReplaceAlways),
+            Some(CoverArtSanctity::ReplaceAlways) => None,
+        }
+    }
+
+    /// Display string for an `Option<CoverArtSanctity>`.
+    pub fn sanctity_display(v: Option<mm_meta::config::CoverArtSanctity>) -> &'static str {
+        use mm_meta::config::CoverArtSanctity;
+        match v {
+            None => "(inherit)",
+            Some(CoverArtSanctity::DontTouch) => "don't touch",
+            Some(CoverArtSanctity::ReplaceIfBetter) => "replace if better",
+            Some(CoverArtSanctity::ReplaceAlways) => "replace always",
+        }
+    }
 }

@@ -209,7 +209,7 @@ impl Database {
 
     /// Query a signal table's `data` BLOB column and deserialize each row.
     ///
-    /// Silently skips rows that fail to deserialize (stale schema).
+    /// Logs a warning for rows that fail to deserialize (stale blob schema).
     pub(crate) fn query_signal_blobs<T: serde::de::DeserializeOwned>(
         &self,
         sql: &str,
@@ -217,17 +217,26 @@ impl Database {
         let mut stmt = self.conn.prepare(sql)?;
         let rows = stmt.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
         let mut results = Vec::new();
+        let mut failures = 0u32;
         for blob in rows.flatten() {
-            if let Ok(data) = bincode::deserialize(&blob) {
-                results.push(data);
+            match bincode::deserialize(&blob) {
+                Ok(data) => results.push(data),
+                Err(_) => failures += 1,
             }
+        }
+        if failures > 0 {
+            crate::logging::log_general(format!(
+                "[WARN] {} signal blob(s) failed to deserialize (stale schema?) in query: {}",
+                failures,
+                sql.chars().take(80).collect::<String>(),
+            ));
         }
         Ok(results)
     }
 
     /// Query a signal table for `(key TEXT, data BLOB)` and deserialize each row.
     ///
-    /// Silently skips rows that fail to deserialize.
+    /// Logs a warning for rows that fail to deserialize (stale blob schema).
     pub(crate) fn query_signal_key_blobs<T: serde::de::DeserializeOwned>(
         &self,
         sql: &str,
@@ -237,17 +246,26 @@ impl Database {
             Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
         })?;
         let mut results = Vec::new();
+        let mut failures = 0u32;
         for row in rows.flatten() {
-            if let Ok(data) = bincode::deserialize(&row.1) {
-                results.push((row.0, data));
+            match bincode::deserialize(&row.1) {
+                Ok(data) => results.push((row.0, data)),
+                Err(_) => failures += 1,
             }
+        }
+        if failures > 0 {
+            crate::logging::log_general(format!(
+                "[WARN] {} signal blob(s) failed to deserialize (stale schema?) in query: {}",
+                failures,
+                sql.chars().take(80).collect::<String>(),
+            ));
         }
         Ok(results)
     }
 
     /// Query a signal table for `(inode, path, data BLOB)` and deserialize each row.
     ///
-    /// Silently skips rows that fail to deserialize.
+    /// Logs a warning for rows that fail to deserialize (stale blob schema).
     pub(crate) fn query_signal_inode_blobs<T: serde::de::DeserializeOwned>(
         &self,
         sql: &str,
@@ -258,10 +276,19 @@ impl Database {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, Vec<u8>>(2)?))
         })?;
         let mut results = Vec::new();
+        let mut failures = 0u32;
         for row in rows.flatten() {
-            if let Ok(data) = bincode::deserialize(&row.2) {
-                results.push((row.0, row.1, data));
+            match bincode::deserialize(&row.2) {
+                Ok(data) => results.push((row.0, row.1, data)),
+                Err(_) => failures += 1,
             }
+        }
+        if failures > 0 {
+            crate::logging::log_general(format!(
+                "[WARN] {} signal blob(s) failed to deserialize (stale schema?) in query: {}",
+                failures,
+                sql.chars().take(80).collect::<String>(),
+            ));
         }
         Ok(results)
     }

@@ -33,6 +33,15 @@ impl Database {
             params![FINGERPRINT_KEY, fp],
         ).context("Failed to store initial schema fingerprint")?;
 
+        // Store initial blob schema versions
+        for (table_name, version) in crate::meta::signals::registry::signal_blob_versions() {
+            let key = format!("blob_version:{}", table_name);
+            self.conn().execute(
+                "INSERT OR REPLACE INTO app_metadata (key, value, updated_at) VALUES (?1, ?2, datetime('now'))",
+                params![key, version.to_string()],
+            )?;
+        }
+
         Ok(())
     }
 }

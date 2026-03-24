@@ -30,6 +30,10 @@ pub trait CorpusSignalStore: Sized {
     /// Table name (for generic operations like COUNT queries).
     const TABLE_NAME: &'static str;
 
+    /// Blob schema version. 0 = no blob field (version check skipped).
+    /// Non-zero values must be bumped when the serialized struct layout changes.
+    const BLOB_VERSION: u32 = 0;
+
     /// Insert or replace this signal into its table.
     fn insert(&self, conn: &Connection) -> Result<()>;
 
@@ -91,6 +95,10 @@ pub trait AggregateSignalStore: Sized {
 
     /// Table name (for generic operations like COUNT queries).
     const TABLE_NAME: &'static str;
+
+    /// Blob schema version. 0 = no blob field (version check skipped).
+    /// Non-zero values must be bumped when the serialized struct layout changes.
+    const BLOB_VERSION: u32 = 0;
 
     /// Insert or replace this signal into its table.
     fn insert(&self, conn: &Connection) -> Result<()>;
@@ -228,11 +236,13 @@ macro_rules! impl_corpus_signal {
     ($ty:ty, $table:literal, $table_sql:expr,
      insert_sql: $insert_sql:literal,
      fields: [$($field:ident $(via $via:ident)?), * $(, )?],
-     blob: $blob_field:ident $(,)?
+     blob: $blob_field:ident,
+     blob_version: $bv:literal $(,)?
     ) => {
         impl CorpusSignalStore for $ty {
             const TABLE_SQL: &'static str = $table_sql;
             const TABLE_NAME: &'static str = $table;
+            const BLOB_VERSION: u32 = $bv;
 
             fn insert(&self, conn: &Connection) -> Result<()> {
                 use crate::meta::signals::registry::SignalContentHash;
@@ -315,11 +325,13 @@ macro_rules! impl_aggregate_signal {
     ($ty:ty, $table:literal, $table_sql:expr,
      insert_sql: $insert_sql:literal,
      fields: [$($field:ident $(via $via:ident)?), * $(, )?],
-     blob: $blob_field:ident $(,)?
+     blob: $blob_field:ident,
+     blob_version: $bv:literal $(,)?
     ) => {
         impl AggregateSignalStore for $ty {
             const TABLE_SQL: &'static str = $table_sql;
             const TABLE_NAME: &'static str = $table;
+            const BLOB_VERSION: u32 = $bv;
 
             fn insert(&self, conn: &Connection) -> Result<()> {
                 use crate::meta::signals::registry::SignalContentHash;
@@ -643,6 +655,7 @@ impl_corpus_signal!(SidecarDeployReadySignal, "signal_sidecar_deploy_ready",
     insert_sql: "INSERT OR REPLACE INTO signal_sidecar_deploy_ready (inode, path, deploy_path, library_name, data, data_hash) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
     fields: [inode, path, deploy_path, library_name],
     blob: data,
+    blob_version: 1,
 );
 
 impl_corpus_signal!(OutOfBandTagSyncSignal, "signal_oob_tag_sync",
@@ -656,6 +669,7 @@ impl_corpus_signal!(OutOfBandTagSyncSignal, "signal_oob_tag_sync",
     insert_sql: "INSERT OR REPLACE INTO signal_oob_tag_sync (inode, path, data, data_hash) VALUES (?1, ?2, ?3, ?4)",
     fields: [inode, path],
     blob: mismatches,
+    blob_version: 1,
 );
 
 impl_corpus_signal!(OutOfBandTagConflictSignal, "signal_oob_tag_conflict",
@@ -669,6 +683,7 @@ impl_corpus_signal!(OutOfBandTagConflictSignal, "signal_oob_tag_conflict",
     insert_sql: "INSERT OR REPLACE INTO signal_oob_tag_conflict (inode, path, data, data_hash) VALUES (?1, ?2, ?3, ?4)",
     fields: [inode, path],
     blob: mismatches,
+    blob_version: 1,
 );
 
 impl_corpus_signal!(SubparDuplicateSignal, "signal_subpar_duplicate",
@@ -682,6 +697,7 @@ impl_corpus_signal!(SubparDuplicateSignal, "signal_subpar_duplicate",
     insert_sql: "INSERT OR REPLACE INTO signal_subpar_duplicate (inode, path, data, data_hash) VALUES (?1, ?2, ?3, ?4)",
     fields: [inode, path],
     blob: data,
+    blob_version: 1,
 );
 
 impl_corpus_signal!(CompoundTagSignal, "signal_compound_tag",
@@ -695,6 +711,7 @@ impl_corpus_signal!(CompoundTagSignal, "signal_compound_tag",
     insert_sql: "INSERT OR REPLACE INTO signal_compound_tag (inode, path, data, data_hash) VALUES (?1, ?2, ?3, ?4)",
     fields: [inode, path],
     blob: compounds,
+    blob_version: 1,
 );
 
 impl_signal_query!(by_inode, CompoundTagSignal, "signal_compound_tag", [inode, path], compounds);
@@ -710,6 +727,7 @@ impl_corpus_signal!(PathTagMismatchSignal, "signal_path_tag_mismatch",
     insert_sql: "INSERT OR REPLACE INTO signal_path_tag_mismatch (inode, path, data, data_hash) VALUES (?1, ?2, ?3, ?4)",
     fields: [inode, path],
     blob: data,
+    blob_version: 1,
 );
 
 impl_corpus_signal!(ExternalMatchSignal, "signal_external_match",
@@ -723,6 +741,7 @@ impl_corpus_signal!(ExternalMatchSignal, "signal_external_match",
     insert_sql: "INSERT OR REPLACE INTO signal_external_match (inode, path, data, data_hash) VALUES (?1, ?2, ?3, ?4)",
     fields: [inode, path],
     blob: data,
+    blob_version: 1,
 );
 
 impl_corpus_signal!(ReleasePackingSignal, "signal_release_packing",
@@ -736,6 +755,7 @@ impl_corpus_signal!(ReleasePackingSignal, "signal_release_packing",
     insert_sql: "INSERT OR REPLACE INTO signal_release_packing (inode, path, data, data_hash) VALUES (?1, ?2, ?3, ?4)",
     fields: [inode, path],
     blob: data,
+    blob_version: 1,
 );
 
 impl_corpus_signal!(UnmatchedCorpusTrackSignal, "signal_unmatched_corpus_track",
@@ -750,6 +770,7 @@ impl_corpus_signal!(UnmatchedCorpusTrackSignal, "signal_unmatched_corpus_track",
     insert_sql: "INSERT OR REPLACE INTO signal_unmatched_corpus_track (inode, path, category, data, data_hash) VALUES (?1, ?2, ?3, ?4, ?5)",
     fields: [inode, path, category via sql_via],
     blob: data,
+    blob_version: 1,
 );
 
 // ============================================================================
@@ -826,6 +847,7 @@ impl_aggregate_signal!(FingerprintOverlapSignal, "signal_fingerprint_overlap",
     insert_sql: "INSERT OR REPLACE INTO signal_fingerprint_overlap (key, data, data_hash) VALUES (?1, ?2, ?3)",
     fields: [key],
     blob: inodes,
+    blob_version: 1,
 );
 
 impl_signal_query!(all, FingerprintOverlapSignal, "signal_fingerprint_overlap", [key], inodes);
@@ -840,6 +862,7 @@ impl_aggregate_signal!(MetadataDuplicateSignal, "signal_metadata_duplicate",
     insert_sql: "INSERT OR REPLACE INTO signal_metadata_duplicate (key, data, data_hash) VALUES (?1, ?2, ?3)",
     fields: [key],
     blob: data,
+    blob_version: 1,
 );
 
 impl_aggregate_signal!(DuplicateInodeSignal, "signal_duplicate_inode",
@@ -853,6 +876,7 @@ impl_aggregate_signal!(DuplicateInodeSignal, "signal_duplicate_inode",
     insert_sql: "INSERT OR REPLACE INTO signal_duplicate_inode (key, inode, data, data_hash) VALUES (?1, ?2, ?3, ?4)",
     fields: [key, inode],
     blob: inodes,
+    blob_version: 1,
 );
 
 impl_aggregate_signal!(MissingTagSignal, "signal_missing_tag",
@@ -865,6 +889,7 @@ impl_aggregate_signal!(MissingTagSignal, "signal_missing_tag",
     insert_sql: "INSERT OR REPLACE INTO signal_missing_tag (key, data, data_hash) VALUES (?1, ?2, ?3)",
     fields: [key],
     blob: data,
+    blob_version: 1,
 );
 
 impl_signal_query!(all, MissingTagSignal, "signal_missing_tag", [key], data);
@@ -879,6 +904,7 @@ impl_aggregate_signal!(MissingAlbumSingleSignal, "signal_missing_album_single",
     insert_sql: "INSERT OR REPLACE INTO signal_missing_album_single (key, data, data_hash) VALUES (?1, ?2, ?3)",
     fields: [key],
     blob: data,
+    blob_version: 1,
 );
 
 impl_signal_query!(all, MissingAlbumSingleSignal, "signal_missing_album_single", [key], data);
@@ -893,6 +919,7 @@ impl_aggregate_signal!(DeployConflictSignal, "signal_deploy_conflict",
     insert_sql: "INSERT OR REPLACE INTO signal_deploy_conflict (key, data, data_hash) VALUES (?1, ?2, ?3)",
     fields: [key],
     blob: inodes,
+    blob_version: 1,
 );
 
 impl_aggregate_signal!(SidecarDeployConflictSignal, "signal_sidecar_deploy_conflict",
@@ -907,6 +934,7 @@ impl_aggregate_signal!(SidecarDeployConflictSignal, "signal_sidecar_deploy_confl
     insert_sql: "INSERT OR REPLACE INTO signal_sidecar_deploy_conflict (key, deploy_path, library_name, data, data_hash) VALUES (?1, ?2, ?3, ?4, ?5)",
     fields: [key, deploy_path, library_name],
     blob: inodes,
+    blob_version: 1,
 );
 
 impl_aggregate_signal!(TagCanonicitySignal, "signal_tag_canonicity",
@@ -920,6 +948,7 @@ impl_aggregate_signal!(TagCanonicitySignal, "signal_tag_canonicity",
     insert_sql: "INSERT OR REPLACE INTO signal_tag_canonicity (key, tag_name, data, data_hash) VALUES (?1, ?2, ?3, ?4)",
     fields: [key, tag_name],
     blob: data,
+    blob_version: 1,
 );
 
 impl_signal_query!(by_key, TagCanonicitySignal, "signal_tag_canonicity", [key, tag_name], data);
@@ -934,6 +963,7 @@ impl_aggregate_signal!(InconsistentAlbumArtistSignal, "signal_inconsistent_album
     insert_sql: "INSERT OR REPLACE INTO signal_inconsistent_album_artist (key, data, data_hash) VALUES (?1, ?2, ?3)",
     fields: [key],
     blob: data,
+    blob_version: 1,
 );
 
 impl_signal_query!(by_key, InconsistentAlbumArtistSignal, "signal_inconsistent_album_artist", [key], data);
@@ -948,6 +978,7 @@ impl_aggregate_signal!(CrossSourceOverlapSignal, "signal_cross_source_overlap",
     insert_sql: "INSERT OR REPLACE INTO signal_cross_source_overlap (key, data, data_hash) VALUES (?1, ?2, ?3)",
     fields: [key],
     blob: data,
+    blob_version: 1,
 );
 
 impl_signal_query!(all, CrossSourceOverlapSignal, "signal_cross_source_overlap", [key], data);
@@ -962,6 +993,7 @@ impl_aggregate_signal!(ReleaseOverlapSignal, "signal_release_overlap",
     insert_sql: "INSERT OR REPLACE INTO signal_release_overlap (key, data, data_hash) VALUES (?1, ?2, ?3)",
     fields: [key],
     blob: data,
+    blob_version: 1,
 );
 
 impl_signal_query!(all, ReleaseOverlapSignal, "signal_release_overlap", [key], data);
@@ -976,6 +1008,7 @@ impl_aggregate_signal!(RedundantDuplicateSignal, "signal_redundant_duplicate",
     insert_sql: "INSERT OR REPLACE INTO signal_redundant_duplicate (key, data, data_hash) VALUES (?1, ?2, ?3)",
     fields: [key],
     blob: data,
+    blob_version: 1,
 );
 
 impl_aggregate_signal!(DiscExtractionSignal, "signal_disc_extraction",
@@ -988,6 +1021,7 @@ impl_aggregate_signal!(DiscExtractionSignal, "signal_disc_extraction",
     insert_sql: "INSERT OR REPLACE INTO signal_disc_extraction (key, data, data_hash) VALUES (?1, ?2, ?3)",
     fields: [key],
     blob: data,
+    blob_version: 1,
 );
 
 impl_signal_query!(all, DiscExtractionSignal, "signal_disc_extraction", [key], data);
@@ -1006,6 +1040,7 @@ impl_aggregate_signal!(UnfilledReleaseSlotSignal, "signal_unfilled_release_slot"
     insert_sql: "INSERT OR REPLACE INTO signal_unfilled_release_slot (key, data, data_hash) VALUES (?1, ?2, ?3)",
     fields: [key],
     blob: data,
+    blob_version: 1,
 );
 
 impl_aggregate_signal!(PackedReleaseSignal, "signal_packed_release",
@@ -1018,6 +1053,7 @@ impl_aggregate_signal!(PackedReleaseSignal, "signal_packed_release",
     insert_sql: "INSERT OR REPLACE INTO signal_packed_release (key, data, data_hash) VALUES (?1, ?2, ?3)",
     fields: [key],
     blob: data,
+    blob_version: 1,
 );
 
 impl_aggregate_signal!(PackingKnotSignal, "signal_packing_knot",
@@ -1030,6 +1066,7 @@ impl_aggregate_signal!(PackingKnotSignal, "signal_packing_knot",
     insert_sql: "INSERT OR REPLACE INTO signal_packing_knot (key, data, data_hash) VALUES (?1, ?2, ?3)",
     fields: [key],
     blob: data,
+    blob_version: 1,
 );
 
 impl_aggregate_signal!(AlternativeReleasePackingSignal, "signal_alternative_release_packing",
@@ -1042,6 +1079,7 @@ impl_aggregate_signal!(AlternativeReleasePackingSignal, "signal_alternative_rele
     insert_sql: "INSERT OR REPLACE INTO signal_alternative_release_packing (key, data, data_hash) VALUES (?1, ?2, ?3)",
     fields: [key],
     blob: data,
+    blob_version: 1,
 );
 
 impl_aggregate_signal!(VariousArtistsOverrideSignal, "signal_various_artists_override",
@@ -1054,6 +1092,7 @@ impl_aggregate_signal!(VariousArtistsOverrideSignal, "signal_various_artists_ove
     insert_sql: "INSERT OR REPLACE INTO signal_various_artists_override (key, data, data_hash) VALUES (?1, ?2, ?3)",
     fields: [key],
     blob: data,
+    blob_version: 1,
 );
 
 impl_aggregate_signal!(PinnedReleaseConflictSignal, "signal_pinned_release_conflict",
@@ -1066,6 +1105,7 @@ impl_aggregate_signal!(PinnedReleaseConflictSignal, "signal_pinned_release_confl
     insert_sql: "INSERT OR REPLACE INTO signal_pinned_release_conflict (key, data, data_hash) VALUES (?1, ?2, ?3)",
     fields: [key],
     blob: data,
+    blob_version: 1,
 );
 
 impl_aggregate_signal!(SameRecordingDifferentReleaseSignal, "signal_same_recording_different_release",
@@ -1078,6 +1118,7 @@ impl_aggregate_signal!(SameRecordingDifferentReleaseSignal, "signal_same_recordi
     insert_sql: "INSERT OR REPLACE INTO signal_same_recording_different_release (key, data, data_hash) VALUES (?1, ?2, ?3)",
     fields: [key],
     blob: data,
+    blob_version: 1,
 );
 
 // Table creation is now handled by `db::table_schema::schema_inventory()`.

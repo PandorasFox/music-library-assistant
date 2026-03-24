@@ -154,6 +154,41 @@ macro_rules! signal_registry {
             entries
         }
 
+        /// Returns `(table_name, blob_version)` for all signal types with BLOB data.
+        ///
+        /// Used by the reconciler to detect stale blob schemas at startup.
+        /// Signals with `BLOB_VERSION == 0` (no blob field) are excluded.
+        #[allow(clippy::vec_init_then_push)]
+        pub fn signal_blob_versions() -> Vec<(&'static str, u32)> {
+            use crate::meta::signals::store::{AggregateSignalStore, CorpusSignalStore};
+            let mut versions = Vec::new();
+            $(
+                if <$m_type as CorpusSignalStore>::BLOB_VERSION > 0 {
+                    versions.push((
+                        <$m_type as CorpusSignalStore>::TABLE_NAME,
+                        <$m_type as CorpusSignalStore>::BLOB_VERSION,
+                    ));
+                }
+            )*
+            $(
+                if <$i_type as CorpusSignalStore>::BLOB_VERSION > 0 {
+                    versions.push((
+                        <$i_type as CorpusSignalStore>::TABLE_NAME,
+                        <$i_type as CorpusSignalStore>::BLOB_VERSION,
+                    ));
+                }
+            )*
+            $(
+                if <$a_type as AggregateSignalStore>::BLOB_VERSION > 0 {
+                    versions.push((
+                        <$a_type as AggregateSignalStore>::TABLE_NAME,
+                        <$a_type as AggregateSignalStore>::BLOB_VERSION,
+                    ));
+                }
+            )*
+            versions
+        }
+
         /// Clear mutable corpus signals for an inode.
         ///
         /// Clears signals that represent mutable file state (tags, paths, deploy status).

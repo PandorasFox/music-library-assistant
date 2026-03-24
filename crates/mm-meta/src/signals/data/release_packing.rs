@@ -132,38 +132,6 @@ pub struct PackedReleaseData {
     pub low_confidence_avg_album_match: Option<f64>,
 }
 
-impl PackedReleaseData {
-    /// Deserialize from bincode, handling blobs written before the
-    /// low_confidence metric fields were added.
-    pub fn deserialize_compat(blob: &[u8]) -> Result<Self, bincode::Error> {
-        match bincode::deserialize::<Self>(blob) {
-            Ok(data) => Ok(data),
-            Err(_) => {
-                #[derive(Deserialize)]
-                struct Legacy {
-                    release_id: String,
-                    release_title: String,
-                    release_artist: String,
-                    category: PackedReleaseCategory,
-                    assigned_count: u32,
-                    total_tracks: u32,
-                }
-                let legacy: Legacy = bincode::deserialize(blob)?;
-                Ok(Self {
-                    release_id: legacy.release_id,
-                    release_title: legacy.release_title,
-                    release_artist: legacy.release_artist,
-                    category: legacy.category,
-                    assigned_count: legacy.assigned_count,
-                    total_tracks: legacy.total_tracks,
-                    low_confidence_acoustid_ratio: None,
-                    low_confidence_avg_album_match: None,
-                })
-            }
-        }
-    }
-}
-
 // ============================================================================
 // Packing Knot Data
 // ============================================================================

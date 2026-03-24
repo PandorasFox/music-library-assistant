@@ -398,6 +398,11 @@ pub fn schema_fingerprint() -> u64 {
             idx.hash(&mut hasher);
         }
     }
+    // Include blob schema versions so struct layout changes trigger reconciliation.
+    for (table_name, version) in crate::meta::signals::registry::signal_blob_versions() {
+        table_name.hash(&mut hasher);
+        version.hash(&mut hasher);
+    }
     hasher.finish()
 }
 

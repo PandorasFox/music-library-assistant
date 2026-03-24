@@ -11,7 +11,7 @@
 //! strings against it, then compare `pragma_table_info` between the in-memory
 //! (expected) and real (actual) databases. This leverages SQLite's own parser.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -141,6 +141,37 @@ impl ReconciliationPlan {
 
                 // Check for missing indices
                 check_missing_indices(conn, entry, &mut plan)?;
+            }
+        }
+
+        // Check blob schema versions for signal tables with BLOB data.
+        // A version mismatch means the bincode struct layout changed —
+        // old blobs are undeserializable, so the table needs recreation.
+        let stored_blob_versions = get_stored_blob_versions(conn);
+        let recreated_tables: HashSet<&str> = plan.recreated_signals
+            .iter()
+            .map(|s| s.table.as_str())
+            .collect();
+
+        for (table_name, compiled_version) in crate::meta::signals::registry::signal_blob_versions() {
+            // Skip tables already scheduled for recreation (SQL schema drift)
+            if recreated_tables.contains(table_name) {
+                continue;
+            }
+            let stored = stored_blob_versions.get(table_name).copied().unwrap_or(0);
+            if stored != compiled_version {
+                // Only recreate Computed tables
+                let is_computed = inventory.iter().any(|e| {
+                    e.name == table_name && e.kind == TableKind::Computed
+                });
+                if is_computed {
+                    if let Some(entry) = inventory.iter().find(|e| e.name == table_name) {
+                        plan.recreated_signals.push(SignalRecreation {
+                            table: table_name.to_string(),
+                            create_sql: entry.create_sql.to_string(),
+                        });
+                    }
+                }
             }
         }
 
@@ -293,6 +324,9 @@ impl ReconciliationPlan {
             (m.apply)(db)?;
             data_migrations::mark_migration_applied(db, m.id)?;
         }
+
+        // 6. Store current blob schema versions
+        store_blob_versions(conn)?;
 
         Ok(())
     }
@@ -449,6 +483,43 @@ fn seed_dirty_inodes_all(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    Ok(())
+}
+
+/// Read stored blob schema versions from `app_metadata`.
+fn get_stored_blob_versions(conn: &Connection) -> HashMap<String, u32> {
+    let mut stmt = match conn.prepare(
+        "SELECT key, value FROM app_metadata WHERE key LIKE 'blob_version:%'",
+    ) {
+        Ok(s) => s,
+        Err(_) => return HashMap::new(),
+    };
+    let rows = match stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }) {
+        Ok(r) => r,
+        Err(_) => return HashMap::new(),
+    };
+    let mut map = HashMap::new();
+    for row in rows.flatten() {
+        if let Some(table_name) = row.0.strip_prefix("blob_version:") {
+            if let Ok(v) = row.1.parse::<u32>() {
+                map.insert(table_name.to_string(), v);
+            }
+        }
+    }
+    map
+}
+
+/// Write current blob schema versions to `app_metadata`.
+fn store_blob_versions(conn: &Connection) -> Result<()> {
+    for (table_name, version) in crate::meta::signals::registry::signal_blob_versions() {
+        let key = format!("blob_version:{}", table_name);
+        conn.execute(
+            "INSERT OR REPLACE INTO app_metadata (key, value, updated_at) VALUES (?1, ?2, datetime('now'))",
+            params![key, version.to_string()],
+        )?;
+    }
     Ok(())
 }
 

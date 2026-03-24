@@ -164,11 +164,9 @@ pub struct GetReleaseOverlapData;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetLosslessRemuxData;
 
-/// Deploy modal data with optional config for library assignment.
+/// Deploy modal data — library_name is baked into the deploy-ready signals.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetDeployData {
-    pub config: Option<crate::config::Config>,
-}
+pub struct GetDeployData;
 
 /// Manual review data for a specific review kind.
 #[derive(Debug, Clone, Serialize, Deserialize)]

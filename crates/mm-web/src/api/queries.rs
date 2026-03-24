@@ -276,9 +276,8 @@ impl WebQuery for GetDiscExtractionData {
 }
 
 impl WebQuery for GetDeployData {
-    fn from_web(_: &HashMap<String, String>, body: &[u8]) -> Result<Self, ApiError> {
-        let config = if body.is_empty() { None } else { Some(from_body(body)?) };
-        Ok(Self { config })
+    fn from_web(_: &HashMap<String, String>, _body: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self)
     }
 }
 

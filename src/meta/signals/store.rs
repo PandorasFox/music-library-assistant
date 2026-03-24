@@ -610,11 +610,12 @@ impl_corpus_signal!(DeployReadySignal, "signal_deploy_ready",
         inode INTEGER PRIMARY KEY,
         path TEXT NOT NULL,
         deploy_path TEXT NOT NULL,
+        library_name TEXT NOT NULL,
         data_hash INTEGER NOT NULL DEFAULT 0,
         discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )",
-    insert_sql: "INSERT OR REPLACE INTO signal_deploy_ready (inode, path, deploy_path, data_hash) VALUES (?1, ?2, ?3, ?4)",
-    fields: [inode, path, deploy_path],
+    insert_sql: "INSERT OR REPLACE INTO signal_deploy_ready (inode, path, deploy_path, library_name, data_hash) VALUES (?1, ?2, ?3, ?4, ?5)",
+    fields: [inode, path, deploy_path, library_name],
 );
 
 impl_corpus_signal!(DeployedHealthySignal, "signal_deployed_healthy",

@@ -360,8 +360,8 @@ impl_domain_query! {
 }
 
 impl_domain_query! {
-    GetDeployData => DeployModalData, |s, db| {
-        modal_loaders::load_deploy_data(db, s.config.as_ref())
+    GetDeployData => DeployModalData, |_s, db| {
+        modal_loaders::load_deploy_data(db)
             .unwrap_or_default()
     }
 }

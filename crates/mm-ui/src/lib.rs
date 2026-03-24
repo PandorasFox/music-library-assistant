@@ -7,6 +7,7 @@
 pub mod click_targets;
 pub mod decision_field;
 pub mod decision_keys;
+pub mod deploy;
 pub mod dir_config_editor;
 pub mod directory_browser;
 pub mod domain_types;

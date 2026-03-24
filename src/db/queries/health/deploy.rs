@@ -16,14 +16,14 @@ impl Database {
 
         let mut stmt = self
             .conn
-            .prepare("SELECT path, deploy_path FROM signal_deploy_ready ORDER BY path")?;
+            .prepare("SELECT path, deploy_path, library_name FROM signal_deploy_ready ORDER BY path")?;
 
         let results = stmt
             .query_map(params![], |row| {
                 Ok(DeploySignalFile {
-                    library_name: String::new(), // populated by caller via config lookup
                     corpus_path: row.get(0)?,
                     deploy_path: row.get(1)?,
+                    library_name: row.get(2)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;

@@ -35,6 +35,7 @@ struct PrecomputedFile {
     inode: i64,
     corpus_path: String,
     deploy_path: String,
+    library_name: String,
 }
 
 // ============================================================================
@@ -880,7 +881,11 @@ pub fn execute_derive_corpus_deploy_status(
 
         // Only build precomputed entries for healthy, source-configured files.
         let is_healthy = healthy_inodes.contains(&inode);
-        let in_source = config.is_path_in_source(Path::new(corpus_path));
+        let resolved = config.resolve_source_config(Path::new(corpus_path));
+        let in_source = resolved.is_some();
+        let library_name = resolved
+            .and_then(|r| r.libraries.into_iter().next())
+            .unwrap_or_default();
         let keep = is_healthy && in_source;
 
         if !is_healthy {
@@ -896,6 +901,7 @@ pub fn execute_derive_corpus_deploy_status(
                 inode,
                 corpus_path: corpus_path.clone(),
                 deploy_path,
+                library_name,
             });
             let stored = &precomputed.last().unwrap().deploy_path;
             // Entry API needs owned key on first insert; borrow-check on existing.
@@ -1003,6 +1009,7 @@ pub fn execute_derive_corpus_deploy_status(
                             inode: file.inode,
                             path: file.corpus_path.clone(),
                             deploy_path: file.deploy_path.clone(),
+                            library_name: file.library_name.clone(),
                         });
                         computed_deploy_ready.push(ComputedCorpusSignal::new(file.inode, signal));
                     } else {
@@ -1015,6 +1022,7 @@ pub fn execute_derive_corpus_deploy_status(
                         inode: file.inode,
                         path: file.corpus_path.clone(),
                         deploy_path: file.deploy_path.clone(),
+                        library_name: file.library_name.clone(),
                     });
                     computed_deploy_ready.push(ComputedCorpusSignal::new(file.inode, signal));
                 }

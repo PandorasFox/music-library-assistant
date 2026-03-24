@@ -17,6 +17,8 @@ pub struct DeployReadySignal {
     pub inode: i64,
     pub path: String,
     pub deploy_path: String,
+    /// Target library name (e.g., "music", "soundtracks")
+    pub library_name: String,
 }
 
 /// Healthy corpus file deployed at correct library path.
@@ -102,7 +104,7 @@ pub struct SidecarDeployConflictSignal {
 // impl_content_hash! invocations for deploy signals
 // ============================================================================
 
-impl_content_hash!(DeployReadySignal => [path, deploy_path]);
+impl_content_hash!(DeployReadySignal => [path, deploy_path, library_name]);
 impl_content_hash!(DeployedHealthySignal => [path, library_path]);
 impl_content_hash!(SidecarDeployReadySignal => [path, deploy_path, library_name] + blob(data));
 impl_content_hash!(LibraryLeftoverSignal => []);

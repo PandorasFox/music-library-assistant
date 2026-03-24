@@ -1,12 +1,11 @@
 //! Deployment Preview Modal
 //!
-//! Handles the deployment preview: loading deploy data, staging deploy mutations
-//! (leftovers, stale, new, sidecars), and the preview action handler.
+//! Handles the deployment preview: staging deploy mutations via the shared
+//! mm-ui deploy logic, then routing to transaction review.
 
 use super::super::App;
 use super::witness;
 use super::HandleAction;
-use mm_ui::decision_keys;
 use crate::{deploy_modal, ActiveView};
 
 impl HandleAction for deploy_modal::DeployAction {
@@ -44,41 +43,27 @@ impl App {
         data: &deploy_modal::DeployModalData,
         gesture: &witness::ConfirmationGesture,
     ) -> usize {
-        let open_txn = self.open_txn_mode();
-        let mutation_set = data.to_mutations(&self.resolver);
+        let prepared = mm_ui::deploy::prepare_deploy_decisions(data, &self.resolver);
 
-        if mutation_set.skipped > 0 {
+        if prepared.skipped > 0 {
             mm_meta::logging::log_error(format!(
                 "[DEPLOY] {} new files skipped: no library_name (source dir without libraries?)",
-                mutation_set.skipped,
+                prepared.skipped,
             ));
         }
 
-        let count = mutation_set.deploy.len() + mutation_set.sidecars.len();
+        let count: usize = prepared.decisions.iter().map(|d| d.mutations.len()).sum();
         if count == 0 {
             return 0;
         }
 
-        // Start transaction and stage decisions
-        if !open_txn {
+        if !self.open_txn_mode() {
             let _ = self.start_transaction("Deploy");
         }
-        if !mutation_set.deploy.is_empty() {
-            let decision = gesture.decide("Deploy operations", mutation_set.deploy);
-            let _ = super::super::operator_decisions::stage_decision(
-                self,
-                decision_keys::deploy(),
-                decision,
-            );
-        }
-        if !mutation_set.sidecars.is_empty() {
-            let sidecar_label = format!("Deploy cover art ({} images)", mutation_set.sidecars.len());
-            let decision = gesture.decide(&sidecar_label, mutation_set.sidecars);
-            let _ = super::super::operator_decisions::stage_decision(
-                self,
-                decision_keys::deploy_sidecars(),
-                decision,
-            );
+
+        for dd in prepared.decisions {
+            let decision = gesture.decide(&dd.label, dd.mutations);
+            let _ = super::super::operator_decisions::stage_decision(self, dd.key, decision);
         }
 
         count

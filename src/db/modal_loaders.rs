@@ -442,28 +442,16 @@ fn build_meta_cache(
 /// Load all deploy signal data from the database.
 pub fn load_deploy_data(
     read_db: &ReadOnlyDb<'_>,
-    config: Option<&crate::config::Config>,
 ) -> Result<mm_meta::views::cluster_deploy::DeployModalData> {
     use mm_meta::views::cluster_deploy::{
         DeployModalData,
     };
 
     let healthy = read_db.get_deployed_healthy_files()?;
-    let mut new = read_db.get_deploy_ready_files()?;
+    let new = read_db.get_deploy_ready_files()?;
     let conflicts = read_db.get_deploy_conflict_groups()?;
     let leftover = read_db.get_library_leftover_files()?;
     let stale = read_db.get_library_stale_files()?;
-
-    if let Some(cfg) = config {
-        for file in &mut new {
-            if let Some(lib) = cfg
-                .resolve_source_config_for_db_path(&file.corpus_path)
-                .and_then(|r| r.libraries.into_iter().next())
-            {
-                file.library_name = lib;
-            }
-        }
-    }
 
     let sidecars = load_deploy_sidecars(read_db);
     let sidecar_conflicts = read_db.get_sidecar_conflict_groups().unwrap_or_default();

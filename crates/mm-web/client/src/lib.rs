@@ -1478,36 +1478,21 @@ async fn do_stage_deploy() -> Result<(), JsValue> {
     let data = api::get_deploy_data().await?;
     let config = fetch_config().await?;
     let resolver = PathResolver::from_config(&config);
-    let mutation_set = data.to_mutations(&resolver);
+    let prepared = mm_ui::deploy::prepare_deploy_decisions(&data, &resolver);
 
-    if mutation_set.skipped > 0 {
+    if prepared.skipped > 0 {
         web_sys::console::warn_1(
-            &format!("{} new files skipped: no library_name", mutation_set.skipped).into(),
+            &format!("{} new files skipped: no library_name", prepared.skipped).into(),
         );
     }
 
-    let count = mutation_set.deploy.len() + mutation_set.sidecars.len();
-    if count == 0 {
+    if prepared.decisions.is_empty() {
         web_sys::console::log_1(&"No deploy operations needed".into());
         return Ok(());
     }
 
-    if !mutation_set.deploy.is_empty() {
-        stage_decision(
-            &mm_ui::decision_keys::deploy(),
-            "Deploy operations",
-            &mutation_set.deploy,
-        )
-        .await?;
-    }
-    if !mutation_set.sidecars.is_empty() {
-        let label = format!("Deploy cover art ({} images)", mutation_set.sidecars.len());
-        stage_decision(
-            &mm_ui::decision_keys::deploy_sidecars(),
-            &label,
-            &mutation_set.sidecars,
-        )
-        .await?;
+    for dd in &prepared.decisions {
+        stage_decision(&dd.key, &dd.label, &dd.mutations).await?;
     }
 
     navigate_to(&Route::TransactionReview(route::TransactionReviewRoute::default()));

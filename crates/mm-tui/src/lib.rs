@@ -709,11 +709,7 @@ impl App {
         let deploy_status = self.query(mm_meta::domain_queries::GetDeployStatus);
 
         if deploy_status.needs_action {
-            let config = self.config();
-            let cached_data = self
-                .query(mm_meta::domain_queries::GetDeployData {
-                    config: Some((*config).clone()),
-                });
+            let cached_data = self.query(mm_meta::domain_queries::GetDeployData);
             self.view = ActiveView::Deploy(deploy_modal::DeployViewState::preview(cached_data));
         } else {
             self.view = ActiveView::Deploy(deploy_modal::DeployViewState::up_to_date(

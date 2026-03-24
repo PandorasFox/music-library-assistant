@@ -484,9 +484,6 @@ pub struct ExternalMatchingConfig {
     pub tag_templates: Vec<(String, String)>,
     pub credit_routing: CreditRoutingConfig,
     pub mb_tag_names: MbTagNameConfig,
-    /// How to handle existing sidecar art when CAA art is available.
-    /// Only governs replacement behavior — missing art is always fetched.
-    pub cover_art_sanctity: CoverArtSanctity,
     /// Which CAA image types to download (e.g. "Front", "Back").
     pub cover_art_types: Vec<String>,
 }
@@ -504,7 +501,6 @@ impl Default for ExternalMatchingConfig {
             tag_templates: Vec::new(),
             credit_routing: CreditRoutingConfig::default(),
             mb_tag_names: MbTagNameConfig::default(),
-            cover_art_sanctity: CoverArtSanctity::default(),
             cover_art_types: vec!["Front".to_string(), "Back".to_string()],
         }
     }
@@ -522,7 +518,6 @@ impl ExternalMatchingConfig {
     pub const KDL_PREFERRED_LOCALES: &str = "preferred-locales";
     pub const KDL_TAG_TEMPLATES: &str = "tag-templates";
     pub const KDL_CREDIT_ROUTING: &str = "credit-routing";
-    pub const KDL_COVER_ART_SANCTITY: &str = "cover-art-sanctity";
     pub const KDL_COVER_ART_TYPES: &str = "cover-art-types";
 }
 
@@ -639,6 +634,7 @@ pub struct SourceDir {
     pub path_schema: Option<PathTagSchema>,
     pub enable_acoustid: Option<bool>,
     pub pinned_release: Option<String>,
+    pub cover_art_sanctity: Option<CoverArtSanctity>,
 }
 
 impl SourceDir {
@@ -650,6 +646,7 @@ impl SourceDir {
             && self.path_schema.is_none()
             && self.enable_acoustid.is_none()
             && self.pinned_release.is_none()
+            && self.cover_art_sanctity.is_none()
     }
 }
 
@@ -664,6 +661,7 @@ pub struct ResolvedSourceConfig {
     pub interior_dupes: bool,
     pub path_schema: Option<PathTagSchema>,
     pub enable_acoustid: bool,
+    pub cover_art_sanctity: CoverArtSanctity,
 }
 
 /// Shared config wrapped in `Arc<RwLock<Config>>` for thread-safe read/write access.
@@ -756,6 +754,11 @@ impl Config {
             .find_map(|sd| sd.enable_acoustid)
             .unwrap_or(true);
 
+        let cover_art_sanctity = matching
+            .iter()
+            .find_map(|sd| sd.cover_art_sanctity)
+            .unwrap_or_default();
+
         Some(ResolvedSourceConfig {
             source_path,
             libraries,
@@ -763,6 +766,7 @@ impl Config {
             interior_dupes,
             path_schema,
             enable_acoustid,
+            cover_art_sanctity,
         })
     }
 

@@ -360,12 +360,6 @@ fn apply_generic_field(config: &mut Config, block: &str, field: &str, val: &str)
                 return true;
             }
         }
-        (Opinions::KDL_BLOCK_EXTERNAL_MATCHING, ExternalMatchingConfig::KDL_COVER_ART_SANCTITY) => {
-            if let Some(sanctity) = CoverArtSanctity::from_str(val) {
-                config.opinions.external_matching.cover_art_sanctity = sanctity;
-                return true;
-            }
-        }
         // cover_art_types is a list — not supported via generic env override
 
         // disc-extraction

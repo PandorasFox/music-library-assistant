@@ -1,7 +1,7 @@
 //! dirs.kdl — Source directory configuration parsing and serialization.
 
 use super::path_schema::parse_path_schema;
-use super::types::SourceDir;
+use super::types::{CoverArtSanctity, SourceDir};
 use anyhow::Result;
 use mm_utils::get_config_dir;
 use std::fs;
@@ -43,6 +43,7 @@ pub fn parse_dirs_kdl(content: &str) -> Result<Vec<SourceDir>> {
                 path_schema: None,
                 enable_acoustid: None,
                 pinned_release: None,
+                cover_art_sanctity: None,
             };
 
             if let Some(children) = node.children() {
@@ -74,6 +75,13 @@ pub fn parse_dirs_kdl(content: &str) -> Result<Vec<SourceDir>> {
                             if let Some(entry) = child.entries().first() {
                                 if let Some(s) = entry.value().as_string() {
                                     source.pinned_release = Some(s.to_string());
+                                }
+                            }
+                        }
+                        "cover-art-sanctity" => {
+                            if let Some(entry) = child.entries().first() {
+                                if let Some(s) = entry.value().as_string() {
+                                    source.cover_art_sanctity = CoverArtSanctity::from_str(s);
                                 }
                             }
                         }
@@ -134,6 +142,9 @@ fn serialize_dirs_kdl(dirs: &[SourceDir]) -> String {
         }
         if let Some(ref release_id) = dir.pinned_release {
             out.push_str(&format!("    pinned-release \"{}\"\n", release_id));
+        }
+        if let Some(sanctity) = dir.cover_art_sanctity {
+            out.push_str(&format!("    cover-art-sanctity \"{}\"\n", sanctity.as_str()));
         }
         out.push_str("}\n");
     }

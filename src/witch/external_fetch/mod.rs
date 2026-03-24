@@ -137,8 +137,8 @@ async fn scheduler_loop(
                             continue;
                         }
                         crate::logging::log_general(format!(
-                            "[FETCH] Cover art: {} releases to process, sanctity={:?}",
-                            cab.queue.len(), cab.sanctity,
+                            "[FETCH] Cover art: {} releases to process",
+                            cab.queue.len(),
                         ));
                         let _ = message_tx.send(SchedulerMessage::CoverArtProgress(cab.progress.clone()));
                     }
@@ -154,7 +154,7 @@ async fn scheduler_loop(
                             let client = cab.client.clone();
                             let corpus_root = cab.corpus_root.clone();
                             let stash_root = cab.stash_root.clone();
-                            let sanctity = cab.sanctity;
+                            let sanctity = item.sanctity;
                             let wanted_types = cab.wanted_types.clone();
                             let release_id = item.release_id.clone();
 
@@ -445,7 +445,6 @@ struct CoverArtBatch {
     progress: CoverArtProgress,
     corpus_root: std::path::PathBuf,
     stash_root: std::path::PathBuf,
-    sanctity: CoverArtSanctity,
     wanted_types: Vec<String>,
 }
 
@@ -454,6 +453,8 @@ struct CaaQueueItem {
     release_id: String,
     /// Corpus-relative directory containing the release's audio files.
     target_dir: String,
+    /// Resolved sanctity for this directory.
+    sanctity: CoverArtSanctity,
     /// Existing front cover dimensions, if a sidecar exists.
     existing_front: Option<(u32, u32)>,
     /// Existing back cover dimensions, if a sidecar exists.
@@ -572,12 +573,11 @@ fn extend_acoustid_queue(
 
 /// Initialize a cover art fetch batch from config + DB state.
 fn init_cover_art_batch(db: &Database, shared_config: &SharedConfig) -> CoverArtBatch {
-    let (sanctity, wanted_types, corpus_root, stash_root) = {
+    let (wanted_types, corpus_root, stash_root) = {
         let config = shared_config.read().expect("SharedConfig lock poisoned");
         let em = &config.opinions.external_matching;
         let resolver = PathResolver::from_config(&config);
         (
-            em.cover_art_sanctity,
             em.cover_art_types.clone(),
             resolver.corpus_dir(),
             resolver.stash_dir(),
@@ -585,7 +585,7 @@ fn init_cover_art_batch(db: &Database, shared_config: &SharedConfig) -> CoverArt
     };
 
     let mut queue = VecDeque::new();
-    populate_cover_art_queue(db, &wanted_types, sanctity, &corpus_root, &mut queue);
+    populate_cover_art_queue(db, shared_config, &wanted_types, &corpus_root, &mut queue);
 
     let progress = CoverArtProgress {
         total_releases: queue.len(),
@@ -598,7 +598,6 @@ fn init_cover_art_batch(db: &Database, shared_config: &SharedConfig) -> CoverArt
         progress,
         corpus_root,
         stash_root,
-        sanctity,
         wanted_types,
     }
 }
@@ -993,8 +992,8 @@ fn extract_entities_from_recording(
 /// their corpus directories, and checks for existing art to decide what to fetch.
 fn populate_cover_art_queue(
     db: &Database,
+    shared_config: &SharedConfig,
     wanted_types: &[String],
-    sanctity: CoverArtSanctity,
     _corpus_root: &std::path::Path,
     queue: &mut VecDeque<CaaQueueItem>,
 ) {
@@ -1030,7 +1029,15 @@ fn populate_cover_art_queue(
     let wants_front = wanted_types.iter().any(|t| t == "Front");
     let wants_back = wanted_types.iter().any(|t| t == "Back");
 
+    let config = shared_config.read().expect("SharedConfig lock poisoned");
+
     for (release_id, dir) in release_dirs {
+        // Resolve sanctity for this directory
+        let sanctity = config
+            .resolve_source_config(std::path::Path::new(&dir))
+            .map(|rsc| rsc.cover_art_sanctity)
+            .unwrap_or_default();
+
         // Check existing art in this directory
         let existing_front = if wants_front {
             get_existing_art_dims(db, &dir, "cover_front")
@@ -1055,6 +1062,7 @@ fn populate_cover_art_queue(
         queue.push_back(CaaQueueItem {
             release_id,
             target_dir: dir,
+            sanctity,
             existing_front,
             existing_back,
         });

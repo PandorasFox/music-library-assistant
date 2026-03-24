@@ -25,12 +25,13 @@ pub struct DirConfigEditorState {
     pub path_schema: Option<String>,
     pub enable_acoustid: Option<bool>,
     pub pinned_release: Option<String>,
+    pub cover_art_sanctity: Option<mm_meta::config::CoverArtSanctity>,
 }
 
 impl DirConfigEditorState {
     /// Create editor state from a `GetDirConfig` response.
     pub fn new(source_path: PathBuf, source_dir: Option<SourceDir>) -> Self {
-        let (libraries, can_stash_dupes, interior_dupes, path_schema, enable_acoustid, pinned_release) =
+        let (libraries, can_stash_dupes, interior_dupes, path_schema, enable_acoustid, pinned_release, cover_art_sanctity) =
             match &source_dir {
                 Some(sd) => (
                     sd.libraries.clone(),
@@ -39,8 +40,9 @@ impl DirConfigEditorState {
                     sd.path_schema.as_ref().map(|s| s.template.clone()),
                     sd.enable_acoustid,
                     sd.pinned_release.clone(),
+                    sd.cover_art_sanctity,
                 ),
-                None => (vec![], None, None, None, None, None),
+                None => (vec![], None, None, None, None, None, None),
             };
         Self {
             source_path,
@@ -51,12 +53,13 @@ impl DirConfigEditorState {
             path_schema,
             enable_acoustid,
             pinned_release,
+            cover_art_sanctity,
         }
     }
 
     /// Whether any field has been changed from the original.
     pub fn has_changes(&self) -> bool {
-        let (orig_libs, orig_csd, orig_id, orig_ps, orig_ea, orig_pr) = match &self.original {
+        let (orig_libs, orig_csd, orig_id, orig_ps, orig_ea, orig_pr, orig_cas) = match &self.original {
             Some(sd) => (
                 &sd.libraries,
                 sd.can_stash_dupes,
@@ -64,6 +67,7 @@ impl DirConfigEditorState {
                 sd.path_schema.as_ref().map(|s| s.template.clone()),
                 sd.enable_acoustid,
                 sd.pinned_release.clone(),
+                sd.cover_art_sanctity,
             ),
             None => {
                 // Any non-default value is a change from "no config"
@@ -72,7 +76,8 @@ impl DirConfigEditorState {
                     || self.interior_dupes.is_some()
                     || self.path_schema.is_some()
                     || self.enable_acoustid.is_some()
-                    || self.pinned_release.is_some();
+                    || self.pinned_release.is_some()
+                    || self.cover_art_sanctity.is_some();
             }
         };
         self.libraries != *orig_libs
@@ -81,6 +86,7 @@ impl DirConfigEditorState {
             || self.path_schema != orig_ps
             || self.enable_acoustid != orig_ea
             || self.pinned_release != orig_pr
+            || self.cover_art_sanctity != orig_cas
     }
 
     /// Build a `SourceDir` from the current edited values.
@@ -96,6 +102,7 @@ impl DirConfigEditorState {
                 .and_then(|t| mm_meta::config::path_schema::parse_path_schema(t).ok()),
             enable_acoustid: self.enable_acoustid,
             pinned_release: self.pinned_release.clone(),
+            cover_art_sanctity: self.cover_art_sanctity,
         }
     }
 
@@ -111,6 +118,7 @@ impl DirConfigEditorState {
                 path_schema: None,
                 enable_acoustid: None,
                 pinned_release: None,
+                cover_art_sanctity: None,
             },
         }
     }

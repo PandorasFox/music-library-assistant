@@ -413,15 +413,6 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
                 MbTagNameConfig::KDL_MB_TAG_NAMES => {
                     parse_mb_tag_names(child, &mut opinions.mb_tag_names);
                 }
-                ExternalMatchingConfig::KDL_COVER_ART_SANCTITY => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_string() {
-                            if let Some(sanctity) = CoverArtSanctity::from_str(val) {
-                                opinions.cover_art_sanctity = sanctity;
-                            }
-                        }
-                    }
-                }
                 ExternalMatchingConfig::KDL_COVER_ART_TYPES => {
                     // Multi-value node: cover-art-types "Front" "Back"
                     let types: Vec<String> = child

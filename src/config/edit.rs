@@ -317,7 +317,6 @@ pub fn apply_config_edits_to_kdl(
         || new_em.auto_enrich_on_match != old_em.auto_enrich_on_match
         || new_em.mb_cache_ttl_days != old_em.mb_cache_ttl_days
         || new_em.preferred_locales != old_em.preferred_locales
-        || new_em.cover_art_sanctity != old_em.cover_art_sanctity
         || new_em.cover_art_types != old_em.cover_art_types
     {
         let block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_EXTERNAL_MATCHING);
@@ -373,13 +372,6 @@ pub fn apply_config_edits_to_kdl(
                 node.push(kdl::KdlEntry::new(kdl::KdlValue::String(locale.clone())));
             }
             block.nodes_mut().push(node);
-        }
-        if new_em.cover_art_sanctity != old_em.cover_art_sanctity {
-            set_or_create_string_node(
-                block,
-                ExternalMatchingConfig::KDL_COVER_ART_SANCTITY,
-                new_em.cover_art_sanctity.as_str(),
-            );
         }
         if new_em.cover_art_types != old_em.cover_art_types {
             block

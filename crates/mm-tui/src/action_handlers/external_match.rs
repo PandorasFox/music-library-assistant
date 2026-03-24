@@ -391,6 +391,7 @@ impl App {
                     path_schema: None,
                     enable_acoustid: None,
                     pinned_release: None,
+                    cover_art_sanctity: None,
                 },
             };
 

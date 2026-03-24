@@ -2181,6 +2181,10 @@ pub fn mm_tag_delete(tag_name: &str, button: &web_sys::HtmlElement) {
     let marker = doc.create_element("span").unwrap();
     marker.set_attribute("data-deleted-tag", tag_name).ok();
     marker.set_attribute("data-deleted-value", &original).ok();
+    // Propagate value→inodes breakdown from the delete button (bulk editors only).
+    if let Some(vi) = button.get_attribute("data-value-inodes") {
+        marker.set_attribute("data-value-inodes", &vi).ok();
+    }
     deletions.append_child(&marker).ok();
 
     row.remove();
@@ -2394,7 +2398,7 @@ pub fn mm_bulk_tag_dir(path: &str) {
 
         let node = views::render_bulk_tag_editor(&data);
         let doc = web_sys::window().unwrap().document().unwrap();
-        if let Some(content) = doc.get_element_by_id("mm-content") {
+        if let Ok(Some(content)) = doc.query_selector(".mm-content") {
             content.set_inner_html(&node.to_html());
         }
     });
@@ -2503,8 +2507,23 @@ async fn do_bulk_tag_save() -> Result<(), JsValue> {
             let marker = markers.get(i).unwrap();
             let el: web_sys::Element = marker.dyn_into()?;
             let tag = el.get_attribute("data-deleted-tag").unwrap_or_default();
-            let val = el.get_attribute("data-deleted-value").unwrap_or_default();
-            if !tag.is_empty() {
+            if tag.is_empty() {
+                continue;
+            }
+
+            // Check for value→inodes breakdown (non-uniform tags in bulk editor).
+            if let Some(vi_json) = el.get_attribute("data-value-inodes") {
+                // Parse [[value, [inodes]], ...] and generate per-file drop ops.
+                if let Ok(vi) = serde_json::from_str::<Vec<(String, Vec<i64>)>>(&vi_json) {
+                    for (val, val_inodes) in &vi {
+                        for &inode in val_inodes {
+                            ops.push(TagOp::drop_tag(inode, &tag, val));
+                        }
+                    }
+                }
+            } else {
+                // Uniform tag — same value on all files.
+                let val = el.get_attribute("data-deleted-value").unwrap_or_default();
                 for &inode in &inodes {
                     ops.push(TagOp::drop_tag(inode, &tag, &val));
                 }

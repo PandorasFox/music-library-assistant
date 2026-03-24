@@ -406,6 +406,7 @@ impl UnifiedTagEditorState {
 
         for (idx, entry) in agg.entries().iter().enumerate() {
             let is_current = idx == form.cursor;
+            let is_dropped = matches!(&entry.state, AggregatedState::Edited(v) if v.is_empty());
             let is_modified = matches!(entry.state, AggregatedState::Edited(_));
 
             let name_display =
@@ -436,6 +437,9 @@ impl UnifiedTagEditorState {
                             }
                         }
                         AggregatedState::Various => "(various values)".to_string(),
+                        AggregatedState::Edited(vals) if vals.is_empty() => {
+                            "→ (dropped)".to_string()
+                        }
                         AggregatedState::Edited(vals) => format!("→ {}", vals.join(", ")),
                     }
                 };
@@ -457,6 +461,9 @@ impl UnifiedTagEditorState {
                         FieldColumn::Value => (inactive, active),
                     }
                 }
+            } else if is_dropped {
+                let drop_style = Style::default().fg(Color::Red).add_modifier(Modifier::DIM);
+                (drop_style, drop_style)
             } else if is_modified {
                 let mod_style = Style::default().fg(Color::Yellow);
                 (mod_style, mod_style)

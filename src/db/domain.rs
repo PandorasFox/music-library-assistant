@@ -1005,21 +1005,22 @@ fn load_bulk_tag_aggregate(
     );
 
     // Step 3: aggregate.
-    // For each tag name, track: set of distinct values, and count of files that have it.
+    // For each tag name, track: distinct values and which inodes have each value.
     let mut tag_order: Vec<String> = Vec::new();
-    let mut tag_values: HashMap<String, HashMap<String, usize>> = HashMap::new();
+    let mut tag_value_inodes: HashMap<String, HashMap<String, Vec<i64>>> = HashMap::new();
     let mut tag_presence: HashMap<String, usize> = HashMap::new();
 
-    for (_, tags) in &per_file_tags {
+    for (inode, tags) in &per_file_tags {
         for (name, value) in tags {
-            if !tag_values.contains_key(name) {
+            if !tag_value_inodes.contains_key(name) {
                 tag_order.push(name.clone());
             }
-            *tag_values
+            tag_value_inodes
                 .entry(name.clone())
                 .or_default()
                 .entry(value.clone())
-                .or_insert(0) += 1;
+                .or_default()
+                .push(*inode);
             *tag_presence.entry(name.clone()).or_insert(0) += 1;
         }
     }
@@ -1028,13 +1029,20 @@ fn load_bulk_tag_aggregate(
         .into_iter()
         .map(|name| {
             let presence = tag_presence.get(&name).copied().unwrap_or(0);
-            let values = tag_values.get(&name).unwrap();
-            let uniform_value = if values.len() == 1 {
+            let values = tag_value_inodes.get(&name).unwrap();
+            let is_uniform = values.len() == 1;
+            let uniform_value = if is_uniform {
                 Some(values.keys().next().unwrap().clone())
             } else {
                 None
             };
-            AggregateTag { name, uniform_value, presence }
+            // Include value→inodes breakdown for non-uniform tags.
+            let value_inodes = if is_uniform {
+                Vec::new()
+            } else {
+                values.iter().map(|(v, inodes)| (v.clone(), inodes.clone())).collect()
+            };
+            AggregateTag { name, uniform_value, presence, value_inodes }
         })
         .collect();
 

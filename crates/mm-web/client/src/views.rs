@@ -2052,8 +2052,8 @@ pub fn render_bulk_tag_editor(data: &serde_json::Value) -> Node {
                             .class("mm-tag-name"),
                     )
                     .child(val_input)
-                    .child(if is_uniform {
-                        Node::from(html::button()
+                    .child({
+                        let mut btn = html::button()
                             .class("mm-btn mm-tag-delete")
                             .attr("type", "button")
                             .attr("data-tag-name", tag_name)
@@ -2061,9 +2061,15 @@ pub fn render_bulk_tag_editor(data: &serde_json::Value) -> Node {
                                 "onclick",
                                 "window.__mm_tag_delete(this.dataset.tagName, this)",
                             )
-                            .text("\u{00d7}"))
-                    } else {
-                        Node::from(span())
+                            .text("\u{00d7}");
+                        // For non-uniform tags, embed value→inodes mapping
+                        // so the save logic can build correct per-file drop ops.
+                        if !is_uniform {
+                            if let Some(vi) = tag.get("value_inodes") {
+                                btn = btn.attr("data-value-inodes", &vi.to_string());
+                            }
+                        }
+                        btn
                     })
                     .into(),
             );

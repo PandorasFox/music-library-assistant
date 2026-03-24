@@ -106,6 +106,11 @@ pub struct AggregateTag {
     pub uniform_value: Option<String>,
     /// How many files have this tag.
     pub presence: usize,
+    /// For non-uniform tags: value → inodes mapping, so the client can
+    /// build correct `drop_tag` ops without an extra round-trip.
+    /// Empty for uniform tags (all inodes share the single value).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub value_inodes: Vec<(String, Vec<i64>)>,
 }
 
 // ============================================================================

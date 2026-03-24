@@ -255,11 +255,6 @@ pub async fn get_query_with(name: &str, params: &str) -> Result<serde_json::Valu
     get(&format!("/queries/{name}?{params}")).await
 }
 
-/// POST /queries/{name} with JSON body → raw JSON response (for queries with complex params)
-pub async fn post_query(name: &str, body: &serde_json::Value) -> Result<serde_json::Value, JsValue> {
-    post(&format!("/queries/{name}"), body).await
-}
-
 /// GET /queries/directory-listing?zone=Corpus[&parent=some/path]
 pub async fn get_directory_listing(parent: Option<&str>) -> Result<serde_json::Value, JsValue> {
     let url = match parent {

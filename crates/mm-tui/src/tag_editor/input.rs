@@ -266,6 +266,25 @@ impl UnifiedTagEditorState {
             }
         }
 
+        // In aggregated mode, intercept Delete/Backspace to mark tags as dropped
+        // across all files via the AggregatedTagSet, rather than delegating to
+        // FieldForm (which only touches tag_sets[0]).
+        if self.is_aggregated_mode()
+            && self.core.form.edit_mode == FieldEditMode::Navigating
+            && matches!(action, InputAction::Delete | InputAction::Backspace)
+        {
+            if let Some(ref mut agg) = self.core.aggregated {
+                let cursor = self.core.form.cursor;
+                if cursor < agg.entry_count() {
+                    if let Some(entry) = agg.get_mut(cursor) {
+                        // Mark as Edited(empty) = "drop from all files".
+                        entry.state = mm_ui::tag_set::AggregatedState::Edited(Vec::new());
+                    }
+                }
+            }
+            return UnifiedTagEditorAction::None;
+        }
+
         // Delegate to FieldFormState.
         // Extract the tag set index, then borrow form and tag_sets separately
         // to avoid double mutable borrow through self.

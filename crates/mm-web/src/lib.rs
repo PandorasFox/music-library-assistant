@@ -65,6 +65,8 @@ pub fn router(state: AppState) -> Router {
         .route("/tx/confirm", post(api::transactions::confirm))
         .route("/tx/discard", post(api::transactions::discard))
         .route("/tx/approve-releases", post(api::transactions::approve_releases))
+        // WebSocket event stream (token validated via query param)
+        .route("/ws", get(api::ws::ws_handler))
         // Build info (unauthenticated — just a timestamp)
         .route("/build-info", get(serve_build_info))
         // Actions (typed protocol bindings)

@@ -106,7 +106,10 @@ async fn init() -> Result<(), JsValue> {
 
     if api::has_token() {
         match load_from_hash().await {
-            Ok(()) => return Ok(()),
+            Ok(()) => {
+                start_event_stream();
+                return Ok(());
+            }
             Err(_) => api::clear_token(),
         }
     }
@@ -219,8 +222,32 @@ fn mount_error(msg: &str) {
 /// Redirect to the login screen. Called by the api module on HTTP 401.
 pub(crate) fn redirect_to_login() {
     stop_poll();
+    api::stop_event_stream();
     ACTIVE_RESOLUTION.with(|cell| cell.borrow_mut().take());
     mount(&render_login(Some("Session expired")));
+}
+
+/// Start the WebSocket event stream for server-pushed status updates.
+/// Called once after login succeeds (or when the app initializes with a valid token).
+fn start_event_stream() {
+    api::start_event_stream(|status| {
+        let doc = match web_sys::window().and_then(|w| w.document()) {
+            Some(d) => d,
+            None => return,
+        };
+
+        // Update the status section if visible (Health view).
+        if let Some(el) = doc.get_element_by_id("mm-status-section") {
+            let node = views::render_status_content(&status);
+            el.set_inner_html(&node.to_html());
+        }
+
+        // Update fetch progress if visible (ExternalMatches view).
+        if let Some(el) = doc.get_element_by_id("mm-fetch-progress") {
+            let node = views::render_fetch_progress_section(&status);
+            el.set_inner_html(&node.to_html());
+        }
+    });
 }
 
 // ============================================================================
@@ -934,6 +961,7 @@ async fn do_login() -> Result<(), JsValue> {
 
     match api::login(&user_el.value(), &pass_el.value()).await {
         Ok(_) => {
+            start_event_stream();
             navigate_to(&Route::Health(Default::default()));
             load_from_hash().await?;
             Ok(())
@@ -1742,14 +1770,8 @@ async fn do_health_refresh() {
         return;
     }
 
+    // Status is pushed via WebSocket — only poll for insights data here.
     let doc = web_sys::window().unwrap().document().unwrap();
-
-    if let Ok(status) = api::get_status().await {
-        let node = views::render_status_content(&status);
-        if let Some(el) = doc.get_element_by_id("mm-status-section") {
-            el.set_inner_html(&node.to_html());
-        }
-    }
 
     if let Ok(insights) = api::get_insights().await {
         let node = views::render_insights_content(&insights);
@@ -1784,17 +1806,9 @@ async fn do_external_matches_refresh() {
         return;
     }
 
+    // Fetch progress is pushed via WebSocket — only poll for external matches data here.
     let doc = web_sys::window().unwrap().document().unwrap();
 
-    // Refresh fetch progress section from status.
-    if let Ok(status) = api::get_status().await {
-        let node = views::render_fetch_progress_section(&status);
-        if let Some(el) = doc.get_element_by_id("mm-fetch-progress") {
-            el.set_inner_html(&node.to_html());
-        }
-    }
-
-    // Refresh external matches data (counts update as results arrive).
     if let Ok(data) = api::get_external_matches().await {
         let node = views::render_external_matches_data(&data);
         if let Some(el) = doc.get_element_by_id("mm-external-data") {

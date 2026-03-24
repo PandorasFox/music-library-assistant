@@ -6,6 +6,8 @@
 //! Typed functions deserialize into mm-meta structs where possible, so the
 //! compiler catches field name mismatches rather than silently rendering nothing.
 
+use std::cell::RefCell;
+
 use serde::de::DeserializeOwned;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
@@ -342,5 +344,84 @@ pub async fn queue_task(task: &str) -> Result<serde_json::Value, JsValue> {
 /// POST /actions/execute → stage a typed protocol binding as a decision
 pub async fn stage_action(binding: &serde_json::Value) -> Result<serde_json::Value, JsValue> {
     post("/actions/execute", binding).await
+}
+
+// ============================================================================
+// WebSocket event stream
+// ============================================================================
+
+thread_local! {
+    static EVENT_WS: RefCell<Option<web_sys::WebSocket>> = const { RefCell::new(None) };
+}
+
+/// Open a WebSocket to `/ws?token=<token>` for server-pushed events.
+///
+/// `on_status` is called with each pushed `WitchStatus` JSON string.
+/// On close or error, redirects to login and invalidates the session.
+pub fn start_event_stream(on_status: impl Fn(WitchStatus) + 'static) {
+    stop_event_stream();
+
+    let token = match get_token() {
+        Some(t) => t,
+        None => return,
+    };
+
+    let window = web_sys::window().unwrap();
+    let location = window.location();
+    let protocol = location.protocol().unwrap_or_default();
+    let host = location.host().unwrap_or_default();
+    let ws_protocol = if protocol == "https:" { "wss:" } else { "ws:" };
+    let url = format!("{ws_protocol}//{host}/ws?token={token}");
+
+    let ws = match web_sys::WebSocket::new(&url) {
+        Ok(ws) => ws,
+        Err(_) => return,
+    };
+
+    // onmessage: parse WitchEvent JSON → extract WitchStatus → call callback
+    let on_message = Closure::wrap(Box::new(move |e: web_sys::MessageEvent| {
+        if let Some(text) = e.data().as_string() {
+            if let Ok(event) = serde_json::from_str::<mm_meta::witch_types::WitchEvent>(&text) {
+                match event {
+                    mm_meta::witch_types::WitchEvent::StatusChanged(status) => {
+                        on_status(status);
+                    }
+                }
+            }
+        }
+    }) as Box<dyn Fn(web_sys::MessageEvent)>);
+    ws.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+    on_message.forget();
+
+    // onclose: session lost → redirect to login
+    let on_close = Closure::wrap(Box::new(|_: web_sys::CloseEvent| {
+        clear_token();
+        crate::redirect_to_login();
+    }) as Box<dyn Fn(web_sys::CloseEvent)>);
+    ws.set_onclose(Some(on_close.as_ref().unchecked_ref()));
+    on_close.forget();
+
+    // onerror: treat as connection lost
+    let on_error = Closure::wrap(Box::new(|_: web_sys::ErrorEvent| {
+        // onclose will fire after onerror, which handles the redirect.
+        // No action needed here — avoid double redirect.
+    }) as Box<dyn Fn(web_sys::ErrorEvent)>);
+    ws.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+    on_error.forget();
+
+    EVENT_WS.with(|cell| *cell.borrow_mut() = Some(ws));
+}
+
+/// Close the event stream WebSocket if open.
+pub fn stop_event_stream() {
+    EVENT_WS.with(|cell| {
+        if let Some(ws) = cell.borrow_mut().take() {
+            // Clear handlers before closing to avoid redirect_to_login on intentional close
+            ws.set_onclose(None);
+            ws.set_onerror(None);
+            ws.set_onmessage(None);
+            let _ = ws.close();
+        }
+    });
 }
 

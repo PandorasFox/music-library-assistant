@@ -36,6 +36,63 @@ fn sanitize_path_component(s: &str) -> String {
         .collect()
 }
 
+/// Elide feat. credits with more than 3 artists to keep filenames sane.
+///
+/// "Title (feat. A, B & C)" → unchanged
+/// "Title (feat. A, B, C, D, E & F)" → "Title (feat. A, B, C & others)"
+///
+/// Handles `feat.`, `ft.`, and `featuring` (case-insensitive).
+fn elide_featuring(title: &str) -> String {
+    const MAX_FEAT_ARTISTS: usize = 3;
+
+    // Find feat. section — look for "(feat." / "(ft." / "(featuring" case-insensitively
+    let lower = title.to_lowercase();
+    let feat_patterns = ["(feat. ", "(feat ", "(ft. ", "(ft ", "(featuring "];
+    let Some((feat_byte_start, pattern_len)) = feat_patterns.iter().find_map(|pat| {
+        lower.find(pat).map(|pos| (pos, pat.len()))
+    }) else {
+        return title.to_string();
+    };
+
+    // Find matching close paren
+    let inner_start = feat_byte_start + pattern_len;
+    let Some(close_paren) = title[inner_start..].find(')') else {
+        return title.to_string();
+    };
+    let artists_str = &title[inner_start..inner_start + close_paren];
+
+    // Split on commas and "&" / "and" to count artists
+    let artists: Vec<&str> = artists_str
+        .split(|c| c == ',')
+        .flat_map(|chunk| {
+            // Split "A & B" but not within a single artist name that happens to contain &
+            let trimmed = chunk.trim();
+            if let Some(amp_pos) = trimmed.rfind(" & ") {
+                vec![trimmed[..amp_pos].trim(), trimmed[amp_pos + 3..].trim()]
+            } else {
+                vec![trimmed]
+            }
+        })
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if artists.len() <= MAX_FEAT_ARTISTS {
+        return title.to_string();
+    }
+
+    // Keep first 3, elide the rest
+    let kept: Vec<&str> = artists[..MAX_FEAT_ARTISTS].to_vec();
+    let feat_keyword = &title[feat_byte_start + 1..feat_byte_start + pattern_len - 1]; // preserve original casing of "feat."
+    let after_close = &title[inner_start + close_paren + 1..];
+    format!(
+        "{}({} {} & others){}",
+        &title[..feat_byte_start],
+        feat_keyword.trim(),
+        kept.join(", "),
+        after_close,
+    )
+}
+
 /// Compute deployment path from file path and tags.
 ///
 /// Returns: `{album_artist}/{album}/{track}. {title}.{ext}`
@@ -79,7 +136,8 @@ pub fn compute_deployment_path_with_tags(
         path.push(sanitize_path_component(album_artist));
         path.push(sanitize_path_component(album));
 
-        let filename = if let Some(title) = find_tag_in_map(tags, "title") {
+        let filename = if let Some(raw_title) = find_tag_in_map(tags, "title") {
+            let title = elide_featuring(raw_title);
             if let Some(track_num_str) = find_tag_in_map(tags, "tracknumber") {
                 if let Ok(track_num) = track_num_str.parse::<i32>() {
                     // When disc_number is present, prefix track with disc to
@@ -94,14 +152,14 @@ pub fn compute_deployment_path_with_tags(
                     format!(
                         "{}. {}.{}",
                         track_prefix,
-                        sanitize_path_component(title),
+                        sanitize_path_component(&title),
                         ext
                     )
                 } else {
-                    format!("{}.{}", sanitize_path_component(title), ext)
+                    format!("{}.{}", sanitize_path_component(&title), ext)
                 }
             } else {
-                format!("{}.{}", sanitize_path_component(title), ext)
+                format!("{}.{}", sanitize_path_component(&title), ext)
             }
         } else {
             // Fallback to original filename
@@ -118,8 +176,9 @@ pub fn compute_deployment_path_with_tags(
         let mut path = PathBuf::new();
         path.push(sanitize_path_component(album_artist));
 
-        let filename = if let Some(title) = find_tag_in_map(tags, "title") {
-            format!("{}.{}", sanitize_path_component(title), ext)
+        let filename = if let Some(raw_title) = find_tag_in_map(tags, "title") {
+            let title = elide_featuring(raw_title);
+            format!("{}.{}", sanitize_path_component(&title), ext)
         } else {
             Path::new(file_path)
                 .file_name()
@@ -173,6 +232,63 @@ mod tests {
         assert_eq!(sanitize_path_component("Hello/World"), "Hello_World");
         assert_eq!(sanitize_path_component("Track:01"), "Track_01");
         assert_eq!(sanitize_path_component("Normal Name"), "Normal Name");
+    }
+
+    #[test]
+    fn test_elide_featuring_under_threshold() {
+        assert_eq!(
+            elide_featuring("Title (feat. A & B)"),
+            "Title (feat. A & B)"
+        );
+        assert_eq!(
+            elide_featuring("Title (feat. A, B & C)"),
+            "Title (feat. A, B & C)"
+        );
+    }
+
+    #[test]
+    fn test_elide_featuring_over_threshold() {
+        assert_eq!(
+            elide_featuring("Title (feat. A, B, C, D & E)"),
+            "Title (feat. A, B, C & others)"
+        );
+        assert_eq!(
+            elide_featuring("Title (feat. A, B, C, D, E & F)"),
+            "Title (feat. A, B, C & others)"
+        );
+    }
+
+    #[test]
+    fn test_elide_featuring_preserves_suffix() {
+        assert_eq!(
+            elide_featuring("Title (feat. A, B, C & D) [Remix]"),
+            "Title (feat. A, B, C & others) [Remix]"
+        );
+    }
+
+    #[test]
+    fn test_elide_featuring_no_feat() {
+        assert_eq!(elide_featuring("Normal Title"), "Normal Title");
+    }
+
+    #[test]
+    fn test_elide_featuring_case_insensitive() {
+        assert_eq!(
+            elide_featuring("Title (Feat. A, B, C & D)"),
+            "Title (Feat. A, B, C & others)"
+        );
+        assert_eq!(
+            elide_featuring("Title (ft. A, B, C & D)"),
+            "Title (ft. A, B, C & others)"
+        );
+    }
+
+    #[test]
+    fn test_elide_featuring_doom_eternal() {
+        let title = "The Betrayer (feat. Rae Amitay, Elijah Arnold, Tony Campos, Ben Crossbones, Sven De Caluwé, James Dorton)";
+        let elided = elide_featuring(title);
+        assert_eq!(elided, "The Betrayer (feat. Rae Amitay, Elijah Arnold, Tony Campos & others)");
+        assert!(elided.len() < 200);
     }
 
     #[test]

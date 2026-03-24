@@ -8,3 +8,4 @@ description = "Shared utilities for MM (Music Magic)"
 anyhow = "1.0"
 dirs = "5.0"
 chrono = "0.4"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }

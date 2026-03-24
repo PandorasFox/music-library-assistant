@@ -7,6 +7,7 @@
 //! - UTF-8-safe string helpers
 
 pub mod audio;
+pub mod image_hash;
 pub mod metadata_magic;
 pub mod paths;
 pub mod strings;

@@ -14,8 +14,10 @@ pub struct ExternalFetchHandle {
     command_tx: UnboundedSender<FetchCommand>,
     /// Join handle for the scheduler thread.
     handle: Option<JoinHandle<()>>,
-    /// Whether the scheduler is currently active.
+    /// Whether the metadata fetch scheduler is currently active.
     batch_active: bool,
+    /// Whether a cover art fetch is currently active.
+    cover_art_active: bool,
 }
 
 impl ExternalFetchHandle {
@@ -37,6 +39,7 @@ impl ExternalFetchHandle {
             command_tx,
             handle: Some(handle),
             batch_active: false,
+            cover_art_active: false,
         }, message_rx)
     }
 
@@ -58,9 +61,28 @@ impl ExternalFetchHandle {
         self.batch_active = false;
     }
 
-    /// Whether the scheduler is currently active.
+    /// Whether the metadata fetch scheduler is currently active.
     pub fn is_batch_active(&self) -> bool {
         self.batch_active
+    }
+
+    /// Request a cover art fetch from the Cover Art Archive.
+    pub fn request_cover_art(&mut self) {
+        if self.cover_art_active {
+            return;
+        }
+        self.cover_art_active = true;
+        let _ = self.command_tx.send(FetchCommand::StartCoverArt);
+    }
+
+    /// Mark the cover art fetch as done.
+    pub(in crate::witch) fn mark_cover_art_done(&mut self) {
+        self.cover_art_active = false;
+    }
+
+    /// Whether a cover art fetch is currently active.
+    pub fn is_cover_art_active(&self) -> bool {
+        self.cover_art_active
     }
 }
 

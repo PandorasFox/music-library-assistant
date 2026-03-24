@@ -295,6 +295,8 @@ pub struct DecisionDetail {
 pub enum BackgroundTask {
     /// AcoustID + MusicBrainz external metadata fetch.
     ExternalFetch,
+    /// Cover Art Archive sidecar image fetch.
+    CoverArtFetch,
     /// Release bin-packing computation.
     ReleasePacking,
     /// Schema reconciliation pass.

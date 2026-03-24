@@ -253,6 +253,7 @@ impl_diffable_struct!(CreditRoutingConfig { routing, feat_format });
 impl_diffable_struct!(ExternalMatchingConfig {
     acoustid_api_key, requests_per_second, mb_requests_per_second, mb_base_url,
     auto_enrich_on_match, mb_cache_ttl_days, preferred_locales, tag_templates, credit_routing,
+    cover_art_fetch, cover_art_upgrade, cover_art_types,
 });
 impl_diffable_struct!(DiscExtractionOpinions { disc_tag_name, map_letters_to_numbers });
 impl_diffable_struct!(AlbumArtOpinions { sidecar_deploy_mode });

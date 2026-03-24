@@ -651,6 +651,25 @@ impl SignalWriteSender {
         });
     }
 
+    /// Upsert a Cover Art Archive release cache entry.
+    pub fn upsert_caa_release_cache(
+        &self,
+        release_id: &str,
+        status: &str,
+        response_json: Option<&str>,
+        image_count: i64,
+        fetched_at: i64,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::UpsertCaaReleaseCache {
+            release_id: release_id.to_string(),
+            status: status.to_string(),
+            response_json: response_json.map(|s| s.to_string()),
+            image_count,
+            fetched_at,
+        });
+    }
+
     /// Insert a known MusicBrainz entity for resumable fetching.
     pub fn insert_mb_known_entity(
         &self,

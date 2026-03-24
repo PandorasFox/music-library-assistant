@@ -37,6 +37,25 @@ impl HandleAction for external_match_view::ExternalMatchesAction {
                     }
                 }
             }
+            external_match_view::ExternalMatchesAction::RequestCoverArt => {
+                match app.queue_task(mm_meta::protocol::BackgroundTask::CoverArtFetch) {
+                    Ok(None) => {
+                        app.status_message =
+                            Some("Cover art fetch requested".to_string());
+                        let cover_art_active =
+                            app.witch_status().is_cover_art_fetch_active;
+                        if let ActiveView::ExternalMatches(ref mut s) = app.view {
+                            s.data.cover_art_active = cover_art_active;
+                        }
+                    }
+                    Ok(Some(reason)) => {
+                        app.error_popup = Some(reason);
+                    }
+                    Err(e) => {
+                        app.error_popup = Some(format!("Protocol error: {}", e));
+                    }
+                }
+            }
             external_match_view::ExternalMatchesAction::RequestReleasePacking => {
                 match app.queue_task(mm_meta::protocol::BackgroundTask::ReleasePacking) {
                     Ok(Some(reason)) => {

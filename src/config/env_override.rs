@@ -360,6 +360,19 @@ fn apply_generic_field(config: &mut Config, block: &str, field: &str, val: &str)
                 return true;
             }
         }
+        (Opinions::KDL_BLOCK_EXTERNAL_MATCHING, ExternalMatchingConfig::KDL_COVER_ART_FETCH) => {
+            if let Ok(b) = parse_bool(val) {
+                config.opinions.external_matching.cover_art_fetch = b;
+                return true;
+            }
+        }
+        (Opinions::KDL_BLOCK_EXTERNAL_MATCHING, ExternalMatchingConfig::KDL_COVER_ART_UPGRADE) => {
+            if let Ok(b) = parse_bool(val) {
+                config.opinions.external_matching.cover_art_upgrade = b;
+                return true;
+            }
+        }
+        // cover_art_types is a list — not supported via generic env override
 
         // disc-extraction
         (Opinions::KDL_BLOCK_DISC_EXTRACTION, DiscExtractionOpinions::KDL_DISC_TAG_NAME) => {

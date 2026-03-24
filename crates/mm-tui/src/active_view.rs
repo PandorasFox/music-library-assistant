@@ -139,7 +139,7 @@ impl ActiveView {
             Self::TagSearch(_) => Some("Tag Search"),
             Self::TabbedTransactionReview(_) => Some("Transaction"),
             Self::Deploy(_) => Some("Deploy"),
-            Self::ExternalMatches(_) => Some("External Matches"),
+            Self::ExternalMatches(_) => Some("External Authorities"),
             Self::Progress { .. } => None,
             Self::ProgressiveWork(_) => Some("Processing"),
             Self::ExitConfirm(_) => Some("Exit Confirmation"),

@@ -138,3 +138,21 @@ pub(super) fn execute_insert_mb_known_entity(
 
     Ok(())
 }
+
+/// Execute UpsertCaaReleaseCache: insert or replace a CAA release cache entry.
+pub(super) fn execute_upsert_caa_release_cache(
+    db: &Database,
+    release_id: &str,
+    status: &str,
+    response_json: Option<&str>,
+    image_count: i64,
+    fetched_at: i64,
+) -> anyhow::Result<()> {
+    db.conn().execute(
+        r#"INSERT OR REPLACE INTO caa_release_cache
+           (release_id, status, response_json, image_count, fetched_at)
+           VALUES (?1, ?2, ?3, ?4, ?5)"#,
+        params![release_id, status, response_json, image_count, fetched_at],
+    )?;
+    Ok(())
+}

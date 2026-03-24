@@ -256,6 +256,19 @@ pub fn schema_inventory() -> Vec<TableEntry> {
     });
 
     tables.push(TableEntry {
+        name: "caa_release_cache",
+        kind: TableKind::Core,
+        create_sql: "CREATE TABLE IF NOT EXISTS caa_release_cache (
+            release_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            response_json TEXT,
+            image_count INTEGER NOT NULL DEFAULT 0,
+            fetched_at INTEGER NOT NULL
+        )",
+        index_sql: &[],
+    });
+
+    tables.push(TableEntry {
         name: "mb_known_entities",
         kind: TableKind::Core,
         create_sql: "CREATE TABLE IF NOT EXISTS mb_known_entities (

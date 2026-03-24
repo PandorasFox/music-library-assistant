@@ -24,7 +24,7 @@ mod types;
 // Re-export everything that was previously pub or pub(super)
 pub use handle::ExternalFetchHandle;
 pub use types::{
-    FetchProgress, MbEntityKind, MatchRow, SourceProgress,
+    CoverArtProgress, FetchProgress, MbEntityKind, MatchRow, SourceProgress,
 };
 pub(super) use types::SchedulerMessage;
 
@@ -38,8 +38,10 @@ use crate::config::SharedConfig;
 use crate::db::write_thread;
 use crate::db::Database;
 use crate::external::acoustid::{AcoustIDClient, LookupOutcome};
+use crate::external::coverart::CoverArtClient;
 use crate::external::musicbrainz::{MbLookupOutcome, MusicBrainzClient};
 use crate::meta::external::ExternalSource;
+use mm_meta::paths::PathResolver;
 
 use rate_limiter::{AdaptiveRateLimiter, RateLimiter};
 use types::FetchCommand;
@@ -82,6 +84,8 @@ async fn scheduler_loop(
     let mut tick = tokio::time::interval(Duration::from_millis(250));
     let mut in_flight: JoinSet<FetchResult> = JoinSet::new();
     let mut batch: Option<BatchState> = None;
+    let mut caa_batch: Option<CoverArtBatch> = None;
+    let mut caa_in_flight: JoinSet<(CoverArtResult, String)> = JoinSet::new();
 
     loop {
         tokio::select! {
@@ -119,12 +123,56 @@ async fn scheduler_loop(
                             }
                         }
                     }
+                    Some(FetchCommand::StartCoverArt) => {
+                        if caa_batch.is_some() {
+                            continue; // Don't stack
+                        }
+                        caa_batch = Some(init_cover_art_batch(&db, &shared_config));
+                        let cab = caa_batch.as_ref().unwrap();
+                        if cab.queue.is_empty() {
+                            crate::logging::log_general("[FETCH] No cover art work needed");
+                            let _ = message_tx.send(SchedulerMessage::CoverArtDone(cab.progress.clone()));
+                            caa_batch = None;
+                            continue;
+                        }
+                        crate::logging::log_general(format!(
+                            "[FETCH] Cover art: {} releases to process, upgrade={}",
+                            cab.queue.len(), cab.upgrade_mode,
+                        ));
+                        let _ = message_tx.send(SchedulerMessage::CoverArtProgress(cab.progress.clone()));
+                    }
                     Some(FetchCommand::Shutdown) | None => break,
                 }
             }
 
-            _ = tick.tick(), if batch.is_some() => {
-                let b = batch.as_mut().unwrap();
+            _ = tick.tick(), if batch.is_some() || caa_batch.is_some() => {
+                // Dispatch cover art work (no rate limiter — CAA has no limits)
+                if caa_in_flight.is_empty() {
+                    if let Some(ref mut cab) = caa_batch {
+                        if let Some(item) = cab.queue.pop_front() {
+                            let client = cab.client.clone();
+                            let corpus_root = cab.corpus_root.clone();
+                            let stash_root = cab.stash_root.clone();
+                            let upgrade_mode = cab.upgrade_mode;
+                            let wanted_types = cab.wanted_types.clone();
+                            let release_id = item.release_id.clone();
+
+                            let target_dir = item.target_dir.clone();
+                            let existing_front = item.existing_front;
+                            let existing_back = item.existing_back;
+
+                            caa_in_flight.spawn(async move {
+                                let result = execute_cover_art_fetch(
+                                    &client, &release_id, &target_dir, &corpus_root, &stash_root,
+                                    upgrade_mode, &wanted_types, existing_front, existing_back,
+                                ).await;
+                                (result, release_id)
+                            });
+                        }
+                    }
+                }
+
+                let Some(b) = batch.as_mut() else { continue };
 
                 // Dispatch AcoustID if limiter ready and queue non-empty
                 if !b.acoustid_queue.is_empty()
@@ -331,6 +379,32 @@ async fn scheduler_loop(
                     batch = None;
                 }
             }
+
+            Some(result) = caa_in_flight.join_next(), if !caa_in_flight.is_empty() => {
+                let Ok((result, release_id)) = result else { continue };
+
+                // Write CAA cache entry
+                if let Some(sender) = write_thread::signal_sender() {
+                    sender.upsert_caa_release_cache(
+                        &release_id, result.cache_status,
+                        result.cache_json.as_deref(), result.image_count, now_unix(),
+                    );
+                }
+
+                if let Some(ref mut cab) = caa_batch {
+                    cab.progress.processed += 1;
+                    cab.progress.images_written += result.images_written;
+                    cab.progress.images_skipped += result.images_skipped;
+                    cab.progress.images_upgraded += result.images_upgraded;
+                    let _ = message_tx.send(SchedulerMessage::CoverArtProgress(cab.progress.clone()));
+
+                    // Check completion
+                    if cab.queue.is_empty() && caa_in_flight.is_empty() {
+                        let _ = message_tx.send(SchedulerMessage::CoverArtDone(cab.progress.clone()));
+                        caa_batch = None;
+                    }
+                }
+            }
         }
     }
 
@@ -361,6 +435,38 @@ struct BatchState {
     auto_enrich: bool,
     ttl_secs: i64,
     mb_rps_ceiling: u32,
+}
+
+/// State for a cover art fetch batch.
+struct CoverArtBatch {
+    queue: VecDeque<CaaQueueItem>,
+    client: CoverArtClient,
+    progress: CoverArtProgress,
+    corpus_root: std::path::PathBuf,
+    stash_root: std::path::PathBuf,
+    upgrade_mode: bool,
+    wanted_types: Vec<String>,
+}
+
+/// Cover art queue item: one release to fetch art for.
+struct CaaQueueItem {
+    release_id: String,
+    /// Corpus-relative directory containing the release's audio files.
+    target_dir: String,
+    /// Existing front cover dimensions, if a sidecar exists.
+    existing_front: Option<(u32, u32)>,
+    /// Existing back cover dimensions, if a sidecar exists.
+    existing_back: Option<(u32, u32)>,
+}
+
+/// Result from processing a single cover art release.
+struct CoverArtResult {
+    images_written: usize,
+    images_skipped: usize,
+    images_upgraded: usize,
+    cache_status: &'static str,
+    cache_json: Option<String>,
+    image_count: i64,
 }
 
 /// Initialize a new batch from config + DB state.
@@ -460,6 +566,39 @@ fn extend_acoustid_queue(
         populate_acoustid_queue(db, &excluded, &mut batch.acoustid_queue);
         batch.acoustid_stats.total += batch.acoustid_queue.len();
         batch.acoustid_done = false;
+    }
+}
+
+/// Initialize a cover art fetch batch from config + DB state.
+fn init_cover_art_batch(db: &Database, shared_config: &SharedConfig) -> CoverArtBatch {
+    let (upgrade_mode, wanted_types, corpus_root, stash_root) = {
+        let config = shared_config.read().expect("SharedConfig lock poisoned");
+        let em = &config.opinions.external_matching;
+        let resolver = PathResolver::from_config(&config);
+        (
+            em.cover_art_upgrade,
+            em.cover_art_types.clone(),
+            resolver.corpus_dir(),
+            resolver.stash_dir(),
+        )
+    };
+
+    let mut queue = VecDeque::new();
+    populate_cover_art_queue(db, &wanted_types, upgrade_mode, &corpus_root, &mut queue);
+
+    let progress = CoverArtProgress {
+        total_releases: queue.len(),
+        ..Default::default()
+    };
+
+    CoverArtBatch {
+        queue,
+        client: CoverArtClient::new(),
+        progress,
+        corpus_root,
+        stash_root,
+        upgrade_mode,
+        wanted_types,
     }
 }
 
@@ -841,4 +980,315 @@ fn extract_entities_from_recording(
     } else {
         Some(entities)
     }
+}
+
+// ============================================================================
+// Cover Art Queue Population
+// ============================================================================
+
+/// Populate the cover art work queue from DB.
+///
+/// Queries `release_packing_scores` for releases with optimal matches, determines
+/// their corpus directories, and checks for existing art to decide what to fetch.
+fn populate_cover_art_queue(
+    db: &Database,
+    wanted_types: &[String],
+    upgrade_mode: bool,
+    _corpus_root: &std::path::Path,
+    queue: &mut VecDeque<CaaQueueItem>,
+) {
+    use std::collections::HashMap;
+
+    // Get all optimal packing scores with their corpus paths
+    let mut release_dirs: HashMap<String, String> = HashMap::new();
+    let sql = r#"
+        SELECT DISTINCT rps.release_id, f.path
+        FROM release_packing_scores rps
+        JOIN files f ON rps.inode = f.inode
+        WHERE rps.is_optimal = 1 AND f.zone = 'corpus'
+    "#;
+    if let Ok(mut stmt) = db.conn().prepare(sql) {
+        let _ = stmt.query_map([], |row| {
+            let release_id: String = row.get(0)?;
+            let path: String = row.get(1)?;
+            Ok((release_id, path))
+        }).and_then(|rows| {
+            for row in rows {
+                if let Ok((release_id, path)) = row {
+                    // Extract directory from path
+                    if let Some(dir) = std::path::Path::new(&path).parent() {
+                        let dir_str = dir.to_string_lossy().to_string();
+                        release_dirs.entry(release_id).or_insert(dir_str);
+                    }
+                }
+            }
+            Ok(())
+        });
+    }
+
+    let wants_front = wanted_types.iter().any(|t| t == "Front");
+    let wants_back = wanted_types.iter().any(|t| t == "Back");
+
+    for (release_id, dir) in release_dirs {
+        // Check existing art in this directory
+        let existing_front = if wants_front {
+            get_existing_art_dims(db, &dir, "cover_front")
+        } else {
+            None
+        };
+        let existing_back = if wants_back {
+            get_existing_art_dims(db, &dir, "cover_back")
+        } else {
+            None
+        };
+
+        // Skip if all wanted art already exists and we're not in upgrade mode
+        if !upgrade_mode {
+            let front_ok = !wants_front || existing_front.is_some();
+            let back_ok = !wants_back || existing_back.is_some();
+            if front_ok && back_ok {
+                continue;
+            }
+        }
+
+        queue.push_back(CaaQueueItem {
+            release_id,
+            target_dir: dir,
+            existing_front,
+            existing_back,
+        });
+    }
+}
+
+/// Check if a directory has existing cover art of the given role, return its dimensions.
+fn get_existing_art_dims(db: &Database, dir: &str, role: &str) -> Option<(u32, u32)> {
+    use rusqlite::params;
+    let sql = r#"
+        SELECT ii.width, ii.height
+        FROM image_info ii
+        JOIN files f ON ii.inode = f.inode
+        WHERE f.zone = 'corpus'
+          AND ii.role = ?1
+          AND f.path LIKE ?2
+          AND f.path NOT LIKE ?3
+        LIMIT 1
+    "#;
+    // Match files in this directory but not in subdirectories
+    let dir_prefix = if dir.is_empty() { "%".to_string() } else { format!("{}/%", dir) };
+    let subdir_prefix = if dir.is_empty() { "%/%".to_string() } else { format!("{}/%/%", dir) };
+
+    db.conn().query_row(sql, params![role, dir_prefix, subdir_prefix], |row| {
+        Ok((row.get::<_, u32>(0)?, row.get::<_, u32>(1)?))
+    }).ok()
+}
+
+// ============================================================================
+// Cover Art Async Execution
+// ============================================================================
+
+/// Execute a cover art fetch for a single release.
+///
+/// Fetches the CAA listing, downloads wanted image types, and writes sidecar
+/// files to the corpus directory. In upgrade mode, compares new images with
+/// existing ones via perceptual hashing and only replaces visual matches.
+async fn execute_cover_art_fetch(
+    client: &CoverArtClient,
+    release_id: &str,
+    target_dir: &str,
+    corpus_root: &std::path::Path,
+    stash_root: &std::path::Path,
+    upgrade_mode: bool,
+    wanted_types: &[String],
+    existing_front: Option<(u32, u32)>,
+    existing_back: Option<(u32, u32)>,
+) -> CoverArtResult {
+    // Fetch listing
+    let listing = match client.fetch_listing(release_id).await {
+        Ok(Some(listing)) => listing,
+        Ok(None) => {
+            return CoverArtResult {
+                images_written: 0, images_skipped: 0, images_upgraded: 0,
+                cache_status: "not_found", cache_json: None, image_count: 0,
+            };
+        }
+        Err(e) => {
+            crate::logging::log_error(format!(
+                "[FETCH] CAA listing failed for {}: {:#}", release_id, e
+            ));
+            return CoverArtResult {
+                images_written: 0, images_skipped: 0, images_upgraded: 0,
+                cache_status: "error", cache_json: None, image_count: 0,
+            };
+        }
+    };
+
+    let cache_json = serde_json::to_string(&listing).ok();
+    let image_count = listing.images.len() as i64;
+
+    let mut written = 0usize;
+    let mut skipped = 0usize;
+    let mut upgraded = 0usize;
+
+    for image in &listing.images {
+        for wanted_type in wanted_types {
+            if !image.types.iter().any(|t| t == wanted_type) {
+                continue;
+            }
+
+            let (sidecar_name, existing_dims) = match wanted_type.as_str() {
+                "Front" => ("cover", existing_front),
+                "Back" => ("back", existing_back),
+                _ => continue,
+            };
+
+            if existing_dims.is_some() && !upgrade_mode {
+                skipped += 1;
+                continue;
+            }
+
+            // Download the original image
+            let downloaded = match client.download_image(&image.image).await {
+                Ok(img) => img,
+                Err(e) => {
+                    crate::logging::log_error(format!(
+                        "[FETCH] CAA download failed for {} ({}): {:#}",
+                        release_id, wanted_type, e
+                    ));
+                    skipped += 1;
+                    continue;
+                }
+            };
+
+            let ext = downloaded.format.extension();
+            let filename = format!("{}.{}", sidecar_name, ext);
+            let abs_dir = corpus_root.join(target_dir);
+            let abs_path = abs_dir.join(&filename);
+
+            // Upgrade mode: compare with existing
+            if let Some(_dims) = existing_dims {
+                if upgrade_mode {
+                    // Read existing file for perceptual comparison
+                    let existing_path = find_existing_sidecar(&abs_dir, sidecar_name);
+                    if let Some(ref ep) = existing_path {
+                        match std::fs::read(ep) {
+                            Ok(existing_bytes) => {
+                                match mm_utils::image_hash::is_visual_match(&existing_bytes, &downloaded.bytes) {
+                                    Ok(true) => {
+                                        // Same image, higher res — stash old and write new
+                                        if let Err(e) = stash_file(ep, stash_root, corpus_root) {
+                                            crate::logging::log_error(format!(
+                                                "[FETCH] Failed to stash {}: {:#}", ep.display(), e
+                                            ));
+                                            skipped += 1;
+                                            continue;
+                                        }
+                                        if let Err(e) = write_sidecar(&abs_path, &downloaded.bytes) {
+                                            crate::logging::log_error(format!(
+                                                "[FETCH] Failed to write upgraded cover art: {:#}", e
+                                            ));
+                                            skipped += 1;
+                                            continue;
+                                        }
+                                        upgraded += 1;
+                                        continue;
+                                    }
+                                    Ok(false) => {
+                                        crate::logging::log_general(format!(
+                                            "[FETCH] CAA art for {} differs visually from existing, skipping",
+                                            release_id
+                                        ));
+                                        skipped += 1;
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        crate::logging::log_error(format!(
+                                            "[FETCH] Visual comparison failed for {}: {:#}",
+                                            release_id, e
+                                        ));
+                                        skipped += 1;
+                                        continue;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                crate::logging::log_error(format!(
+                                    "[FETCH] Failed to read existing sidecar {}: {:#}",
+                                    ep.display(), e
+                                ));
+                                skipped += 1;
+                                continue;
+                            }
+                        }
+                    }
+                } else {
+                    skipped += 1;
+                    continue;
+                }
+            }
+
+            // Write new sidecar
+            if let Err(e) = write_sidecar(&abs_path, &downloaded.bytes) {
+                crate::logging::log_error(format!(
+                    "[FETCH] Failed to write cover art to {}: {:#}", abs_path.display(), e
+                ));
+                skipped += 1;
+                continue;
+            }
+
+            crate::logging::log_general(format!(
+                "[FETCH] Wrote cover art: {}/{}", target_dir, filename
+            ));
+            written += 1;
+        }
+    }
+
+    CoverArtResult {
+        images_written: written,
+        images_skipped: skipped,
+        images_upgraded: upgraded,
+        cache_status: "found",
+        cache_json,
+        image_count,
+    }
+}
+
+/// Write bytes to a sidecar file path, creating parent directories if needed.
+fn write_sidecar(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, bytes)?;
+    Ok(())
+}
+
+/// Move an existing file to the stash, preserving corpus-relative path structure.
+fn stash_file(
+    file_path: &std::path::Path,
+    stash_root: &std::path::Path,
+    corpus_root: &std::path::Path,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+    let rel = file_path.strip_prefix(corpus_root)
+        .context("file not under corpus root")?;
+    let stash_dest = stash_root.join("cover-art").join(rel);
+    if let Some(parent) = stash_dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::rename(file_path, &stash_dest)?;
+    crate::logging::log_general(format!(
+        "[FETCH] Stashed old cover art: {} -> {}", file_path.display(), stash_dest.display()
+    ));
+    Ok(())
+}
+
+/// Find an existing sidecar file by stem name (e.g. "cover") in a directory,
+/// trying all known image extensions.
+fn find_existing_sidecar(dir: &std::path::Path, stem: &str) -> Option<std::path::PathBuf> {
+    for ext in mm_utils::IMAGE_EXTENSIONS {
+        let path = dir.join(format!("{}.{}", stem, ext));
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    None
 }

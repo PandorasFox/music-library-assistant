@@ -4,7 +4,7 @@
 //! single StandardListState plus an animation tick counter.
 //!
 //! Flat navigable list with section headers:
-//! - **Actions**: Cache external metadata matches, Analyze release matches
+//! - **Actions**: Cache external metadata matches, Analyze release matches, Download cover art
 //! - **Matches**: Untagged + confidence-bucketed entries
 //! - **Release Packing**: Category entries from bin-packing analysis
 //!
@@ -37,6 +37,8 @@ pub enum ExternalMatchesAction {
     RequestFetch,
     /// Enter on "Analyze release matches" entry
     RequestReleasePacking,
+    /// Enter on "Download cover art" entry
+    RequestCoverArt,
     /// Enter on "Untagged matches" → launch review for untagged entries
     LaunchUntaggedReview,
     /// Enter on a confidence bucket → launch review for entries in that tier
@@ -56,6 +58,8 @@ pub enum NavigableEntry {
     FetchAction,
     /// "Analyze release matches" action entry (always present)
     PackReleasesAction,
+    /// "Download cover art" action entry (always present)
+    CoverArtAction,
     /// "Untagged matches" — files with fingerprint hits but no existing tags
     UntaggedMatches,
     /// Confidence tier bucket
@@ -130,6 +134,12 @@ pub struct ExternalMatchesViewData {
     pub fetch_progress: Option<mm_meta::witch_types::FetchProgress>,
     /// Whether to show singles before incompletes in the menu (from config).
     pub singles_before_incompletes: bool,
+    /// Whether a cover art fetch is currently active.
+    pub cover_art_active: bool,
+    /// Whether the `cover_art_fetch` config option is enabled.
+    pub cover_art_enabled: bool,
+    /// Latest cover art fetch progress snapshot.
+    pub cover_art_progress: Option<mm_meta::witch_types::CoverArtProgress>,
 }
 
 // ============================================================================
@@ -137,7 +147,13 @@ pub struct ExternalMatchesViewData {
 // ============================================================================
 
 impl ExternalMatchesViewData {
-    pub fn new(fetch_active: bool, has_api_key: bool, singles_before_incompletes: bool) -> Self {
+    pub fn new(
+        fetch_active: bool,
+        has_api_key: bool,
+        singles_before_incompletes: bool,
+        cover_art_active: bool,
+        cover_art_enabled: bool,
+    ) -> Self {
         let mut data = Self {
             cached_data: None,
             flat_items: Vec::new(),
@@ -145,6 +161,9 @@ impl ExternalMatchesViewData {
             has_api_key,
             fetch_progress: None,
             singles_before_incompletes,
+            cover_art_active,
+            cover_art_enabled,
+            cover_art_progress: None,
         };
         data.rebuild_items();
         data
@@ -174,6 +193,11 @@ impl ExternalMatchesViewData {
         items.push(ExternalMatchListItem::Entry {
             nav: NavigableEntry::PackReleasesAction,
             detail_lines: self.pack_releases_detail_lines(),
+        });
+
+        items.push(ExternalMatchListItem::Entry {
+            nav: NavigableEntry::CoverArtAction,
+            detail_lines: self.cover_art_detail_lines(),
         });
 
         if let Some(ref data) = self.cached_data {
@@ -566,6 +590,132 @@ impl ExternalMatchesViewData {
         lines
     }
 
+    fn cover_art_detail_lines(&self) -> Vec<Line<'static>> {
+        let mut lines = vec![
+            Line::from(Span::styled(
+                "Download cover art",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+        ];
+
+        if !self.cover_art_enabled {
+            lines.push(Line::from(vec![
+                Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Disabled", Style::default().fg(Color::DarkGray)),
+            ]));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Enable cover_art_fetch in Config",
+                Style::default().fg(Color::DarkGray),
+            )));
+            lines.push(Line::from(Span::styled(
+                "to download album art from the",
+                Style::default().fg(Color::DarkGray),
+            )));
+            lines.push(Line::from(Span::styled(
+                "Cover Art Archive.",
+                Style::default().fg(Color::DarkGray),
+            )));
+        } else if self.cover_art_active {
+            if let Some(ref p) = self.cover_art_progress {
+                lines.push(Line::from(vec![
+                    Span::styled("Releases: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("{}/{}", p.processed, p.total_releases),
+                        Style::default().fg(Color::Yellow),
+                    ),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("  Written:  ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("{:>5}", p.images_written),
+                        Style::default().fg(Color::Green),
+                    ),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("  Skipped:  ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("{:>5}", p.images_skipped),
+                        Style::default().fg(Color::White),
+                    ),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("  Upgraded: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("{:>5}", p.images_upgraded),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                ]));
+
+                if p.total_releases > 0 {
+                    let pct = ((p.processed as f32 / p.total_releases as f32) * 100.0).round();
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(Span::styled(
+                        format!("  Progress: {}%", pct),
+                        Style::default().fg(Color::Yellow),
+                    )));
+                }
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("Active", Style::default().fg(Color::Yellow)),
+                ]));
+            }
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Idle", Style::default().fg(Color::Green)),
+            ]));
+
+            if let Some(ref p) = self.cover_art_progress {
+                if p.total_releases > 0 {
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(Span::styled(
+                        format!("Last run: {} releases", p.total_releases),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                    lines.push(Line::from(vec![
+                        Span::styled("  Written: ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            format!("{}", p.images_written),
+                            Style::default().fg(Color::Green),
+                        ),
+                        Span::styled("  Skipped: ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            format!("{}", p.images_skipped),
+                            Style::default().fg(Color::White),
+                        ),
+                        Span::styled("  Upgraded: ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            format!("{}", p.images_upgraded),
+                            Style::default().fg(Color::Cyan),
+                        ),
+                    ]));
+                }
+            }
+
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Fetch album art from the Cover",
+                Style::default().fg(Color::DarkGray),
+            )));
+            lines.push(Line::from(Span::styled(
+                "Art Archive for packed releases.",
+                Style::default().fg(Color::DarkGray),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Press Enter to start download.",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+
+        lines
+    }
+
     fn untagged_detail_lines(&self) -> Vec<Line<'static>> {
         let count = self
             .cached_data
@@ -659,6 +809,13 @@ impl ExternalMatchesViewData {
                 });
                 if !self.fetch_active && has_data {
                     Some(ExternalMatchesAction::RequestReleasePacking)
+                } else {
+                    None
+                }
+            }
+            NavigableEntry::CoverArtAction => {
+                if self.cover_art_enabled && !self.cover_art_active {
+                    Some(ExternalMatchesAction::RequestCoverArt)
                 } else {
                     None
                 }

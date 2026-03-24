@@ -584,13 +584,16 @@ impl App {
         let ws = self.witch_status();
         let fetch_active = ws.is_external_fetch_active;
         let has_api_key = ws.has_acoustid_api_key;
-        let singles_before_incompletes = self
-            .config()
-            .opinions.release_packing.singles_before_incompletes;
+        let cover_art_active = ws.is_cover_art_fetch_active;
+        let config = self.config();
+        let singles_before_incompletes = config.opinions.release_packing.singles_before_incompletes;
+        let cover_art_enabled = config.opinions.external_matching.cover_art_fetch;
         let mut data = external_match_view::ExternalMatchesViewData::new(
             fetch_active,
             has_api_key,
             singles_before_incompletes,
+            cover_art_active,
+            cover_art_enabled,
         );
         let ext_data = self.query(mm_meta::domain_queries::GetExternalMatches);
         data.update(ext_data);
@@ -1286,12 +1289,17 @@ fn run_app<B: ratatui::backend::Backend>(
         if matches!(app.view, ActiveView::ExternalMatches(_)) {
             let new_fetch_active = app.cached_status.is_external_fetch_active;
             let fetch_progress = app.cached_status.external_fetch_progress.clone();
+            let new_cover_art_active = app.cached_status.is_cover_art_fetch_active;
+            let cover_art_progress = app.cached_status.cover_art_progress.clone();
             let mut fetch_changed = false;
             if let ActiveView::ExternalMatches(ref mut s) = app.view {
-                fetch_changed = s.data.fetch_active != new_fetch_active;
+                fetch_changed = s.data.fetch_active != new_fetch_active
+                    || s.data.cover_art_active != new_cover_art_active;
                 s.data.fetch_active = new_fetch_active;
                 s.data.fetch_progress = fetch_progress;
-                if s.data.fetch_active {
+                s.data.cover_art_active = new_cover_art_active;
+                s.data.cover_art_progress = cover_art_progress;
+                if s.data.fetch_active || s.data.cover_art_active {
                     s.interaction.tick_count = s.interaction.tick_count.wrapping_add(1);
                 }
             }

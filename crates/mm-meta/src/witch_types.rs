@@ -118,6 +118,21 @@ pub struct FetchProgress {
     pub mb_rps: f32,
 }
 
+/// Progress snapshot for Cover Art Archive fetching.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CoverArtProgress {
+    /// Total releases queued for art fetching.
+    pub total_releases: usize,
+    /// Releases processed so far.
+    pub processed: usize,
+    /// New sidecar images written to corpus.
+    pub images_written: usize,
+    /// Images skipped (already present, or no art available).
+    pub images_skipped: usize,
+    /// Existing images replaced with higher-resolution versions.
+    pub images_upgraded: usize,
+}
+
 // ============================================================================
 // Transaction Snapshot
 // ============================================================================
@@ -186,6 +201,12 @@ pub struct WitchStatus {
     pub external_fetch_progress: Option<FetchProgress>,
     /// Whether an AcoustID API key is configured.
     pub has_acoustid_api_key: bool,
+
+    // -- Cover art fetch state --
+    /// Whether a cover art fetch is currently running.
+    pub is_cover_art_fetch_active: bool,
+    /// Progress snapshot from cover art fetch.
+    pub cover_art_progress: Option<CoverArtProgress>,
 
     // -- Generation counters (for event detection via frame diffing) --
     /// Increments each time a mutation batch completes.

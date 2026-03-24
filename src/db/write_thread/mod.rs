@@ -406,6 +406,15 @@ enum DbWriteOp {
         fetched_at: i64,
     },
 
+    /// Upsert a Cover Art Archive release cache entry.
+    UpsertCaaReleaseCache {
+        release_id: String,
+        status: String,
+        response_json: Option<String>,
+        image_count: i64,
+        fetched_at: i64,
+    },
+
     /// Insert a known MusicBrainz entity (for resumable fetching).
     InsertMbKnownEntity {
         mbid: String,

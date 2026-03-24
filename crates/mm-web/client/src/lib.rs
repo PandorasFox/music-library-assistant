@@ -1035,7 +1035,7 @@ pub fn mm_navigate(view_name: &str) {
         "History" => LateralView::History,
         "Transaction" => LateralView::Transaction,
         "Deploy" => LateralView::Deploy,
-        "Ext. Matches" => LateralView::ExternalMatches,
+        "Ext. Authorities" => LateralView::ExternalMatches,
         _ => return,
     };
     navigate_to(&route_for_lateral(view));

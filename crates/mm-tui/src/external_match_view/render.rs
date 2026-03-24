@@ -24,6 +24,9 @@ pub(crate) fn render(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewS
         fetch_active: state.data.fetch_active,
         fetch_progress: state.data.fetch_progress.as_ref(),
         cached_data: state.data.cached_data.as_ref(),
+        cover_art_active: state.data.cover_art_active,
+        cover_art_enabled: state.data.cover_art_enabled,
+        cover_art_progress: state.data.cover_art_progress.as_ref(),
     };
 
     let flat_items = &state.data.flat_items;
@@ -36,7 +39,7 @@ pub(crate) fn render(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewS
         |idx, is_cursor, _is_selected, _width| {
             render_item(flat_items, idx, is_cursor, &snap)
         },
-        "Ext. Matches",
+        "Ext. Authorities",
         true, // always focused (only pane)
     );
 }
@@ -47,6 +50,9 @@ struct RenderSnapshot<'a> {
     fetch_active: bool,
     fetch_progress: Option<&'a mm_meta::witch_types::FetchProgress>,
     cached_data: Option<&'a mm_meta::views::ExternalMatchesData>,
+    cover_art_active: bool,
+    cover_art_enabled: bool,
+    cover_art_progress: Option<&'a mm_meta::witch_types::CoverArtProgress>,
 }
 
 fn render_item(
@@ -68,6 +74,7 @@ fn render_item(
         ExternalMatchListItem::Entry { nav, .. } => match nav {
             NavigableEntry::FetchAction => render_fetch_line(is_cursor, snap),
             NavigableEntry::PackReleasesAction => render_pack_releases_line(is_cursor, snap),
+            NavigableEntry::CoverArtAction => render_cover_art_line(is_cursor, snap),
             NavigableEntry::UntaggedMatches => {
                 let count = snap
                     .cached_data
@@ -167,6 +174,38 @@ fn render_pack_releases_line(is_cursor: bool, snap: &RenderSnapshot) -> Line<'st
     Line::from(vec![
         Span::styled(marker, label_style),
         Span::styled("Analyze release matches   ", label_style),
+        Span::styled(
+            format!("{:<12}", status_label),
+            Style::default().fg(status_color),
+        ),
+    ])
+}
+
+fn render_cover_art_line(is_cursor: bool, snap: &RenderSnapshot) -> Line<'static> {
+    let (status_label, status_color) = if !snap.cover_art_enabled {
+        ("Disabled".to_string(), Color::DarkGray)
+    } else if snap.cover_art_active {
+        if let Some(p) = &snap.cover_art_progress {
+            (
+                format!(
+                    "{}/{} releases, {} images",
+                    p.processed, p.total_releases, p.images_written
+                ),
+                Color::Yellow,
+            )
+        } else {
+            ("Active".to_string(), Color::Yellow)
+        }
+    } else {
+        ("Idle".to_string(), Color::Green)
+    };
+
+    let disabled = !snap.cover_art_enabled || snap.cover_art_active;
+    let (marker, label_style) = cursor_marker_style(is_cursor, disabled);
+
+    Line::from(vec![
+        Span::styled(marker, label_style),
+        Span::styled("Download cover art            ", label_style),
         Span::styled(
             format!("{:<12}", status_label),
             Style::default().fg(status_color),

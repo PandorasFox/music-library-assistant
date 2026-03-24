@@ -1,6 +1,7 @@
 //! Message and data types for external fetch scheduling.
 
 use crate::meta::external::ExternalSource;
+pub use mm_meta::witch_types::CoverArtProgress;
 
 // ============================================================================
 // Public Types
@@ -58,12 +59,18 @@ pub(in crate::witch) enum SchedulerMessage {
     },
     /// Both sources done -- scheduler going back to sleep.
     AllDone,
+    /// Cover art fetch progress update.
+    CoverArtProgress(CoverArtProgress),
+    /// Cover art fetch complete.
+    CoverArtDone(CoverArtProgress),
 }
 
 /// Command from Witch to scheduler.
 pub(super) enum FetchCommand {
     /// Populate AcoustID + MB queues and start fetching.
     Start,
+    /// Fetch cover art from Cover Art Archive for matched releases.
+    StartCoverArt,
     /// Shut down the scheduler thread.
     Shutdown,
 }

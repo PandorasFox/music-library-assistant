@@ -269,6 +269,9 @@ pub struct Witch {
     /// Latest progress snapshot from the external fetch thread.
     /// Updated each tick from Progress results; cleared when a new batch starts.
     fetch_progress: Option<external_fetch::FetchProgress>,
+
+    /// Latest progress snapshot from the cover art fetch.
+    cover_art_progress: Option<external_fetch::CoverArtProgress>,
 }
 
 /// Deferred follow-up work accumulated during `transition_to_completed()`.
@@ -354,6 +357,7 @@ impl Witch {
             scheduler_message_rx: None,
             external_fetch: None,
             fetch_progress: None,
+            cover_art_progress: None,
         }
     }
 
@@ -723,6 +727,12 @@ impl Witch {
                                     match task {
                                         BackgroundTask::ExternalFetch => {
                                             match w.request_external_fetch() {
+                                                Ok(()) => CommandResponse::Ok,
+                                                Err(reason) => CommandResponse::Failed(reason),
+                                            }
+                                        }
+                                        BackgroundTask::CoverArtFetch => {
+                                            match w.request_cover_art_fetch() {
                                                 Ok(()) => CommandResponse::Ok,
                                                 Err(reason) => CommandResponse::Failed(reason),
                                             }
@@ -1301,6 +1311,19 @@ impl Witch {
                     handle.mark_batch_done();
                 }
             }
+            external_fetch::SchedulerMessage::CoverArtProgress(progress) => {
+                self.cover_art_progress = Some(progress);
+            }
+            external_fetch::SchedulerMessage::CoverArtDone(progress) => {
+                crate::logging::log_general(format!(
+                    "[WITCH] Cover art fetch done: {} releases, {} written, {} skipped, {} upgraded",
+                    progress.processed, progress.images_written, progress.images_skipped, progress.images_upgraded,
+                ));
+                self.cover_art_progress = Some(progress);
+                if let Some(ref mut handle) = self.external_fetch {
+                    handle.mark_cover_art_done();
+                }
+            }
         }
     }
 
@@ -1736,6 +1759,51 @@ impl Witch {
             .unwrap_or(false)
     }
 
+    /// Request a cover art fetch from the Cover Art Archive.
+    ///
+    /// No API key needed (CAA is public). Requires `cover_art_fetch` enabled
+    /// in config. Lazy-spawns the external fetch thread if needed.
+    /// Returns `Err(reason)` if the fetch cannot start.
+    pub fn request_cover_art_fetch(&mut self) -> Result<(), String> {
+        let shared_config = match self.shared_config {
+            Some(ref sc) => sc.clone(),
+            None => return Err("Server config not yet available".to_string()),
+        };
+        {
+            let config = shared_config.read().expect("SharedConfig lock poisoned");
+            if !config.opinions.external_matching.cover_art_fetch {
+                return Err("Cover art fetching is not enabled in config".to_string());
+            }
+        }
+        // Lazy-spawn the fetch thread if needed
+        if self.external_fetch.is_none() {
+            let (handle, rx) = external_fetch::ExternalFetchHandle::spawn(shared_config);
+            self.scheduler_message_rx = Some(rx);
+            self.external_fetch = Some(handle);
+            crate::logging::log_general("[WITCH] Spawned external fetch thread");
+        }
+        let handle = self.external_fetch.as_mut().unwrap();
+        if handle.is_cover_art_active() {
+            return Err("Cover art fetch already in progress".to_string());
+        }
+        self.cover_art_progress = None;
+        crate::logging::log_general("[WITCH] Cover art fetch requested");
+        handle.request_cover_art();
+        Ok(())
+    }
+
+    /// Whether a cover art fetch is currently active.
+    pub fn is_cover_art_fetch_active(&self) -> bool {
+        self.external_fetch
+            .as_ref()
+            .is_some_and(|h| h.is_cover_art_active())
+    }
+
+    /// Latest progress snapshot from the cover art fetch.
+    pub fn cover_art_progress(&self) -> Option<&external_fetch::CoverArtProgress> {
+        self.cover_art_progress.as_ref()
+    }
+
     /// Queue release bin-packing analysis (operator-initiated).
     ///
     /// Analyzes cached MusicBrainz data and assigns corpus files to releases
@@ -2166,6 +2234,8 @@ impl Witch {
             is_external_fetch_active: self.is_external_fetch_active(),
             external_fetch_progress: self.external_fetch_progress().cloned(),
             has_acoustid_api_key: self.has_acoustid_api_key(),
+            is_cover_art_fetch_active: self.is_cover_art_fetch_active(),
+            cover_art_progress: self.cover_art_progress.clone(),
             mutations_generation: self.mutations_generation,
             computations_generation: self.computations_generation,
             last_error: self.recent_errors.back().cloned(),

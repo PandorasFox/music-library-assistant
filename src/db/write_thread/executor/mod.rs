@@ -565,6 +565,25 @@ pub(super) fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             });
         }
 
+        DbWriteOp::UpsertCaaReleaseCache {
+            release_id,
+            status,
+            response_json,
+            image_count,
+            fetched_at,
+        } => {
+            with_retry("upsert_caa_release_cache", release_id, || {
+                external_ops::execute_upsert_caa_release_cache(
+                    db,
+                    release_id,
+                    status,
+                    response_json.as_deref(),
+                    *image_count,
+                    *fetched_at,
+                )
+            });
+        }
+
         DbWriteOp::ClearTagEditHistory => {
             with_retry("clear_tag_edit_history", "all", || {
                 db.conn()

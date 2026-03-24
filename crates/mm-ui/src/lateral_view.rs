@@ -24,7 +24,7 @@ impl LateralView {
             LateralView::History => "History",
             LateralView::Transaction => "Transaction",
             LateralView::Deploy => "Deploy",
-            LateralView::ExternalMatches => "Ext. Matches",
+            LateralView::ExternalMatches => "Ext. Authorities",
         }
     }
 
@@ -124,6 +124,6 @@ mod tests {
     #[test]
     fn lateral_view_labels() {
         assert_eq!(LateralView::Config.label(), "Config");
-        assert_eq!(LateralView::ExternalMatches.label(), "Ext. Matches");
+        assert_eq!(LateralView::ExternalMatches.label(), "Ext. Authorities");
     }
 }

@@ -242,6 +242,33 @@ impl Database {
         self.get_mb_cache("mb_release_cache", "release_id", release_id)
     }
 
+    /// Get cached Cover Art Archive release data by release ID.
+    ///
+    /// Returns (status, response_json, image_count, fetched_at) if cached.
+    pub fn get_caa_release_cache(
+        &self,
+        release_id: &str,
+    ) -> Result<Option<(String, Option<String>, i64, i64)>> {
+        let result = self.conn().query_row(
+            "SELECT status, response_json, image_count, fetched_at \
+             FROM caa_release_cache WHERE release_id = ?1",
+            params![release_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        );
+        match result {
+            Ok(r) => Ok(Some(r)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Bulk-load cached MusicBrainz release JSON for a set of release IDs.
     ///
     /// Returns `Vec<(release_id, raw_json)>` for all release IDs that have cache entries.

@@ -369,6 +369,12 @@ pub fn render_external_matches_page(data: &ExternalMatchesData, status: Option<&
                         .class("mm-btn")
                         .attr("onclick", "window.__mm_queue_task('ReleasePacking')")
                         .text("Run Packing"),
+                )
+                .child(
+                    html::button()
+                        .class("mm-btn")
+                        .attr("onclick", "window.__mm_queue_task('CoverArtFetch')")
+                        .text("Download Cover Art"),
                 ),
         )
         .child(div().attr("id", "mm-fetch-progress").child(progress))
@@ -1277,7 +1283,7 @@ pub fn render_packing_browser_data(category: &str, data: &serde_json::Value) -> 
                 html::a()
                     .class("mm-link")
                     .attr("href", "#")
-                    .attr("onclick", "event.preventDefault();window.__mm_navigate('Ext. Matches')")
+                    .attr("onclick", "event.preventDefault();window.__mm_navigate('Ext. Authorities')")
                     .text("← Back to categories"),
             )
             .into(),
@@ -1376,8 +1382,8 @@ pub fn render_acoustid_matches(data: &serde_json::Value) -> Node {
                 html::a()
                     .class("mm-link")
                     .attr("href", "#")
-                    .attr("onclick", "event.preventDefault();window.__mm_navigate('Ext. Matches')")
-                    .text("\u{2190} Back to External Matches"),
+                    .attr("onclick", "event.preventDefault();window.__mm_navigate('Ext. Authorities')")
+                    .text("\u{2190} Back to External Authorities"),
             )
             .into(),
     );
@@ -1443,7 +1449,7 @@ pub fn render_release_review(data: &mm_meta::views::external_matches::ReleaseRev
                 html::a()
                     .class("mm-link")
                     .attr("href", "#/external-matches")
-                    .text("\u{2190} Back to External Matches"),
+                    .text("\u{2190} Back to External Authorities"),
             )
             .into(),
     );
@@ -1537,8 +1543,8 @@ pub fn render_release_detail_placeholder(release_id: &str) -> Node {
                 html::a()
                     .class("mm-link")
                     .attr("href", "#")
-                    .attr("onclick", "event.preventDefault();window.__mm_navigate('Ext. Matches')")
-                    .text("\u{2190} Back to External Matches"),
+                    .attr("onclick", "event.preventDefault();window.__mm_navigate('Ext. Authorities')")
+                    .text("\u{2190} Back to External Authorities"),
             )
             .into(),
     );

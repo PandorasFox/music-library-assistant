@@ -5,15 +5,19 @@ mod socket;
 
 use std::path::PathBuf;
 
-use axum::response::Html;
+use axum::http::{header, HeaderValue};
+use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
+use tower_http::set_header::SetResponseHeader;
 
 use socket::WitchConnection;
 
 pub use error::ApiError;
+
+const BUILD_TIMESTAMP: &str = env!("MM_BUILD_TIMESTAMP");
 
 #[derive(Clone)]
 pub struct AppState {
@@ -60,23 +64,39 @@ pub fn router(state: AppState) -> Router {
         .route("/tx/details", get(api::transactions::details))
         .route("/tx/confirm", post(api::transactions::confirm))
         .route("/tx/discard", post(api::transactions::discard))
+        .route("/tx/approve-releases", post(api::transactions::approve_releases))
         // Actions (typed protocol bindings)
         .route("/actions/execute", post(api::actions::execute))
         // Commands
         .route("/commands/queue-task", post(api::commands::queue_task))
         .route("/commands/shutdown", post(api::commands::shutdown))
-        // Static files (CSS, WASM, JS)
-        .nest_service("/static", ServeDir::new(static_dir))
+        // Static files (CSS, WASM, JS) — cached aggressively, busted by ?v= in index.html
+        .nest_service(
+            "/static",
+            SetResponseHeader::overriding(
+                ServeDir::new(static_dir),
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=31536000"),
+            ),
+        )
         .layer(cors)
         .with_state(state)
 }
 
 async fn serve_index(
     axum::extract::State(state): axum::extract::State<AppState>,
-) -> Html<String> {
+) -> impl IntoResponse {
     let index_path = state.static_dir.join("index.html");
-    match tokio::fs::read_to_string(&index_path).await {
-        Ok(contents) => Html(contents),
-        Err(_) => Html("<h1>index.html not found</h1>".into()),
-    }
+    let contents = match tokio::fs::read_to_string(&index_path).await {
+        Ok(c) => c,
+        Err(_) => "<h1>index.html not found</h1>".into(),
+    };
+    // Inject build-version query params so asset URLs change on each rebuild.
+    let contents = contents
+        .replace("/static/mm.css", &format!("/static/mm.css?v={BUILD_TIMESTAMP}"))
+        .replace(
+            "/static/pkg/mm_web_client.js",
+            &format!("/static/pkg/mm_web_client.js?v={BUILD_TIMESTAMP}"),
+        );
+    ([(header::CACHE_CONTROL, "no-cache")], Html(contents))
 }

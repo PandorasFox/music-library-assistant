@@ -137,6 +137,11 @@ fn unwrap_domain_result(result: DomainQueryResult) -> Result<serde_json::Value, 
 /// Unified handler for domain queries. Accepts both GET (query params for
 /// simple queries) and POST (JSON body for queries with complex parameters
 /// like Vecs or nested structs).
+/// Queries that fire on a polling interval — not worth logging individually.
+fn is_polling_query(name: &str) -> bool {
+    matches!(name, "insights" | "deploy-status" | "external-matches" | "edit-history")
+}
+
 pub async fn domain_query(
     State(state): State<AppState>,
     BearerToken(token): BearerToken,
@@ -144,6 +149,23 @@ pub async fn domain_query(
     Query(params): Query<HashMap<String, String>>,
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let quiet = is_polling_query(&name);
+
+    if !quiet {
+        let body_preview = if body.is_empty() {
+            String::new()
+        } else {
+            let s = String::from_utf8_lossy(&body[..body.len().min(256)]);
+            format!(" body={s}")
+        };
+        let params_str = if params.is_empty() {
+            String::new()
+        } else {
+            format!(" params={params:?}")
+        };
+        eprintln!("[WEB-QUERY] {name}{params_str}{body_preview}");
+    }
+
     let payload = build_domain_payload(&name, &params, &body)?;
 
     let qr = send_query(
@@ -154,7 +176,15 @@ pub async fn domain_query(
     .await?;
 
     match qr {
-        QueryResponse::Domain(result) => unwrap_domain_result(result).map(Json),
+        QueryResponse::Domain(result) => {
+            let json = unwrap_domain_result(result)?;
+            if !quiet {
+                let preview = json.to_string();
+                let truncated = &preview[..preview.len().min(512)];
+                eprintln!("[WEB-QUERY] {name} -> {} bytes: {truncated}", preview.len());
+            }
+            Ok(Json(json))
+        }
         _ => Err(ApiError::Internal("expected Domain response".into())),
     }
 }

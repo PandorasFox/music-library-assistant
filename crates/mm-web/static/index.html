@@ -133,45 +133,13 @@
         };
     </script>
     <script type="module">
-        import init, {
-            mm_login, mm_navigate, mm_logout,
-            mm_tx_confirm, mm_tx_discard, mm_tx_remove,
-            mm_expand_session, mm_packing_browse, mm_setup,
-            mm_queue_task, mm_search, mm_expand_dir,
-            mm_config_save, mm_stage_decision, mm_approve_releases,
-            mm_navigate_route, mm_deploy_tab,
-            mm_tag_save, mm_tag_add, mm_tag_delete,
-            mm_resolve_cancel, mm_resolve_action,
-            mm_resolve_page, mm_resolve_confirm_with_field
-        } from '/static/pkg/mm_web_client.js';
+        import init, * as wasm from '/static/pkg/mm_web_client.js';
         await init();
-        window.__mm_login = mm_login;
-        window.__mm_navigate = mm_navigate;
-        window.__mm_logout = mm_logout;
-        window.__mm_tx_confirm = mm_tx_confirm;
-        window.__mm_tx_discard = mm_tx_discard;
-        window.__mm_tx_remove = mm_tx_remove;
-        window.__mm_expand_session = mm_expand_session;
-        window.__mm_packing_browse = mm_packing_browse;
-        window.__mm_setup = mm_setup;
-        window.__mm_queue_task = mm_queue_task;
-        window.__mm_search = mm_search;
-        window.__mm_expand_dir = mm_expand_dir;
-        window.__mm_open_dir_config = mm_open_dir_config;
-        window.__mm_dir_config_save = mm_dir_config_save;
-        window.__mm_dir_config_cancel = mm_dir_config_cancel;
-        window.__mm_config_save = mm_config_save;
-        window.__mm_stage_decision = mm_stage_decision;
-        window.__mm_approve_releases = mm_approve_releases;
-        window.__mm_navigate_route = mm_navigate_route;
-        window.__mm_deploy_tab = mm_deploy_tab;
-        window.__mm_tag_save = mm_tag_save;
-        window.__mm_tag_add = mm_tag_add;
-        window.__mm_tag_delete = mm_tag_delete;
-        window.__mm_resolve_cancel = mm_resolve_cancel;
-        window.__mm_resolve_action = mm_resolve_action;
-        window.__mm_resolve_page = mm_resolve_page;
-        window.__mm_resolve_confirm_with_field = mm_resolve_confirm_with_field;
+        for (const [name, fn] of Object.entries(wasm)) {
+            if (name.startsWith('mm_') && typeof fn === 'function') {
+                window['__' + name] = fn;
+            }
+        }
     </script>
 </body>
 </html>

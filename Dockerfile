@@ -27,7 +27,7 @@ RUN cargo build --release -p mm -p mm-web
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bash ca-certificates tini \
+    bash ca-certificates tini sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /src/target/release/mm /usr/local/bin/mm

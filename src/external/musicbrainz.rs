@@ -146,18 +146,41 @@ pub fn load_mb_cache_bundle(
     }
 
     // Load recordings + their credit/relation artists
+    let mut rec_missing = 0usize;
+    let mut rec_parse_fail = 0usize;
     for rid in recording_ids {
-        if let Ok(Some((json, _))) = db.get_mb_recording_cache(rid) {
-            if let Ok(rec) = parse_recording(&json) {
-                load_credit_artists(&rec.artist_credit, db, &mut artists);
-                for relation in &rec.relations {
-                    if let Some(ref ra) = relation.artist {
-                        load_artist_if_absent(&ra.id, db, &mut artists);
+        match db.get_mb_recording_cache(rid) {
+            Ok(Some((json, _))) => match parse_recording(&json) {
+                Ok(rec) => {
+                    load_credit_artists(&rec.artist_credit, db, &mut artists);
+                    for relation in &rec.relations {
+                        if let Some(ref ra) = relation.artist {
+                            load_artist_if_absent(&ra.id, db, &mut artists);
+                        }
                     }
+                    recordings.insert(rid.clone(), rec);
                 }
-                recordings.insert(rid.clone(), rec);
+                Err(e) => {
+                    if rec_parse_fail == 0 {
+                        eprintln!("[MB-CACHE] recording parse fail for {rid}: {e}");
+                    }
+                    rec_parse_fail += 1;
+                }
+            },
+            Ok(None) => { rec_missing += 1; }
+            Err(e) => {
+                if rec_missing + rec_parse_fail == 0 {
+                    eprintln!("[MB-CACHE] recording db error for {rid}: {e}");
+                }
+                rec_missing += 1;
             }
         }
+    }
+    if rec_missing > 0 || rec_parse_fail > 0 {
+        eprintln!(
+            "[MB-CACHE] recordings: {} loaded, {} missing, {} parse failures (of {} requested)",
+            recordings.len(), rec_missing, rec_parse_fail, recording_ids.len()
+        );
     }
 
     MbCacheBundle {

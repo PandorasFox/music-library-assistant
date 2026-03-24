@@ -112,7 +112,7 @@ async fn get(path: &str) -> Result<serde_json::Value, JsValue> {
     fetch("GET", path, None).await
 }
 
-async fn post(path: &str, body: &serde_json::Value) -> Result<serde_json::Value, JsValue> {
+pub async fn post(path: &str, body: &serde_json::Value) -> Result<serde_json::Value, JsValue> {
     let body_str = serde_json::to_string(body).map_err(|e| JsValue::from_str(&e.to_string()))?;
     fetch("POST", path, Some(&body_str)).await
 }

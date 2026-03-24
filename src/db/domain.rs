@@ -683,6 +683,12 @@ impl_domain_query! {
     }
 }
 
+impl_domain_query! {
+    GetBulkTagAggregate => mm_meta::domain_query_types::BulkTagAggregate, |s, db| {
+        load_bulk_tag_aggregate(&s.rel_path, db)
+    }
+}
+
 // ============================================================================
 // Web File Browser & Search
 // ============================================================================
@@ -960,6 +966,81 @@ fn load_file_tag_values(
     results
 }
 
+/// Compute a bulk tag aggregate for a directory.
+///
+/// 1. Find all audio files in the directory (corpus zone).
+/// 2. Read tags from disk for each file.
+/// 3. Aggregate: for each unique tag name, check if all files share the same value.
+fn load_bulk_tag_aggregate(
+    rel_path: &std::path::Path,
+    db: &ReadOnlyDb,
+) -> mm_meta::domain_query_types::BulkTagAggregate {
+    use std::collections::HashMap;
+    use mm_meta::domain_query_types::{AggregateTag, BulkTagAggregate};
+
+    let dir_label = rel_path.to_string_lossy().to_string();
+
+    // Step 1: get all audio files in this directory tree.
+    let files = db
+        .get_audio_files_for_tag_editing(rel_path)
+        .unwrap_or_default();
+
+    let file_count = files.len();
+    let inodes: Vec<i64> = files.iter().map(|f| f.inode()).collect();
+
+    if files.is_empty() {
+        return BulkTagAggregate {
+            file_count: 0,
+            inodes: Vec::new(),
+            dir_label,
+            tags: Vec::new(),
+        };
+    }
+
+    // Step 2: read tags from disk.
+    let per_file_tags = load_file_tag_values(
+        &inodes,
+        crate::db::types::Zone::Corpus,
+        db,
+    );
+
+    // Step 3: aggregate.
+    // For each tag name, track: set of distinct values, and count of files that have it.
+    let mut tag_order: Vec<String> = Vec::new();
+    let mut tag_values: HashMap<String, HashMap<String, usize>> = HashMap::new();
+    let mut tag_presence: HashMap<String, usize> = HashMap::new();
+
+    for (_, tags) in &per_file_tags {
+        for (name, value) in tags {
+            if !tag_values.contains_key(name) {
+                tag_order.push(name.clone());
+            }
+            *tag_values
+                .entry(name.clone())
+                .or_default()
+                .entry(value.clone())
+                .or_insert(0) += 1;
+            *tag_presence.entry(name.clone()).or_insert(0) += 1;
+        }
+    }
+
+    let tags: Vec<AggregateTag> = tag_order
+        .into_iter()
+        .map(|name| {
+            let presence = tag_presence.get(&name).copied().unwrap_or(0);
+            let values = tag_values.get(&name).unwrap();
+            let uniform_value = if values.len() == 1 {
+                Some(values.keys().next().unwrap().clone())
+            } else {
+                None
+            };
+            AggregateTag { name, uniform_value, presence }
+        })
+        .collect();
+
+    BulkTagAggregate { file_count, inodes, dir_label, tags }
+}
+
 // ============================================================================
 // Protocol Bridge — dispatch_domain_query
 // ============================================================================
@@ -1034,6 +1115,7 @@ dispatch_domain_query_impl! {
     GetReleaseStagingData,
     GetTagEditorFiles,
     GetFileTagValues,
+    GetBulkTagAggregate,
     GetDirectoryListing,
     SearchCorpusFiles,
     SearchWithConditions,

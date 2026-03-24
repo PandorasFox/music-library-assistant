@@ -1682,6 +1682,14 @@ fn render_listing_entry(entry: &serde_json::Value) -> Option<Node> {
             )
             .text("Config");
 
+        let bulk_tags_btn = span()
+            .class("mm-dir-config-btn")
+            .attr(
+                "onclick",
+                format!("event.stopPropagation(); window.__mm_bulk_tag_dir('{escaped_path}')"),
+            )
+            .text("Bulk Tags");
+
         let header = div()
             .class("mm-dir-header")
             .attr(
@@ -1689,7 +1697,8 @@ fn render_listing_entry(entry: &serde_json::Value) -> Option<Node> {
                 format!("window.__mm_expand_dir('{escaped_path}')"),
             )
             .child(span().text(format!("{name} ({file_count} files)")))
-            .child(config_btn);
+            .child(config_btn)
+            .child(bulk_tags_btn);
 
         let files_container = div()
             .class("mm-dir-files")
@@ -1966,6 +1975,139 @@ pub fn render_tag_editor(inode: i64, path: &str, tags: &serde_json::Value) -> No
         .class("mm-tag-editor")
         .attr("data-inode", inode.to_string())
         .child(h3().class("mm-section__title").text(&format!("Tags \u{2014} {path}")))
+        .child(toolbar)
+        .child(status)
+        .child(
+            div()
+                .class("mm-tag-editor__header")
+                .child(span().class("mm-tag-header-name").text("Tag"))
+                .child(span().class("mm-tag-header-value").text("Value"))
+                .child(span().class("mm-tag-header-action").text("")),
+        )
+        .child(
+            div()
+                .attr("id", "mm-tag-rows")
+                .children(rows),
+        )
+        .into()
+}
+
+/// Render a bulk (multi-file) tag editor from a server-computed `BulkTagAggregate`.
+///
+/// The `data` JSON has shape: `{ file_count, inodes, dir_label, tags: [{ name, uniform_value, presence }] }`.
+/// Tags uniform across all files are editable; mixed/partial tags are shown readonly.
+pub fn render_bulk_tag_editor(data: &serde_json::Value) -> Node {
+    let file_count = data.get("file_count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let dir_label = data.get("dir_label").and_then(|v| v.as_str()).unwrap_or("");
+    let inodes: Vec<i64> = data
+        .get("inodes")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
+        .unwrap_or_default();
+    let tags = data.get("tags").and_then(|v| v.as_array());
+
+    let mut rows = Vec::new();
+
+    if let Some(tags_arr) = tags {
+        for (i, tag) in tags_arr.iter().enumerate() {
+            let tag_name = tag.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let uniform_value = tag.get("uniform_value").and_then(|v| v.as_str());
+            let presence = tag.get("presence").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+
+            let is_uniform = uniform_value.is_some() && presence == file_count;
+            let display_value = if let Some(val) = uniform_value {
+                if presence == file_count { val } else { "[partial]" }
+            } else if presence == file_count {
+                "[mixed]"
+            } else {
+                "[partial]"
+            };
+
+            let name_id = format!("tag-name-{i}");
+            let val_id = format!("tag-val-{i}");
+
+            let mut val_input = html::input()
+                .attr("type", "text")
+                .attr("id", &val_id)
+                .attr("value", display_value)
+                .attr("data-tag", tag_name)
+                .attr("data-original", display_value)
+                .class("mm-tag-value");
+
+            if !is_uniform {
+                val_input = val_input
+                    .attr("readonly", "")
+                    .class("mm-tag-value mm-tag-value--mixed");
+            }
+
+            rows.push(
+                div()
+                    .class("mm-tag-row")
+                    .child(
+                        html::input()
+                            .attr("type", "text")
+                            .attr("id", &name_id)
+                            .attr("value", tag_name)
+                            .attr("readonly", "")
+                            .class("mm-tag-name"),
+                    )
+                    .child(val_input)
+                    .child(if is_uniform {
+                        Node::from(html::button()
+                            .class("mm-btn mm-tag-delete")
+                            .attr("type", "button")
+                            .attr("data-tag-name", tag_name)
+                            .attr(
+                                "onclick",
+                                "window.__mm_tag_delete(this.dataset.tagName, this)",
+                            )
+                            .text("\u{00d7}"))
+                    } else {
+                        Node::from(span())
+                    })
+                    .into(),
+            );
+        }
+    }
+
+    let inodes_csv: String = inodes.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+
+    let status = div()
+        .attr("id", "mm-tag-status")
+        .class("mm-tag-status")
+        .attr("style", "display:none");
+
+    let toolbar = div()
+        .class("mm-buttons mm-tag-toolbar")
+        .child(
+            html::button()
+                .class("mm-btn")
+                .attr("type", "button")
+                .attr("onclick", "history.back()")
+                .text("Back"),
+        )
+        .child(
+            html::button()
+                .class("mm-btn")
+                .attr("type", "button")
+                .attr("onclick", "window.__mm_tag_add()")
+                .text("+ Add Tag"),
+        )
+        .child(
+            html::button()
+                .class("mm-btn mm-tag-save-btn")
+                .attr("type", "button")
+                .attr("onclick", "window.__mm_bulk_tag_save()")
+                .text("Save Changes"),
+        );
+
+    div()
+        .class("mm-tag-editor mm-tag-editor--bulk")
+        .attr("data-inodes", &inodes_csv)
+        .child(
+            h3().class("mm-section__title")
+                .text(&format!("Bulk Tags \u{2014} {dir_label} ({file_count} files)")),
+        )
         .child(toolbar)
         .child(status)
         .child(

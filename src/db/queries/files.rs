@@ -329,7 +329,7 @@ impl Database {
 
         let sql = format!(
             "SELECT {} FROM files f JOIN audio_info a ON f.inode = a.inode \
-             WHERE f.path LIKE ?1 ESCAPE '\\' AND f.is_dir = 0 ORDER BY f.path",
+             WHERE f.zone = 'corpus' AND f.path LIKE ?1 ESCAPE '\\' AND f.is_dir = 0 ORDER BY f.path",
             audio_file_select(FP_COL),
         );
         let mut stmt = self.conn.prepare(&sql)?;

@@ -330,6 +330,14 @@ impl WebQuery for GetTagEditorFiles {
     }
 }
 
+impl WebQuery for GetBulkTagAggregate {
+    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self {
+            rel_path: require_param(params, "rel_path")?.into(),
+        })
+    }
+}
+
 impl WebQuery for GetDirectoryListing {
     fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
         Ok(Self {
@@ -412,7 +420,7 @@ fn build_domain_payload(
         GetMissingTagAudioFiles, GetAllAudioFilesWithTags,
         GetSessionEditDetail, GetCurrentTagValues,
         GetRecordingBatchData, GetReleaseStagingData,
-        GetTagEditorFiles, GetFileTagValues,
+        GetTagEditorFiles, GetFileTagValues, GetBulkTagAggregate,
         GetDirectoryListing, SearchCorpusFiles, SearchWithConditions,
         GetTagCanonicityResolution, GetCompoundSplitResolution,
         GetAcoustidMatches, GetReleaseReview,

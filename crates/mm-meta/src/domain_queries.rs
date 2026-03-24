@@ -273,6 +273,13 @@ pub struct GetFileTagValues {
     pub zone: crate::db_types::Zone,
 }
 
+/// Server-side bulk tag aggregate for a directory.
+/// Fetches files, reads their tags, and computes the aggregate in one round-trip.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetBulkTagAggregate {
+    pub rel_path: std::path::PathBuf,
+}
+
 /// Packed tag canonicity resolution: all clusters for a tag+zone in one response.
 /// Replaces the two-phase GetTagCanonicityKeys + GetTagCanonicitySignalData pattern.
 ///
@@ -476,6 +483,7 @@ domain_query_protocol! {
     GetReleaseStagingData("release-staging-data") => crate::domain_query_types::ReleaseStagingData,
     GetTagEditorFiles("tag-editor-files") => (Vec<crate::db_types::AudioFile>, usize),
     GetFileTagValues("file-tag-values") => Vec<(i64, Vec<(String, String)>)>,
+    GetBulkTagAggregate("bulk-tag-aggregate") => crate::domain_query_types::BulkTagAggregate,
 
     // Web file browser & search
     GetDirectoryListing("directory-listing") => Vec<crate::domain_query_types::DirectoryListingEntry>,

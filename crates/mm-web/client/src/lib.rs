@@ -2361,10 +2361,191 @@ pub fn mm_expand_dir(path: &str) {
 }
 
 // ============================================================================
+// Bulk Tag Editor
+// ============================================================================
+
+/// Open a bulk tag editor for all audio files in a directory.
+/// Fetches server-aggregated tag data and injects the editor into the content area.
+#[wasm_bindgen]
+pub fn mm_bulk_tag_dir(path: &str) {
+    let dir_path = path.to_string();
+    spawn_local(async move {
+        let encoded = js_sys::encode_uri_component(&dir_path);
+        let data = match api::get_query_with(
+            "bulk-tag-aggregate",
+            &format!("rel_path={encoded}"),
+        ).await {
+            Ok(d) => d,
+            Err(e) => {
+                web_sys::console::error_1(
+                    &format!("bulk tag aggregate fetch error: {e:?}").into(),
+                );
+                return;
+            }
+        };
+
+        let file_count = data.get("file_count").and_then(|v| v.as_u64()).unwrap_or(0);
+        if file_count == 0 {
+            web_sys::console::warn_1(
+                &format!("No indexed files found in {dir_path}").into(),
+            );
+            return;
+        }
+
+        let node = views::render_bulk_tag_editor(&data);
+        let doc = web_sys::window().unwrap().document().unwrap();
+        if let Some(content) = doc.get_element_by_id("mm-content") {
+            content.set_inner_html(&node.to_html());
+        }
+    });
+}
+
+/// Save bulk tag edits — collects changed/added/deleted tags, builds mutations for ALL inodes.
+#[wasm_bindgen]
+pub fn mm_bulk_tag_save() {
+    spawn_local(async {
+        if let Err(e) = do_bulk_tag_save().await {
+            show_tag_status(&format!("Save failed: {e:?}"), true);
+        }
+    });
+}
+
+async fn do_bulk_tag_save() -> Result<(), JsValue> {
+    use mm_meta::db_types::Zone;
+    use mm_meta::decisions::Decision;
+    use mm_meta::mutations::tag_edit::ApplyTagOpsMutation;
+    use mm_meta::mutations::{Mutation, TagOp};
+
+    let doc = web_sys::window().unwrap().document().unwrap();
+
+    // Read inodes from the bulk editor container.
+    let inodes_csv = doc
+        .query_selector(".mm-tag-editor--bulk[data-inodes]")
+        .ok()
+        .flatten()
+        .and_then(|el| el.get_attribute("data-inodes"))
+        .ok_or_else(|| JsValue::from_str("cannot determine inodes for bulk edit"))?;
+
+    let inodes: Vec<i64> = inodes_csv
+        .split(',')
+        .filter_map(|s| s.parse().ok())
+        .collect();
+
+    if inodes.is_empty() {
+        return Err(JsValue::from_str("no inodes found"));
+    }
+
+    let mut ops = Vec::new();
+
+    // 1. Collect edits and additions from visible rows.
+    let rows = doc
+        .query_selector_all("#mm-tag-rows .mm-tag-row")
+        .map_err(|e| JsValue::from_str(&format!("querySelectorAll: {e:?}")))?;
+
+    for i in 0..rows.length() {
+        let row = rows.get(i).unwrap();
+        let row_el: web_sys::Element = row.dyn_into()?;
+
+        let name_input = row_el
+            .query_selector("input.mm-tag-name")
+            .ok()
+            .flatten()
+            .and_then(|el| el.dyn_into::<web_sys::HtmlInputElement>().ok());
+        let val_input = row_el
+            .query_selector("input.mm-tag-value")
+            .ok()
+            .flatten()
+            .and_then(|el| el.dyn_into::<web_sys::HtmlInputElement>().ok());
+
+        let (Some(name_el), Some(val_el)) = (name_input, val_input) else {
+            continue;
+        };
+
+        // Skip mixed/partial tags (readonly, not editable).
+        if val_el.has_attribute("readonly") {
+            continue;
+        }
+
+        let is_new = val_el.get_attribute("data-new").is_some()
+            || name_el.get_attribute("data-new").is_some();
+        let tag_name = if is_new {
+            name_el.value()
+        } else {
+            val_el.get_attribute("data-tag").unwrap_or_default()
+        };
+        let new_value = val_el.value();
+
+        if tag_name.is_empty() {
+            continue;
+        }
+
+        // Apply to ALL inodes.
+        for &inode in &inodes {
+            if is_new {
+                if !new_value.is_empty() {
+                    ops.push(TagOp::add_tag(inode, &tag_name, &new_value));
+                }
+            } else {
+                let original = val_el.get_attribute("data-original").unwrap_or_default();
+                if new_value != original {
+                    ops.push(TagOp::replace_tag(inode, &tag_name, &original, &new_value));
+                }
+            }
+        }
+    }
+
+    // 2. Collect deletions from the hidden deletion tracker.
+    if let Some(deletions) = doc.get_element_by_id("mm-tag-deletions") {
+        let markers = deletions
+            .query_selector_all("span[data-deleted-tag]")
+            .map_err(|e| JsValue::from_str(&format!("querySelectorAll: {e:?}")))?;
+        for i in 0..markers.length() {
+            let marker = markers.get(i).unwrap();
+            let el: web_sys::Element = marker.dyn_into()?;
+            let tag = el.get_attribute("data-deleted-tag").unwrap_or_default();
+            let val = el.get_attribute("data-deleted-value").unwrap_or_default();
+            if !tag.is_empty() {
+                for &inode in &inodes {
+                    ops.push(TagOp::drop_tag(inode, &tag, &val));
+                }
+            }
+        }
+    }
+
+    ops.retain(|op| !op.is_nop());
+
+    if ops.is_empty() {
+        show_tag_status("No changes to save.", false);
+        return Ok(());
+    }
+
+    let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation {
+        ops,
+        zone: Zone::Corpus,
+    });
+
+    let decision = Decision {
+        label: format!("Bulk tag edit ({} files)", inodes.len()),
+        mutations: vec![mutation],
+    };
+
+    let key_item = format!("bulk-{}", inodes.len());
+    stage_decision(
+        &mm_ui::decision_keys::tag_edit(key_item),
+        &decision.label,
+        &decision.mutations,
+    ).await?;
+
+    show_tag_status("Decision staged.", false);
+    navigate_to(&Route::TransactionReview(route::TransactionReviewRoute::default()));
+    load_from_hash().await?;
+    Ok(())
+}
+
+// ============================================================================
 // Dir Config Editor
 // ============================================================================
 
-/// Navigate to the dir config editor for a given path.
 /// Open the dir config editor as an inline overlay (no route navigation).
 /// Fetches config from server, renders editor DOM, injects it.
 #[wasm_bindgen]

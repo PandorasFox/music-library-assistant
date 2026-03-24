@@ -25,11 +25,12 @@ fn drain_input_buffer() {
 impl App {
     /// Start tag editor for a file path (from tree browser or external trigger).
     ///
-    /// The input path is an absolute filesystem path. We convert to relative
-    /// for database queries since the DB stores paths relative to corpus_root.
+    /// The input path is an absolute filesystem path. We convert to zone-relative
+    /// for database queries since the DB stores paths without zone prefix.
     pub(super) fn start_tag_editor_for_path(&mut self, path: &std::path::Path, recursive: bool) {
-        // Convert absolute path to relative for DB queries (corpus browser uses corpus paths)
-        let rel_path = match self.resolver.to_relative(path) {
+        // Convert absolute path to zone-relative (no prefix) for DB queries.
+        // DB stores paths without zone prefix — to_zone_relative strips the zone root.
+        let rel_path = match self.resolver.to_zone_relative(path, mm_meta::db_types::Zone::Corpus) {
             Some(p) => p,
             None => {
                 self.abort_to_health(format!("Path not in corpus: {}", path.display()));
@@ -136,10 +137,11 @@ impl App {
 
     /// Open the unified tag editor for a directory path.
     ///
-    /// The input is an absolute filesystem path. We convert to relative for DB queries.
+    /// The input is an absolute filesystem path. We convert to zone-relative for DB queries.
     pub(super) fn open_unified_tag_editor_for_directory(&mut self, directory: &std::path::Path) {
-        // Convert absolute path to relative for DB query
-        let rel_dir = match self.resolver.to_relative(directory) {
+        // Convert absolute path to zone-relative (no prefix) for DB query.
+        // DB stores paths without zone prefix — to_zone_relative strips the zone root.
+        let rel_dir = match self.resolver.to_zone_relative(directory, mm_meta::db_types::Zone::Corpus) {
             Some(p) => p,
             None => {
                 self.status_message =

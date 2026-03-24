@@ -79,6 +79,36 @@ pub enum TagEditorLoadMode {
 }
 
 // ============================================================================
+// Bulk Tag Aggregate
+// ============================================================================
+
+/// Server-computed aggregate of tags across multiple files in a directory.
+/// Avoids sending per-file tag data to the client.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BulkTagAggregate {
+    /// How many files were included.
+    pub file_count: usize,
+    /// The inodes of all files (needed by client for save mutations).
+    pub inodes: Vec<i64>,
+    /// Directory label (zone-relative path).
+    pub dir_label: String,
+    /// Aggregated tags across all files.
+    pub tags: Vec<AggregateTag>,
+}
+
+/// A single tag aggregated across multiple files.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AggregateTag {
+    /// Tag name (e.g. "ARTIST").
+    pub name: String,
+    /// If all files that have this tag share the same value, it's here.
+    /// `None` means values differ across files.
+    pub uniform_value: Option<String>,
+    /// How many files have this tag.
+    pub presence: usize,
+}
+
+// ============================================================================
 // Audio File With Tags
 // ============================================================================
 

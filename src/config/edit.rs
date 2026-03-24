@@ -421,6 +421,60 @@ pub fn apply_config_edits_to_kdl(
         }
     }
 
+    // --- Credit Routing ---
+    let old_cr = &old_config.opinions.external_matching.credit_routing;
+    let new_cr = &new_config.opinions.external_matching.credit_routing;
+    if new_cr.feat_format != old_cr.feat_format
+        || new_cr.max_feat_credits != old_cr.max_feat_credits
+        || new_cr.routing != old_cr.routing
+    {
+        let em_block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_EXTERNAL_MATCHING);
+        let cr_block =
+            ensure_child_block(em_block, CreditRoutingConfig::KDL_CREDIT_ROUTING);
+        if new_cr.feat_format != old_cr.feat_format {
+            set_or_create_string_node(
+                cr_block,
+                CreditRoutingConfig::KDL_FEAT_FORMAT,
+                &new_cr.feat_format,
+            );
+        }
+        if new_cr.max_feat_credits != old_cr.max_feat_credits {
+            match new_cr.max_feat_credits {
+                Some(n) => {
+                    set_or_create_int_node(
+                        cr_block,
+                        CreditRoutingConfig::KDL_MAX_FEAT_CREDITS,
+                        n as i64,
+                    );
+                }
+                None => {
+                    cr_block
+                        .nodes_mut()
+                        .retain(|n| n.name().value() != CreditRoutingConfig::KDL_MAX_FEAT_CREDITS);
+                }
+            }
+        }
+        if new_cr.routing != old_cr.routing {
+            // Remove old relation type nodes (everything that isn't feat-format or max-feat-credits)
+            cr_block.nodes_mut().retain(|n| {
+                let name = n.name().value();
+                name == CreditRoutingConfig::KDL_FEAT_FORMAT
+                    || name == CreditRoutingConfig::KDL_MAX_FEAT_CREDITS
+            });
+            // Write new routing entries
+            let mut sorted_keys: Vec<&String> = new_cr.routing.keys().collect();
+            sorted_keys.sort();
+            for key in sorted_keys {
+                let route = &new_cr.routing[key];
+                let mut node = kdl::KdlNode::new(key.as_str());
+                node.push(kdl::KdlEntry::new_prop("artist", route.artist));
+                node.push(kdl::KdlEntry::new_prop("title", route.title));
+                node.push(kdl::KdlEntry::new_prop("composer", route.composer));
+                cr_block.nodes_mut().push(node);
+            }
+        }
+    }
+
     // --- Disc Extraction ---
     let old_de = &old_config.opinions.disc_extraction;
     let new_de = &new_config.opinions.disc_extraction;

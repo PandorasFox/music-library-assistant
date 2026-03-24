@@ -481,6 +481,14 @@ fn parse_credit_routing(node: &kdl::KdlNode, config: &mut CreditRoutingConfig) {
                 }
                 continue;
             }
+            if name == CreditRoutingConfig::KDL_MAX_FEAT_CREDITS {
+                if let Some(entry) = child.entries().first() {
+                    if let Some(val) = entry.value().as_i64() {
+                        config.max_feat_credits = if val <= 0 { None } else { Some(val as u32) };
+                    }
+                }
+                continue;
+            }
             // Each relation type node has named bool properties: artist, title, composer
             let get_bool = |prop_name: &str| -> bool {
                 child

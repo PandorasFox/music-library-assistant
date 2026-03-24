@@ -249,7 +249,7 @@ impl_diffable_struct!(ReleasePackingOpinions {
     singles_before_incompletes, allow_resolve_knots_with_discographies,
     low_confidence_max_acoustid_ratio, low_confidence_max_album_match,
 });
-impl_diffable_struct!(CreditRoutingConfig { routing, feat_format });
+impl_diffable_struct!(CreditRoutingConfig { routing, feat_format, max_feat_credits });
 impl_diffable_struct!(ExternalMatchingConfig {
     acoustid_api_key, requests_per_second, mb_requests_per_second, mb_base_url,
     auto_enrich_on_match, mb_cache_ttl_days, preferred_locales, tag_templates, credit_routing,

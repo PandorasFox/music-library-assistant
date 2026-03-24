@@ -1057,86 +1057,20 @@ pub fn render_transaction_review(
 }
 
 // ============================================================================
-// Config editor view (stays on serde_json::Value — generic field renderer)
+// Config editor view — renders from shared ConfigEditorState
 // ============================================================================
 
-pub fn render_config_editor(config: &serde_json::Value) -> Node {
+use mm_ui::config_editor::{ConfigEditorState, ConfigField, ConfigGroup, ConfigValue, FieldSource};
+
+pub fn render_config_editor(state: &ConfigEditorState) -> Node {
     let mut sections = Vec::new();
 
-    // Root-level fields.
-    let mut root_items = Vec::new();
-    if let Some(root) = config.get("storage_root").and_then(|v| v.as_str()) {
-        root_items.push(config_field_readonly("storage root", root));
-    }
-    if let Some(root) = config.get("libraries_root").and_then(|v| v.as_str()) {
-        root_items.push(config_field_readonly("libraries root", root));
-    }
-    if let Some(root) = config.get("stash_root").and_then(|v| v.as_str()) {
-        root_items.push(config_field_readonly("stash root", root));
-    }
-    sections.push(titled_section("General", root_items));
-
-    // Source directories.
-    if let Some(dirs) = config.get("source_dirs").and_then(|v| v.as_array()) {
-        for (i, dir) in dirs.iter().enumerate() {
-            let path = dir.get("path").and_then(|v| v.as_str()).unwrap_or("?");
-            let libs = dir
-                .get("libraries")
-                .and_then(|v| v.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
-            let mut items = vec![
-                config_field_readonly("path", path),
-                config_field_readonly("libraries", &libs),
-            ];
-            if let Some(schema) = dir.get("path_schema").and_then(|v| v.as_str()) {
-                items.push(config_field_readonly("path schema", schema));
-            }
-            sections.push(titled_section(&format!("Source Directory {}", i + 1), items));
-        }
-    }
-
-    // Opinions — render each sub-block as a form section.
-    if let Some(opinions) = config.get("opinions").and_then(|v| v.as_object()) {
-        let mut top_items = Vec::new();
-        for (key, val) in opinions {
-            if val.is_object() {
-                continue;
-            }
-            top_items.push(config_field(key, val));
-        }
-        if !top_items.is_empty() {
-            sections.push(titled_section("Opinions", top_items));
-        }
-
-        let block_labels = [
-            ("quality_resolution", "Quality Resolution"),
-            ("canonicalization", "Canonicalization"),
-            ("startup", "Startup"),
-            ("health_detection", "Health Detection"),
-            ("performance", "Performance"),
-            ("tag_splitting", "Tag Splitting"),
-            ("duplicate_analysis", "Duplicate Analysis"),
-            ("release_packing", "Release Packing"),
-            ("external_matching", "External Matching"),
-            ("disc_extraction", "Disc Extraction"),
-            ("album_art", "Album Art"),
-        ];
-        for (key, label) in block_labels {
-            if let Some(block) = opinions.get(key).and_then(|v| v.as_object()) {
-                let items: Vec<Node> = block
-                    .iter()
-                    .map(|(k, v)| config_field(k, v))
-                    .collect();
-                if !items.is_empty() {
-                    sections.push(titled_section(label, items));
-                }
-            }
+    for group in &state.groups {
+        let items: Vec<Node> = group.fields.iter().enumerate().map(|(fi, field)| {
+            render_config_field(group, fi, field)
+        }).collect();
+        if !items.is_empty() {
+            sections.push(titled_section(group.name, items));
         }
     }
 
@@ -1157,118 +1091,346 @@ pub fn render_config_editor(config: &serde_json::Value) -> Node {
     div().class("mm-config-editor").children(sections).into()
 }
 
-fn config_field(key: &str, val: &serde_json::Value) -> Node {
-    let display_key = key.replace('_', " ");
-    match val {
-        serde_json::Value::Bool(b) => config_field_bool(key, *b),
-        serde_json::Value::Number(n) => {
-            let field_id = format!("cfg-{key}");
+/// Render a single config field as an HTML form element.
+fn render_config_field(_group: &ConfigGroup, fi: usize, field: &ConfigField) -> Node {
+    let field_id = format!("cfg-{}-{}", field.label.replace(' ', "-").to_lowercase(), fi);
+    let source_class = match field.source {
+        FieldSource::Default => "mm-config-field--default",
+        FieldSource::Loaded => "mm-config-field--loaded",
+        FieldSource::Edited => "mm-config-field--edited",
+    };
+
+    match &field.value {
+        ConfigValue::Bool(b) => {
             div()
-                .class("mm-config-field")
-                .child(html::label().attr("for", &field_id).text(&display_key))
+                .class("mm-config-field mm-config-field--bool").class(source_class)
+                .child(
+                    html::input()
+                        .attr("type", "checkbox")
+                        .attr("id", &field_id)
+                        .attr("data-field-idx", fi.to_string())
+                        .bool_attr_if("checked", *b)
+                        .class("mm-config-checkbox"),
+                )
+                .child(html::label().attr("for", &field_id).text(field.label))
+                .into()
+        }
+        ConfigValue::Float(f) => {
+            div()
+                .class("mm-config-field").class(source_class)
+                .child(html::label().attr("for", &field_id).text(field.label))
                 .child(
                     html::input()
                         .attr("type", "number")
                         .attr("id", &field_id)
-                        .attr("name", key)
-                        .attr("value", n.to_string())
+                        .attr("data-field-idx", fi.to_string())
+                        .attr("value", f.to_string())
                         .attr("step", "any")
                         .class("mm-config-input"),
                 )
                 .into()
         }
-        serde_json::Value::String(s) => {
-            let field_id = format!("cfg-{key}");
+        ConfigValue::UintU32(n) => {
             div()
-                .class("mm-config-field")
-                .child(html::label().attr("for", &field_id).text(&display_key))
+                .class("mm-config-field").class(source_class)
+                .child(html::label().attr("for", &field_id).text(field.label))
+                .child(
+                    html::input()
+                        .attr("type", "number")
+                        .attr("id", &field_id)
+                        .attr("data-field-idx", fi.to_string())
+                        .attr("value", n.to_string())
+                        .attr("step", "1")
+                        .attr("min", "0")
+                        .class("mm-config-input"),
+                )
+                .into()
+        }
+        ConfigValue::SignedInt(n) => {
+            div()
+                .class("mm-config-field").class(source_class)
+                .child(html::label().attr("for", &field_id).text(field.label))
+                .child(
+                    html::input()
+                        .attr("type", "number")
+                        .attr("id", &field_id)
+                        .attr("data-field-idx", fi.to_string())
+                        .attr("value", n.to_string())
+                        .attr("step", "1")
+                        .class("mm-config-input"),
+                )
+                .into()
+        }
+        ConfigValue::OptionalUint(v) => {
+            let display = match v {
+                Some(n) => n.to_string(),
+                None => "auto".to_string(),
+            };
+            div()
+                .class("mm-config-field").class(source_class)
+                .child(html::label().attr("for", &field_id).text(field.label))
                 .child(
                     html::input()
                         .attr("type", "text")
                         .attr("id", &field_id)
-                        .attr("name", key)
+                        .attr("data-field-idx", fi.to_string())
+                        .attr("value", display)
+                        .attr("placeholder", "auto")
+                        .class("mm-config-input"),
+                )
+                .into()
+        }
+        ConfigValue::String(s) => {
+            div()
+                .class("mm-config-field").class(source_class)
+                .child(html::label().attr("for", &field_id).text(field.label))
+                .child(
+                    html::input()
+                        .attr("type", "text")
+                        .attr("id", &field_id)
+                        .attr("data-field-idx", fi.to_string())
                         .attr("value", s)
                         .class("mm-config-input"),
                 )
                 .into()
         }
-        serde_json::Value::Null => {
+        ConfigValue::StringList(v) => {
             div()
-                .class("mm-config-field")
-                .child(html::label().text(&display_key))
-                .child(span().class("mm-kv__val").text("—"))
+                .class("mm-config-field").class(source_class)
+                .child(html::label().attr("for", &field_id).text(field.label))
+                .child(
+                    html::input()
+                        .attr("type", "text")
+                        .attr("id", &field_id)
+                        .attr("data-field-idx", fi.to_string())
+                        .attr("value", v.join(", "))
+                        .attr("placeholder", "comma-separated")
+                        .class("mm-config-input"),
+                )
                 .into()
         }
-        serde_json::Value::Array(arr) => {
-            // Only render as editable if all elements are strings (flat list).
-            // Arrays of tuples/objects can't round-trip through a text input.
-            let all_strings = arr.iter().all(|v| v.is_string());
-            if all_strings {
-                let vals = arr
-                    .iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let field_id = format!("cfg-{key}");
-                div()
-                    .class("mm-config-field")
-                    .child(html::label().attr("for", &field_id).text(&display_key))
-                    .child(
-                        html::input()
-                            .attr("type", "text")
-                            .attr("id", &field_id)
-                            .attr("name", key)
-                            .attr("value", vals)
-                            .attr("placeholder", "comma-separated")
-                            .class("mm-config-input"),
-                    )
-                    .into()
-            } else {
-                // Non-string array — show read-only summary
-                config_field_readonly(&display_key, &format!("[{} items]", arr.len()))
+        ConfigValue::Enum { selected, options } => {
+            let mut select = html::select()
+                .attr("id", &field_id)
+                .attr("data-field-idx", fi.to_string())
+                .class("mm-config-input");
+            for (i, opt) in options.iter().enumerate() {
+                let mut option = html::option().attr("value", i.to_string()).text(*opt);
+                if i == *selected {
+                    option = option.attr("selected", "selected");
+                }
+                select = select.child(option);
             }
+            div()
+                .class("mm-config-field").class(source_class)
+                .child(html::label().attr("for", &field_id).text(field.label))
+                .child(select)
+                .into()
         }
-        serde_json::Value::Object(obj) => {
-            // Render nested objects read-only to avoid save clobbering
-            // complex structures (HashMaps, nested configs).
-            let summary: Vec<String> = obj
-                .iter()
-                .take(3)
-                .map(|(k, _)| k.clone())
-                .collect();
-            let label = if obj.len() > 3 {
-                format!("{{{}, ... +{}}}", summary.join(", "), obj.len() - 3)
+        ConfigValue::Duration(secs) => {
+            let display = if *secs == 0 {
+                "disabled".to_string()
             } else {
-                format!("{{{}}}", summary.join(", "))
+                humantime::format_duration(std::time::Duration::from_secs(*secs)).to_string()
             };
-            config_field_readonly(&display_key, &label)
+            div()
+                .class("mm-config-field").class(source_class)
+                .child(html::label().attr("for", &field_id).text(field.label))
+                .child(
+                    html::input()
+                        .attr("type", "text")
+                        .attr("id", &field_id)
+                        .attr("data-field-idx", fi.to_string())
+                        .attr("value", display)
+                        .attr("placeholder", "e.g. 3m, 180s, disabled")
+                        .class("mm-config-input"),
+                )
+                .into()
+        }
+        ConfigValue::StringSet(items) => {
+            div()
+                .class("mm-config-field").class(source_class)
+                .child(html::label().attr("for", &field_id).text(field.label))
+                .child(
+                    html::input()
+                        .attr("type", "text")
+                        .attr("id", &field_id)
+                        .attr("data-field-idx", fi.to_string())
+                        .attr("value", items.join(", "))
+                        .attr("placeholder", "comma-separated")
+                        .class("mm-config-input"),
+                )
+                .into()
+        }
+        ConfigValue::StringListMap(items) => {
+            // Read-only summary for complex map types
+            let summary = items.iter()
+                .map(|(k, v)| format!("{}: {}", k, v.join(",")))
+                .collect::<Vec<_>>()
+                .join("; ");
+            div()
+                .class("mm-config-field").class(source_class)
+                .child(html::label().text(field.label))
+                .child(span().class("mm-kv__val").text(&if summary.is_empty() {
+                    "(empty)".to_string()
+                } else {
+                    summary
+                }))
+                .into()
+        }
+        ConfigValue::BoolGrid { columns, rows } => {
+            // Render as a mini-table with checkboxes
+            let mut table = html::table().class("mm-config-grid");
+
+            // Header row
+            let mut header = html::tr();
+            header = header.child(html::th().text(""));
+            for col in columns.iter() {
+                header = header.child(html::th().text(*col));
+            }
+            table = table.child(header);
+
+            // Data rows
+            for (ri, (name, bools)) in rows.iter().enumerate() {
+                let mut row = html::tr();
+                row = row.child(html::td().text(name));
+                for (ci, val) in bools.iter().enumerate() {
+                    let cell_id = format!("{field_id}-{ri}-{ci}");
+                    let mut cb = html::input()
+                        .attr("type", "checkbox")
+                        .attr("id", &cell_id)
+                        .attr("data-field-idx", fi.to_string())
+                        .attr("data-row", ri.to_string())
+                        .attr("data-col", ci.to_string())
+                        .class("mm-config-checkbox mm-config-grid-cell");
+                    if *val {
+                        cb = cb.attr("checked", "checked");
+                    }
+                    row = row.child(html::td().child(cb));
+                }
+                table = table.child(row);
+            }
+
+            div()
+                .class("mm-config-field mm-config-field--grid").class(source_class)
+                .child(html::label().text(field.label))
+                .child(table)
+                .into()
         }
     }
 }
 
-fn config_field_bool(key: &str, val: bool) -> Node {
-    let display_key = key.replace('_', " ");
-    let field_id = format!("cfg-{key}");
-    div()
-        .class("mm-config-field mm-config-field--bool")
-        .child(
-            html::input()
-                .attr("type", "checkbox")
-                .attr("id", &field_id)
-                .attr("name", key)
-                .bool_attr_if("checked", val)
-                .class("mm-config-checkbox"),
-        )
-        .child(html::label().attr("for", &field_id).text(&display_key))
-        .into()
+/// Collect form values from the DOM back into a ConfigEditorState.
+/// Called before save to patch edited values into the state.
+pub fn collect_config_form_values(state: &mut ConfigEditorState) {
+    let doc = match web_sys::window().and_then(|w| w.document()) {
+        Some(d) => d,
+        None => return,
+    };
+
+    for group in &mut state.groups {
+        for (fi, field) in group.fields.iter_mut().enumerate() {
+            collect_field_value(&doc, fi, field);
+        }
+    }
 }
 
-fn config_field_readonly(key: &str, val: &str) -> Node {
-    div()
-        .class("mm-config-field")
-        .child(html::label().text(key))
-        .child(span().class("mm-kv__val").text(val))
-        .into()
+/// Collect a single field's value from the DOM.
+fn collect_field_value(doc: &web_sys::Document, fi: usize, field: &mut ConfigField) {
+    use wasm_bindgen::JsCast;
+
+    // Find all inputs matching this field index
+    let selector = format!("[data-field-idx='{}']", fi);
+    let Ok(elements) = doc.query_selector_all(&selector) else { return };
+
+    // For BoolGrid, collect all grid cells
+    if let ConfigValue::BoolGrid { ref mut rows, .. } = field.value {
+        for i in 0..elements.length() {
+            let Some(el) = elements.get(i) else { continue };
+            let Ok(input) = el.dyn_into::<web_sys::HtmlInputElement>() else { continue };
+            let row: usize = input.get_attribute("data-row")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(usize::MAX);
+            let col: usize = input.get_attribute("data-col")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(usize::MAX);
+            if row < rows.len() && col < rows[row].1.len() {
+                rows[row].1[col] = input.checked();
+            }
+        }
+        ConfigEditorState::recompute_source_pub(field);
+        return;
+    }
+
+    let Some(el) = elements.get(0) else { return };
+
+    // Try as select element first (for Enum fields)
+    if let Ok(select) = el.clone().dyn_into::<web_sys::HtmlSelectElement>() {
+        if let ConfigValue::Enum { ref mut selected, .. } = field.value {
+            *selected = select.selected_index().max(0) as usize;
+            ConfigEditorState::recompute_source_pub(field);
+        }
+        return;
+    }
+
+    let Ok(input) = el.dyn_into::<web_sys::HtmlInputElement>() else { return };
+    match &mut field.value {
+        ConfigValue::Bool(b) => {
+            *b = input.checked();
+        }
+        ConfigValue::Float(f) => {
+            if let Ok(v) = input.value().parse::<f64>() {
+                *f = v;
+            }
+        }
+        ConfigValue::UintU32(n) => {
+            if let Ok(v) = input.value().parse::<u32>() {
+                *n = v;
+            }
+        }
+        ConfigValue::SignedInt(n) => {
+            if let Ok(v) = input.value().parse::<i64>() {
+                *n = v;
+            }
+        }
+        ConfigValue::OptionalUint(v) => {
+            let text = input.value();
+            if text.trim().eq_ignore_ascii_case("auto") || text.trim().is_empty() {
+                *v = None;
+            } else if let Ok(n) = text.parse::<usize>() {
+                *v = Some(n);
+            }
+        }
+        ConfigValue::String(s) => {
+            *s = input.value();
+        }
+        ConfigValue::StringList(list) => {
+            *list = input.value()
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+        ConfigValue::Duration(secs) => {
+            let text = input.value();
+            let trimmed = text.trim();
+            if trimmed.eq_ignore_ascii_case("disabled") || trimmed == "0" {
+                *secs = 0;
+            } else if let Ok(dur) = humantime::parse_duration(trimmed) {
+                *secs = dur.as_secs();
+            }
+        }
+        ConfigValue::StringSet(items) => {
+            *items = input.value()
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+        _ => {}
+    }
+
+    ConfigEditorState::recompute_source_pub(field);
 }
 
 // ============================================================================

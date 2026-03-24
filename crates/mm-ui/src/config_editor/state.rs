@@ -9,11 +9,11 @@ use ratatui::style::Color;
 use super::build;
 use super::types::*;
 use mm_meta::config::Config;
-use mm_ui::protocol_binding::ProtocolBinding;
+use crate::protocol_binding::ProtocolBinding;
 use crate::input::InputAction;
-use crate::widgets::modal_buttons::ModalButtons;
-use crate::widgets::wizard::{WizardOffer, WizardState};
-use crate::widgets::{ButtonRowState, TextInputState};
+use crate::modal_buttons::{ButtonRowState, ModalButtons};
+use crate::text_input::TextInputState;
+use crate::wizard::{WizardOffer, WizardState};
 
 /// Focus region within the config editor.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -70,7 +70,7 @@ impl ModalButtons for EditorButton {
     fn protocol_binding(&self, _ctx: &Self::Context) -> ProtocolBinding {
         match self {
             Self::Save => ProtocolBinding::Transaction {
-                decision_key: mm_ui::decision_keys::config_edit(),
+                decision_key: crate::decision_keys::config_edit(),
                 label: "Apply config changes".into(),
             },
             Self::Discard => ProtocolBinding::Navigation,
@@ -176,6 +176,8 @@ pub struct ConfigEditorState {
     pub collection_pos: Option<CollectionPosition>,
     /// Position within a StringListMap item's separator sub-list (None = not in sub-list).
     pub sub_collection_pos: Option<CollectionPosition>,
+    /// Column cursor for BoolGrid fields (which column is focused).
+    pub grid_col_cursor: usize,
     /// Focus: Fields vs Buttons.
     pub focus: EditorFocus,
     pub buttons: ButtonRowState<EditorButton>,
@@ -199,6 +201,7 @@ impl ConfigEditorState {
             text_input: None,
             collection_pos: None,
             sub_collection_pos: None,
+            grid_col_cursor: 0,
             focus: EditorFocus::Fields,
             buttons: ButtonRowState::new(), // defaults to Save
             pending_cycle: None,
@@ -274,6 +277,7 @@ impl ConfigEditorState {
         match &self.groups[gi].fields[fi].value {
             ConfigValue::StringSet(v) => v.len(),
             ConfigValue::StringListMap(v) => v.len(),
+            ConfigValue::BoolGrid { rows, .. } => rows.len(),
             _ => 0,
         }
     }
@@ -306,6 +310,15 @@ impl ConfigEditorState {
     fn handle_collection_input(&mut self, action: &InputAction) -> Option<ConfigEditorAction> {
         let item_count = self.current_collection_len();
 
+        // Check if we're in a BoolGrid field
+        let is_bool_grid = self.cursor_to_group_field().is_some_and(|(gi, fi)| {
+            matches!(&self.groups[gi].fields[fi].value, ConfigValue::BoolGrid { .. })
+        });
+
+        if is_bool_grid {
+            return self.handle_bool_grid_input(action, item_count);
+        }
+
         match action {
             InputAction::NavUp => {
                 collection_nav_up(&mut self.collection_pos, item_count);
@@ -332,6 +345,79 @@ impl ConfigEditorState {
             }
             InputAction::Cancel => {
                 self.collection_pos = None;
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Handle input while editing within a BoolGrid field.
+    fn handle_bool_grid_input(
+        &mut self,
+        action: &InputAction,
+        item_count: usize,
+    ) -> Option<ConfigEditorAction> {
+        let Some((gi, fi)) = self.cursor_to_group_field() else {
+            return None;
+        };
+
+        let col_count = match &self.groups[gi].fields[fi].value {
+            ConfigValue::BoolGrid { columns, .. } => columns.len(),
+            _ => return None,
+        };
+
+        match action {
+            InputAction::NavUp => {
+                collection_nav_up(&mut self.collection_pos, item_count);
+                None
+            }
+            InputAction::NavDown => {
+                if collection_nav_down(&mut self.collection_pos, item_count) {
+                    let total = self.visible_field_count();
+                    if self.cursor + 1 < total {
+                        self.cursor += 1;
+                    }
+                }
+                None
+            }
+            InputAction::NavLeft => {
+                if self.grid_col_cursor > 0 {
+                    self.grid_col_cursor -= 1;
+                }
+                None
+            }
+            InputAction::NavRight => {
+                if self.grid_col_cursor + 1 < col_count {
+                    self.grid_col_cursor += 1;
+                }
+                None
+            }
+            InputAction::Confirm | InputAction::Toggle => {
+                // Toggle the current cell
+                if let Some(CollectionPosition::Item(row_idx)) = self.collection_pos {
+                    let field = &mut self.groups[gi].fields[fi];
+                    if let ConfigValue::BoolGrid { ref mut rows, .. } = field.value {
+                        if row_idx < rows.len() && self.grid_col_cursor < rows[row_idx].1.len() {
+                            rows[row_idx].1[self.grid_col_cursor] =
+                                !rows[row_idx].1[self.grid_col_cursor];
+                            Self::recompute_source(field);
+                        }
+                    }
+                } else if matches!(self.collection_pos, Some(CollectionPosition::AddNew)) {
+                    // Add new row: enter text input for the relation type name
+                    let mut input = TextInputState::new();
+                    input.focused = true;
+                    self.text_input = Some(input);
+                }
+                None
+            }
+            InputAction::Char('x') | InputAction::Delete => {
+                self.delete_collection_item();
+                None
+            }
+            InputAction::Cancel => {
+                self.collection_pos = None;
+                self.grid_col_cursor = 0;
                 None
             }
             _ => None,
@@ -485,6 +571,13 @@ impl ConfigEditorState {
                 input.focused = true;
                 self.text_input = Some(input);
             }
+            // BoolGrid: Confirm on Item toggles cell, handled in handle_bool_grid_input.
+            // Confirm on AddNew enters text input for new row name.
+            (ConfigValue::BoolGrid { .. }, Some(CollectionPosition::AddNew)) => {
+                let mut input = TextInputState::new();
+                input.focused = true;
+                self.text_input = Some(input);
+            }
             _ => {}
         }
     }
@@ -510,6 +603,15 @@ impl ConfigEditorState {
                 if idx < items.len() {
                     items.remove(idx);
                     adjust_cursor_after_delete(&mut self.collection_pos, items.len());
+                    true
+                } else {
+                    false
+                }
+            }
+            (ConfigValue::BoolGrid { ref mut rows, .. }, Some(CollectionPosition::Item(idx))) => {
+                if idx < rows.len() {
+                    rows.remove(idx);
+                    adjust_cursor_after_delete(&mut self.collection_pos, rows.len());
                     true
                 } else {
                     false
@@ -670,6 +772,11 @@ impl ConfigEditorState {
         }
     }
 
+    /// Public wrapper for recompute_source — for use by web form collection.
+    pub fn recompute_source_pub(field: &mut ConfigField) {
+        Self::recompute_source(field);
+    }
+
     /// Recompute field source after an edit: if the value matches the original,
     /// restore the original source; otherwise mark as Edited.
     fn recompute_source(field: &mut ConfigField) {
@@ -733,6 +840,14 @@ impl ConfigEditorState {
             }
             ConfigValue::StringListMap(items) => {
                 if items.is_empty() {
+                    self.collection_pos = Some(CollectionPosition::AddNew);
+                } else {
+                    self.collection_pos = Some(CollectionPosition::Item(0));
+                }
+            }
+            ConfigValue::BoolGrid { rows, .. } => {
+                self.grid_col_cursor = 0;
+                if rows.is_empty() {
                     self.collection_pos = Some(CollectionPosition::AddNew);
                 } else {
                     self.collection_pos = Some(CollectionPosition::Item(0));
@@ -826,7 +941,8 @@ impl ConfigEditorState {
             ConfigValue::Bool(_)
             | ConfigValue::Enum { .. }
             | ConfigValue::StringSet(_)
-            | ConfigValue::StringListMap(_) => false,
+            | ConfigValue::StringListMap(_)
+            | ConfigValue::BoolGrid { .. } => false,
         };
 
         if ok {
@@ -884,6 +1000,23 @@ impl ConfigEditorState {
                     let tag = text.to_uppercase();
                     items.push((tag, Vec::new()));
                     self.collection_pos = Some(CollectionPosition::Item(items.len() - 1));
+                    true
+                } else {
+                    false
+                }
+            }
+            (
+                ConfigValue::BoolGrid {
+                    ref mut rows,
+                    columns,
+                },
+                CollectionPosition::AddNew,
+            ) => {
+                if !text.is_empty() {
+                    // Add new relation type with all-false routing
+                    let bools = vec![false; columns.len()];
+                    rows.push((text.to_string(), bools));
+                    self.collection_pos = Some(CollectionPosition::Item(rows.len() - 1));
                     true
                 } else {
                     false

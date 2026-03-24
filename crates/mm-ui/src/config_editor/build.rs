@@ -6,11 +6,11 @@
 
 use super::types::*;
 use mm_meta::config::{
-    AlbumArtOpinions, CanonicalizationOpinions, Config, DiscExtractionOpinions,
-    DuplicateAnalysisOpinions, ExternalMatchingConfig, HealthDetectionOpinions,
-    MbTagNameConfig, Opinions, PackingWeights, PerformanceOpinions,
-    ReleasePackingOpinions, SidecarDeployMode, StartupOpinions,
-    StartupView, TagSplittingOpinions,
+    AlbumArtOpinions, CanonicalizationOpinions, Config, CreditRoutingConfig,
+    DiscExtractionOpinions, DuplicateAnalysisOpinions, ExternalMatchingConfig,
+    HealthDetectionOpinions, MbTagNameConfig, Opinions, PackingWeights, PerformanceOpinions,
+    RelationRouting, ReleasePackingOpinions, SidecarDeployMode, StartupOpinions, StartupView,
+    TagSplittingOpinions,
 };
 
 // =============================================================================
@@ -82,6 +82,27 @@ fn field(
         source,
         restart_required,
         applier,
+    }
+}
+
+// =============================================================================
+// Routing table helpers
+// =============================================================================
+
+/// Column names for the credit routing BoolGrid.
+const ROUTING_COLUMNS: &[&str] = &["artist", "title", "composer"];
+
+/// Convert a RelationRouting to a row of booleans (matches ROUTING_COLUMNS order).
+fn routing_to_bools(r: &RelationRouting) -> Vec<bool> {
+    vec![r.artist, r.title, r.composer]
+}
+
+/// Convert a row of booleans back to a RelationRouting.
+fn bools_to_routing(bools: &[bool]) -> RelationRouting {
+    RelationRouting {
+        artist: bools.first().copied().unwrap_or(false),
+        title: bools.get(1).copied().unwrap_or(false),
+        composer: bools.get(2).copied().unwrap_or(false),
     }
 }
 
@@ -321,16 +342,87 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                 false, |v, c| { if let ConfigValue::String(s) = v {
                     c.opinions.external_matching.mb_base_url = s.trim_end_matches('/').to_string();
                 } }),
-            cf!(bool, external_matching.mb_tag_names.picard_compat, "Picard-compat MB tags",
-                "Also write Picard-style aliases (MUSICBRAINZ_ALBUMID, etc.) for Navidrome",
-                &["TODO"], MbTagNameConfig::KDL_PICARD_COMPAT),
+            cf!(string_list, external_matching.preferred_locales, "Preferred locales",
+                "Locale preference for artist name resolution (e.g. en, ja)",
+                &["TODO"], ExternalMatchingConfig::KDL_PREFERRED_LOCALES),
             cf!(bool, external_matching.cover_art_fetch, "Cover art fetch",
                 "Master switch for Cover Art Archive fetching",
                 &["TODO"], ExternalMatchingConfig::KDL_COVER_ART_FETCH),
             cf!(bool, external_matching.cover_art_upgrade, "Cover art upgrade",
                 "Re-fetch cover art if higher-resolution is available",
                 &["TODO"], ExternalMatchingConfig::KDL_COVER_ART_UPGRADE),
+            cf!(string_list, external_matching.cover_art_types, "Cover art types",
+                "CAA image types to fetch (e.g. Front, Back)",
+                &["TODO"], ExternalMatchingConfig::KDL_COVER_ART_TYPES),
         ]},
+        ConfigGroup { name: "MB Tag Names", collapsed: true, fields: vec![
+            cf!(string, external_matching.mb_tag_names.recording, "Recording tag",
+                "Vorbis Comment tag name for recording MBID",
+                &["TODO"], MbTagNameConfig::KDL_RECORDING),
+            cf!(string, external_matching.mb_tag_names.release, "Release tag",
+                "Vorbis Comment tag name for release MBID",
+                &["TODO"], MbTagNameConfig::KDL_RELEASE),
+            cf!(string, external_matching.mb_tag_names.track, "Track tag",
+                "Vorbis Comment tag name for track-on-release MBID",
+                &["TODO"], MbTagNameConfig::KDL_TRACK),
+            cf!(bool, external_matching.mb_tag_names.picard_compat, "Picard-compat aliases",
+                "Also write Picard-style aliases (MUSICBRAINZ_ALBUMID, etc.) for Navidrome",
+                &["TODO"], MbTagNameConfig::KDL_PICARD_COMPAT),
+        ]},
+        ConfigGroup { name: "Credit Routing", collapsed: true, fields: {
+            let cr = &ops.external_matching.credit_routing;
+            let cr_defaults = CreditRoutingConfig::default();
+            vec![
+                cf!(string, external_matching.credit_routing.feat_format, "Feat format",
+                    "Template for vocalist title suffix ({artists} is replaced)",
+                    &["TODO"], CreditRoutingConfig::KDL_FEAT_FORMAT),
+                // max_feat_credits: Option<u32> mapped through OptionalUint (usize)
+                field("Max feat credits", "Cap on artist names in feat suffix (auto = unlimited)",
+                    &["TODO"],
+                    ConfigValue::OptionalUint(cr.max_feat_credits.map(|n| n as usize)),
+                    source_for(cr.max_feat_credits == cr_defaults.max_feat_credits,
+                        CreditRoutingConfig::KDL_MAX_FEAT_CREDITS),
+                    false, |v, c| { if let ConfigValue::OptionalUint(n) = v {
+                        c.opinions.external_matching.credit_routing.max_feat_credits = n.map(|n| n as u32);
+                    } }),
+                // BoolGrid for the routing table
+                {
+                    let mut rows: Vec<(String, Vec<bool>)> = cr.routing
+                        .iter()
+                        .map(|(k, v)| (k.clone(), routing_to_bools(v)))
+                        .collect();
+                    rows.sort_by(|a, b| a.0.cmp(&b.0));
+
+                    let default_rows: Vec<(String, Vec<bool>)> = {
+                        let mut r: Vec<_> = cr_defaults.routing
+                            .iter()
+                            .map(|(k, v)| (k.clone(), routing_to_bools(v)))
+                            .collect();
+                        r.sort_by(|a, b| a.0.cmp(&b.0));
+                        r
+                    };
+
+                    field("Relation routing", "Route recording credits to artist/title/composer tags",
+                        &["Rows: MusicBrainz relation types (performer, vocal, instrument, remixer)",
+                          "Columns: which tag fields receive the credited artist name",
+                          "artist = ARTIST tag, title = feat. suffix, composer = COMPOSER tag"],
+                        ConfigValue::BoolGrid {
+                            columns: ROUTING_COLUMNS,
+                            rows: rows.clone(),
+                        },
+                        source_for(rows == default_rows, CreditRoutingConfig::KDL_CREDIT_ROUTING),
+                        false, |v, c| {
+                            if let ConfigValue::BoolGrid { rows, .. } = v {
+                                let mut routing = std::collections::HashMap::new();
+                                for (name, bools) in rows {
+                                    routing.insert(name.clone(), bools_to_routing(bools));
+                                }
+                                c.opinions.external_matching.credit_routing.routing = routing;
+                            }
+                        })
+                },
+            ]
+        }},
         ConfigGroup { name: "Disc Extraction", collapsed: false, fields: vec![
             cf!(string, disc_extraction.disc_tag_name, "Disc tag name",
                 "Tag name to write extracted disc identifier into",

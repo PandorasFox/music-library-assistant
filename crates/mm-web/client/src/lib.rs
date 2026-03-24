@@ -54,7 +54,7 @@ enum ActiveResolution {
 }
 
 thread_local! {
-    static CONFIG_DATA: RefCell<Option<serde_json::Value>> = const { RefCell::new(None) };
+    static CONFIG_EDITOR: RefCell<Option<mm_ui::config_editor::ConfigEditorState>> = const { RefCell::new(None) };
     /// JS timeout handle for search debounce. Cleared on new keystrokes.
     static SEARCH_DEBOUNCE: RefCell<Option<i32>> = const { RefCell::new(None) };
     /// Guard flag: when true, the hashchange listener skips its load because
@@ -461,8 +461,13 @@ async fn load_view_for_route(route: &Route) -> Result<Node, JsValue> {
         }
         Route::Config(_) => {
             let config_json = api::get_config_json().await?;
-            CONFIG_DATA.with(|cell| *cell.borrow_mut() = Some(config_json.clone()));
-            Ok(views::render_config_editor(&config_json))
+            let config: mm_meta::config::Config = serde_json::from_value(config_json)
+                .map_err(|e| JsValue::from_str(&format!("deserialize config: {e}")))?;
+            let kdl = api::get_config_kdl().await.ok();
+            let state = mm_ui::config_editor::ConfigEditorState::new(&config, kdl);
+            let node = views::render_config_editor(&state);
+            CONFIG_EDITOR.with(|cell| *cell.borrow_mut() = Some(state));
+            Ok(node)
         }
         Route::Deploy(_) => {
             let data = api::get_deploy_status().await?;
@@ -532,11 +537,10 @@ async fn load_view_for_route(route: &Route) -> Result<Node, JsValue> {
         }
 
         // KnotBrowser — not yet wired to web renderers.
-        // Fall back to health view for now.
+        // Fall back to insights view for now.
         _ => {
-            let status = get_status_cached().await?;
             let insights = api::get_insights().await.ok();
-            let mut children = vec![views::render_status_content(&status)];
+            let mut children = Vec::new();
             if let Some(ref ins) = insights {
                 children.push(views::render_insights_content(ins));
             }
@@ -894,20 +898,20 @@ fn api_deserialize<T: serde::de::DeserializeOwned>(
         .map_err(|e| JsValue::from_str(&format!("deserialize {type_name}: {e}")))
 }
 
-/// Fetch and deserialize the server config. Uses the cached CONFIG_DATA if
-/// available, otherwise fetches from the server and caches the result.
+/// Fetch and deserialize the server config. Uses the cached editor state if
+/// available, otherwise fetches from the server.
 async fn fetch_config() -> Result<mm_meta::config::Config, JsValue> {
-    let cached = CONFIG_DATA.with(|cell| cell.borrow().clone());
-    let json = match cached {
-        Some(v) => v,
+    let cached = CONFIG_EDITOR.with(|cell| {
+        cell.borrow().as_ref().map(|s| s.original_config.clone())
+    });
+    match cached {
+        Some(c) => Ok(c),
         None => {
-            let v = api::get_config_json().await?;
-            CONFIG_DATA.with(|cell| *cell.borrow_mut() = Some(v.clone()));
-            v
+            let json = api::get_config_json().await?;
+            serde_json::from_value(json)
+                .map_err(|e| JsValue::from_str(&format!("deserialize Config: {e}")))
         }
-    };
-    serde_json::from_value(json)
-        .map_err(|e| JsValue::from_str(&format!("deserialize Config: {e}")))
+    }
 }
 
 /// Fetch data and render content for an external match overlay route.
@@ -1893,7 +1897,7 @@ pub fn mm_search(query: &str) {
     SEARCH_DEBOUNCE.with(|cell| *cell.borrow_mut() = Some(handle));
 }
 
-/// Save edited config — collects form values, patches cached JSON, POSTs to server.
+/// Save edited config — reads form values into ConfigEditorState, builds mutation.
 #[wasm_bindgen]
 pub fn mm_config_save() {
     spawn_local(async {
@@ -1903,106 +1907,26 @@ pub fn mm_config_save() {
     });
 }
 
-/// Find the mutable slot for a config field by name.
-/// Searches root-level keys, then opinions top-level, then opinions sub-blocks.
-fn find_config_slot<'a>(
-    config: &'a mut serde_json::Value,
-    name: &str,
-) -> Option<&'a mut serde_json::Value> {
-    // Root level.
-    if config.get(name).is_some() {
-        return config.get_mut(name);
-    }
-    // Opinions top-level and sub-blocks.
-    if let Some(opinions) = config.get_mut("opinions") {
-        if opinions.get(name).is_some() {
-            return opinions.get_mut(name);
-        }
-        if let Some(obj) = opinions.as_object_mut() {
-            for (_block_key, block_val) in obj.iter_mut() {
-                if let Some(block_obj) = block_val.as_object_mut() {
-                    if block_obj.contains_key(name) {
-                        return block_obj.get_mut(name);
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
 async fn do_config_save() -> Result<(), JsValue> {
-    use mm_meta::config::Config;
-    use mm_meta::decisions::Decision;
     use mm_meta::mutations::config_edit::ApplyConfigEditsMutation;
     use mm_meta::mutations::Mutation;
 
-    let config_json = CONFIG_DATA.with(|cell| cell.borrow().clone());
-    let Some(mut config) = config_json else {
-        return Err(JsValue::from_str("no config data cached"));
-    };
+    // Collect form values back into the config editor state.
+    CONFIG_EDITOR.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        let Some(ref mut state) = *borrow else { return };
+        views::collect_config_form_values(state);
+    });
 
-    // Walk all form inputs and patch changed values into the config JSON.
-    let doc = web_sys::window().unwrap().document().unwrap();
-    let inputs = doc.query_selector_all("input[id^='cfg-']")
-        .map_err(|e| JsValue::from_str(&format!("querySelectorAll: {e:?}")))?;
-
-    for i in 0..inputs.length() {
-        let el = inputs.get(i).unwrap();
-        let input: web_sys::HtmlInputElement = el.dyn_into()?;
-        let name = input.get_attribute("name").unwrap_or_default();
-        if name.is_empty() {
-            continue;
-        }
-        let input_type = input.get_attribute("type").unwrap_or_default();
-
-        // Find this field in the config JSON and update it.
-        // Fields can be in opinions top-level or in opinions sub-blocks.
-        let new_val = if input_type == "checkbox" {
-            serde_json::Value::Bool(input.checked())
-        } else if input_type == "number" {
-            let v = input.value();
-            if let Ok(n) = v.parse::<i64>() {
-                serde_json::json!(n)
-            } else if let Ok(n) = v.parse::<f64>() {
-                serde_json::json!(n)
-            } else {
-                continue;
-            }
-        } else {
-            serde_json::Value::String(input.value())
-        };
-
-        // Patch the value into the config, preserving the original type.
-        // find_config_slot returns a mutable reference to the slot so we
-        // can check what JSON type it held before overwriting.
-        let slot = find_config_slot(&mut config, &name);
-        if let Some(slot) = slot {
-            // If the original value was an array but the form produced a
-            // string, split on commas back into an array of strings.
-            if slot.is_array() {
-                if let serde_json::Value::String(ref s) = new_val {
-                    let arr: Vec<serde_json::Value> = s
-                        .split(',')
-                        .map(|part| serde_json::Value::String(part.trim().to_string()))
-                        .filter(|v| v.as_str() != Some(""))
-                        .collect();
-                    *slot = serde_json::Value::Array(arr);
-                } else {
-                    *slot = new_val;
-                }
-            } else {
-                *slot = new_val;
-            }
-        }
-    }
-
-    // Fetch old config and original KDL for the mutation.
-    let old_config: Config = serde_json::from_value(api::get_config_json().await?)
-        .map_err(|e| JsValue::from_str(&format!("deserialize old config: {e}")))?;
-    let original_kdl = api::get_config_kdl().await?;
-    let new_config: Config = serde_json::from_value(config)
-        .map_err(|e| JsValue::from_str(&format!("deserialize new config: {e}")))?;
+    let (old_config, new_config, original_kdl) = CONFIG_EDITOR.with(|cell| {
+        let borrow = cell.borrow();
+        let state = borrow.as_ref().ok_or_else(|| JsValue::from_str("no config editor state"))?;
+        Ok::<_, JsValue>((
+            state.original_config.clone(),
+            state.build_config(),
+            state.original_kdl.clone().unwrap_or_default(),
+        ))
+    })?;
 
     let mutation = Mutation::ApplyConfigEdits(Box::new(ApplyConfigEditsMutation {
         original_kdl,
@@ -2010,7 +1934,7 @@ async fn do_config_save() -> Result<(), JsValue> {
         new_config,
     }));
 
-    let decision = Decision {
+    let decision = mm_meta::decisions::Decision {
         label: "Config edit".to_string(),
         mutations: vec![mutation],
     };

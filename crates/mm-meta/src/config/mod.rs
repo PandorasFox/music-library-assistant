@@ -360,11 +360,14 @@ impl RelationRouting {
 }
 
 /// Per-relation-type routing rules for recording credits.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CreditRoutingConfig {
     pub routing: std::collections::HashMap<String, RelationRouting>,
     /// Format string for vocalist title suffix. Default: "feat. {artists}".
     pub feat_format: String,
+    /// Maximum number of artist names to include in a feat suffix.
+    /// `None` means unlimited.
+    pub max_feat_credits: Option<u32>,
 }
 
 impl Default for CreditRoutingConfig {
@@ -405,6 +408,7 @@ impl Default for CreditRoutingConfig {
         Self {
             routing,
             feat_format: "feat. {artists}".to_string(),
+            max_feat_credits: None,
         }
     }
 }
@@ -412,6 +416,7 @@ impl Default for CreditRoutingConfig {
 impl CreditRoutingConfig {
     pub const KDL_CREDIT_ROUTING: &str = "credit-routing";
     pub const KDL_FEAT_FORMAT: &str = "feat-format";
+    pub const KDL_MAX_FEAT_CREDITS: &str = "max-feat-credits";
 
     /// Look up routing for a relation type, defaulting to SKIP.
     pub fn route_for(&self, relation_type: &str) -> &RelationRouting {

@@ -300,6 +300,11 @@ pub fn generate_feat_suffix(
     let mut seen = HashSet::new();
     feat_names.retain(|n| seen.insert(n.clone()));
 
+    // Cap the number of feat credits if configured
+    if let Some(max) = routing.max_feat_credits {
+        feat_names.truncate(max as usize);
+    }
+
     // Join: "A, B & C"
     let joined = if feat_names.len() == 1 {
         feat_names[0].clone()

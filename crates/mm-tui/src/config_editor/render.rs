@@ -12,8 +12,10 @@ use ratatui::{
     Frame,
 };
 
-use super::state::{CollectionPosition, ConfigEditorState, EditorButtonCtx, EditorFocus};
-use super::types::{ConfigField, ConfigValue, FieldSource};
+use super::{
+    CollectionPosition, ConfigEditorState, ConfigField, ConfigValue, EditorButtonCtx, EditorFocus,
+    FieldSource,
+};
 use crate::widgets::control_colors;
 use crate::widgets::wizard_popup::WizardPopup;
 
@@ -145,7 +147,7 @@ fn render_field_list(f: &mut Frame, area: Rect, state: &ConfigEditorState) {
 
 /// Render a single field line.
 fn render_field_line<'a>(
-    field: &'a super::types::ConfigField,
+    field: &'a ConfigField,
     is_cursor: bool,
     _width: usize,
     state: &ConfigEditorState,
@@ -447,6 +449,92 @@ fn render_collection_items<'a>(
                 Line::from(vec![
                     Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
                     Span::styled("[+] Add new tag...", style),
+                ])
+            };
+            lines.push((line, is_add_new));
+        }
+
+        ConfigValue::BoolGrid { columns, rows } => {
+            // Header row with column names
+            let mut header_spans = vec![Span::styled(
+                format!("    {:>20}", ""),
+                Style::default().fg(Color::DarkGray),
+            )];
+            for (ci, col) in columns.iter().enumerate() {
+                let is_col_selected = state.grid_col_cursor == ci;
+                let style = if is_col_selected {
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+                } else {
+                    Style::default().fg(Color::Cyan)
+                };
+                header_spans.push(Span::styled(format!("{:>10}", col), style));
+            }
+            lines.push((Line::from(header_spans), false));
+
+            // Data rows
+            for (i, (name, bools)) in rows.iter().enumerate() {
+                let is_selected = pos == Some(CollectionPosition::Item(i));
+                let cursor_char = if is_selected { "    > " } else { "      " };
+
+                let name_style = if is_selected {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+
+                let mut spans = vec![
+                    Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
+                    Span::styled(format!("{:<14}", name), name_style),
+                ];
+
+                for (ci, val) in bools.iter().enumerate() {
+                    let is_cell_selected = is_selected && state.grid_col_cursor == ci;
+                    let icon = if *val { "[x]" } else { "[ ]" };
+                    let style = if is_cell_selected {
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
+                    } else if *val {
+                        Style::default().fg(Color::Green)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    };
+                    spans.push(Span::styled(format!("{:>10}", icon), style));
+                }
+
+                lines.push((Line::from(spans), is_selected));
+            }
+
+            // Add new row
+            let is_add_new = pos == Some(CollectionPosition::AddNew);
+            let is_editing = is_add_new && text_input.is_some();
+            let cursor_char = if is_add_new { "    > " } else { "      " };
+
+            let line = if is_editing {
+                let input = text_input.unwrap();
+                Line::from(vec![
+                    Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        format!("{}\u{2588}", input.value),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::UNDERLINED),
+                    ),
+                    Span::styled(": (new relation type)", Style::default().fg(Color::DarkGray)),
+                ])
+            } else {
+                let style = if is_add_new {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                Line::from(vec![
+                    Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
+                    Span::styled("[+] Add new relation type...", style),
                 ])
             };
             lines.push((line, is_add_new));

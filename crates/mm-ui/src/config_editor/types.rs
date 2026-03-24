@@ -33,6 +33,12 @@ pub enum ConfigValue {
     StringSet(Vec<String>),
     /// Map of string to list of strings (opens StringListMapEditor popup).
     StringListMap(Vec<(String, Vec<String>)>),
+    /// Grid of booleans: rows are named, columns are fixed.
+    /// Used for credit routing (relation type → artist/title/composer).
+    BoolGrid {
+        columns: &'static [&'static str],
+        rows: Vec<(String, Vec<bool>)>,
+    },
 }
 
 impl ConfigValue {
@@ -77,6 +83,13 @@ impl ConfigValue {
                     format!("{} tags", v.len())
                 }
             }
+            ConfigValue::BoolGrid { rows, .. } => {
+                if rows.is_empty() {
+                    "(empty)".to_string()
+                } else {
+                    format!("{} rules", rows.len())
+                }
+            }
         }
     }
 
@@ -96,6 +109,10 @@ impl ConfigValue {
             }
             (ConfigValue::StringSet(a), ConfigValue::StringSet(b)) => a == b,
             (ConfigValue::StringListMap(a), ConfigValue::StringListMap(b)) => a == b,
+            (
+                ConfigValue::BoolGrid { rows: a, .. },
+                ConfigValue::BoolGrid { rows: b, .. },
+            ) => a == b,
             _ => false,
         }
     }

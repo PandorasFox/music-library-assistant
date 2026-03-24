@@ -55,8 +55,6 @@ enum ActiveResolution {
 
 thread_local! {
     static CONFIG_DATA: RefCell<Option<serde_json::Value>> = const { RefCell::new(None) };
-    /// JS interval handle for health view polling. Cleared on navigation.
-    static POLL_HANDLE: RefCell<Option<i32>> = const { RefCell::new(None) };
     /// JS timeout handle for search debounce. Cleared on new keystrokes.
     static SEARCH_DEBOUNCE: RefCell<Option<i32>> = const { RefCell::new(None) };
     /// Guard flag: when true, the hashchange listener skips its load because
@@ -68,6 +66,9 @@ thread_local! {
     static ACTIVE_RESOLUTION: RefCell<Option<ActiveResolution>> = const { RefCell::new(None) };
     /// Cached server build timestamp, fetched once at init.
     static BUILD_ID: RefCell<String> = const { RefCell::new(String::new()) };
+    /// Latest WitchStatus from server-pushed events. Updated by the WebSocket
+    /// callback, read by view loading and event-driven refresh logic.
+    static LAST_STATUS: RefCell<Option<mm_meta::witch_types::WitchStatus>> = const { RefCell::new(None) };
 }
 
 // ============================================================================
@@ -221,9 +222,9 @@ fn mount_error(msg: &str) {
 
 /// Redirect to the login screen. Called by the api module on HTTP 401.
 pub(crate) fn redirect_to_login() {
-    stop_poll();
     api::stop_event_stream();
     ACTIVE_RESOLUTION.with(|cell| cell.borrow_mut().take());
+    LAST_STATUS.with(|cell| cell.borrow_mut().take());
     mount(&render_login(Some("Session expired")));
 }
 
@@ -236,6 +237,23 @@ fn start_event_stream() {
             None => return,
         };
 
+        // Detect generation counter changes before storing the new status.
+        let data_changed = LAST_STATUS.with(|cell| {
+            let prev = cell.borrow();
+            match prev.as_ref() {
+                Some(prev) => {
+                    prev.mutations_generation != status.mutations_generation
+                        || prev.computations_generation != status.computations_generation
+                        || prev.error_generation != status.error_generation
+                        || prev.config_generation != status.config_generation
+                }
+                None => true, // First push — treat as changed
+            }
+        });
+
+        // Store the latest status for use by view loading and on-demand reads.
+        LAST_STATUS.with(|cell| *cell.borrow_mut() = Some(status.clone()));
+
         // Update the status section if visible (Health view).
         if let Some(el) = doc.get_element_by_id("mm-status-section") {
             let node = views::render_status_content(&status);
@@ -247,7 +265,43 @@ fn start_event_stream() {
             let node = views::render_fetch_progress_section(&status);
             el.set_inner_html(&node.to_html());
         }
+
+        // On generation counter change, refresh view-specific data that isn't in WitchStatus.
+        if data_changed {
+            spawn_local(async {
+                let doc = web_sys::window().unwrap().document().unwrap();
+
+                // Refresh insights data if Health view is active.
+                if doc.get_element_by_id("mm-insights-section").is_some() {
+                    if let Ok(insights) = api::get_insights().await {
+                        if let Some(el) = doc.get_element_by_id("mm-insights-section") {
+                            let node = views::render_insights_content(&insights);
+                            el.set_inner_html(&node.to_html());
+                        }
+                    }
+                }
+
+                // Refresh external matches data if that view is active.
+                if doc.get_element_by_id("mm-external-data").is_some() {
+                    if let Ok(data) = api::get_external_matches().await {
+                        if let Some(el) = doc.get_element_by_id("mm-external-data") {
+                            let node = views::render_external_matches_data(&data);
+                            el.set_inner_html(&node.to_html());
+                        }
+                    }
+                }
+            });
+        }
     });
+}
+
+/// Get the latest pushed WitchStatus, or fetch it via HTTP if none available yet.
+async fn get_status_cached() -> Result<mm_meta::witch_types::WitchStatus, JsValue> {
+    let cached = LAST_STATUS.with(|cell| cell.borrow().clone());
+    match cached {
+        Some(s) => Ok(s),
+        None => api::get_status().await,
+    }
 }
 
 // ============================================================================
@@ -386,13 +440,12 @@ async fn load_view_for_route(route: &Route) -> Result<Node, JsValue> {
     match route {
         // -- Lateral views --
         Route::Health(_) => {
-            let status = api::get_status().await?;
+            let status = get_status_cached().await?;
             let insights = api::get_insights().await.ok();
             let mut children = vec![views::render_status_content(&status)];
             if let Some(ref ins) = insights {
                 children.push(views::render_insights_content(ins));
             }
-            start_health_poll();
             Ok(div().children(children).into())
         }
         Route::Config(_) => {
@@ -415,12 +468,11 @@ async fn load_view_for_route(route: &Route) -> Result<Node, JsValue> {
         }
         Route::ExternalMatches(_) => {
             let data = api::get_external_matches().await?;
-            let status = api::get_status().await.ok();
-            start_external_matches_poll();
+            let status = get_status_cached().await.ok();
             Ok(views::render_external_matches_page(&data, status.as_ref()))
         }
         Route::Transaction(_) => {
-            let status = api::get_status().await?;
+            let status = get_status_cached().await?;
             let details = api::tx_details().await.unwrap_or_default();
             Ok(views::render_transaction_content(&status, &details))
         }
@@ -453,7 +505,7 @@ async fn load_view_for_route(route: &Route) -> Result<Node, JsValue> {
         }
 
         Route::TransactionReview(_) => {
-            let status = api::get_status().await?;
+            let status = get_status_cached().await?;
             let details = api::tx_details().await.unwrap_or_default();
             Ok(views::render_transaction_review(&status, &details))
         }
@@ -471,13 +523,12 @@ async fn load_view_for_route(route: &Route) -> Result<Node, JsValue> {
         // KnotBrowser — not yet wired to web renderers.
         // Fall back to health view for now.
         _ => {
-            let status = api::get_status().await?;
+            let status = get_status_cached().await?;
             let insights = api::get_insights().await.ok();
             let mut children = vec![views::render_status_content(&status)];
             if let Some(ref ins) = insights {
                 children.push(views::render_insights_content(ins));
             }
-            start_health_poll();
             Ok(div().children(children).into())
         }
     }
@@ -888,8 +939,8 @@ async fn load_from_hash() -> Result<(), JsValue> {
     let route = current_route();
     let lateral = lateral_view_for_route(&route);
 
-    // Fetch status for transaction tab visibility and work state.
-    let status = api::get_status().await.ok();
+    // Use cached pushed status for transaction tab visibility and work state.
+    let status = get_status_cached().await.ok();
     let tx_open = status.as_ref().map_or(false, |s| s.transaction.is_some());
     let status_line = format_status_line(status.as_ref());
 
@@ -975,7 +1026,7 @@ async fn do_login() -> Result<(), JsValue> {
 
 #[wasm_bindgen]
 pub fn mm_navigate(view_name: &str) {
-    stop_poll();
+
     let view = match view_name {
         "Config" => LateralView::Config,
         "Search" => LateralView::Search,
@@ -1004,7 +1055,7 @@ pub fn mm_logout() {
 /// Cancel a resolution modal — navigate back to the Health view.
 #[wasm_bindgen]
 pub fn mm_resolve_cancel() {
-    stop_poll();
+
     ACTIVE_RESOLUTION.with(|cell| cell.borrow_mut().take());
     navigate_to(&Route::Health(Default::default()));
     spawn_local(async move {
@@ -1458,7 +1509,7 @@ async fn stage_decision(
     mutations: &[mm_meta::mutations::Mutation],
 ) -> Result<(), JsValue> {
     // Check if a transaction is already active.
-    let status = api::get_status().await?;
+    let status = get_status_cached().await?;
     if status.transaction.is_none() {
         api::tx_start(label).await?;
     }
@@ -1549,7 +1600,7 @@ pub fn mm_tx_remove(key_json: &str) {
 /// Navigate to an arbitrary hash route and reload the view.
 #[wasm_bindgen]
 pub fn mm_navigate_route(hash: &str) {
-    stop_poll();
+
     let hash = hash.to_string();
     PROGRAMMATIC_NAV.with(|flag| flag.set(true));
     web_sys::window()
@@ -1723,7 +1774,7 @@ fn register_hashchange_listener() {
         if !api::has_token() {
             return;
         }
-        stop_poll();
+    
         spawn_local(async {
             if let Err(e) = load_from_hash().await {
                 web_sys::console::error_1(&format!("hashchange error: {e:?}").into());
@@ -1734,87 +1785,6 @@ fn register_hashchange_listener() {
         .add_event_listener_with_callback("hashchange", cb.as_ref().unchecked_ref())
         .expect("failed to add hashchange listener");
     cb.forget(); // Lives for the lifetime of the page.
-}
-
-/// Start polling status + insights for the Health view (~3s interval).
-fn start_health_poll() {
-    stop_poll();
-    let window = web_sys::window().unwrap();
-    let cb = wasm_bindgen::closure::Closure::wrap(Box::new(|| {
-        spawn_local(async {
-            do_health_refresh().await;
-        });
-    }) as Box<dyn Fn()>);
-    let handle = window
-        .set_interval_with_callback_and_timeout_and_arguments_0(
-            cb.as_ref().unchecked_ref(),
-            3000,
-        )
-        .unwrap_or(-1);
-    cb.forget(); // Leak closure — lives for the interval lifetime.
-    POLL_HANDLE.with(|cell| *cell.borrow_mut() = Some(handle));
-}
-
-fn stop_poll() {
-    POLL_HANDLE.with(|cell| {
-        if let Some(handle) = cell.borrow_mut().take() {
-            web_sys::window().unwrap().clear_interval_with_handle(handle);
-        }
-    });
-}
-
-async fn do_health_refresh() {
-    // Stop polling if we've lost auth.
-    if !api::has_token() {
-        stop_poll();
-        return;
-    }
-
-    // Status is pushed via WebSocket — only poll for insights data here.
-    let doc = web_sys::window().unwrap().document().unwrap();
-
-    if let Ok(insights) = api::get_insights().await {
-        let node = views::render_insights_content(&insights);
-        if let Some(el) = doc.get_element_by_id("mm-insights-section") {
-            el.set_inner_html(&node.to_html());
-        }
-    }
-}
-
-/// Start polling status + external matches data (~3s interval).
-fn start_external_matches_poll() {
-    stop_poll();
-    let window = web_sys::window().unwrap();
-    let cb = wasm_bindgen::closure::Closure::wrap(Box::new(|| {
-        spawn_local(async {
-            do_external_matches_refresh().await;
-        });
-    }) as Box<dyn Fn()>);
-    let handle = window
-        .set_interval_with_callback_and_timeout_and_arguments_0(
-            cb.as_ref().unchecked_ref(),
-            3000,
-        )
-        .unwrap_or(-1);
-    cb.forget();
-    POLL_HANDLE.with(|cell| *cell.borrow_mut() = Some(handle));
-}
-
-async fn do_external_matches_refresh() {
-    if !api::has_token() {
-        stop_poll();
-        return;
-    }
-
-    // Fetch progress is pushed via WebSocket — only poll for external matches data here.
-    let doc = web_sys::window().unwrap().document().unwrap();
-
-    if let Ok(data) = api::get_external_matches().await {
-        let node = views::render_external_matches_data(&data);
-        if let Some(el) = doc.get_element_by_id("mm-external-data") {
-            el.set_inner_html(&node.to_html());
-        }
-    }
 }
 
 /// Queue a background task (e.g. "SchemaReconciliation") and refresh the view.

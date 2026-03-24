@@ -495,14 +495,10 @@ pub fn execute_drop_directory_from_index(
         dir_str
     ));
 
-    // Drop each file from the index
+    // Drop each file from the index (zone-scoped delete + audio_info + tags + signals)
     for audio_file in &audio_files {
-        let file_path = audio_file.path();
         let inode = audio_file.entry.inode;
-        sender.drop_from_index(file_path, witness);
-        sender.drop_file_index_by_inode("corpus", inode, witness);
-        // Clear all corpus signals for this inode (MissingFile, CorruptFile, etc.)
-        sender.clear_all_corpus_signals(inode, witness);
+        sender.drop_from_index(inode, "corpus", witness);
     }
 
     // Drop the directory entry itself from files table and clear its signals
@@ -518,11 +514,12 @@ pub fn execute_drop_directory_from_index(
 
 /// Execute DropFromIndex mutation - remove track from index.
 ///
-/// Routes writes through signal_sender. Path is passed directly from mutation.
-/// For orphaned signals (inode=None), just clears audio_info/tags - no files table entry to drop.
+/// Routes writes through signal_sender. Inode + zone are used for zone-scoped deletion.
+/// For orphaned signals (inode=None), nothing to drop — the files/audio_info entries
+/// don't exist without an inode to key on.
 pub fn execute_drop_from_index(
     _db: &ReadOnlyDb<'_>,
-    path: &Path,
+    _path: &Path,
     inode: Option<i64>,
     zone: Option<&str>,
     witness: &MutationExecutionWitness,
@@ -531,15 +528,9 @@ pub fn execute_drop_from_index(
 
     let sender = write_thread::require_sender()?;
 
-    // Convert path to string for DB operations
-    let path_str = path.to_string_lossy();
-
-    // Delete audio_info and corpus_tags entries via signal_sender
-    sender.drop_from_index(&path_str, witness);
-
-    // Also delete files table entry if inode and zone are provided
+    // Delete files entry (zone-scoped), audio_info, tags, tag history, and signals
     if let (Some(inode), Some(zone)) = (inode, zone) {
-        sender.drop_file_index_by_inode(zone, inode, witness);
+        sender.drop_from_index(inode, zone, witness);
     }
 
     Ok(())
@@ -762,16 +753,10 @@ pub fn execute_apply_db_tags_to_disk(
     zone: Zone,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
-    use crate::corpus::paths;
     use crate::corpus::tags::{write_file_tags, TagSet};
     use crate::db::write_thread;
 
     let sender = write_thread::require_sender()?;
-
-    // Convert abs_path to zone-relative for DB operations.
-    // Use mutation's abs_path parameter, not file's path from DB (may be stale).
-    let relative_path = paths::resolve_zone_relative(abs_path, zone)?;
-    let rel_path_str = relative_path.to_string_lossy();
 
     // Get DB tags from the zone-appropriate table and convert to TagSet
     let db_tags = db.get_tags_for_zone(inode, zone)?;
@@ -783,7 +768,7 @@ pub fn execute_apply_db_tags_to_disk(
         .with_context(|| format!("Failed to write tags to {}", abs_path.display()))?;
 
     // Clear needs_disk_flush flag
-    sender.set_needs_disk_flush(&rel_path_str, false, witness);
+    sender.set_needs_disk_flush(inode, false, witness);
 
     Ok(())
 }
@@ -807,7 +792,6 @@ pub fn execute_flush_tags_to_disk(
     read_db: &crate::db::queries::ReadOnlyDb<'_>,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
-    use crate::corpus::paths;
     use crate::corpus::tags::write_file_tags;
     use crate::db::write_thread;
 
@@ -815,9 +799,6 @@ pub fn execute_flush_tags_to_disk(
     write_thread::wait_for_queue_drain();
 
     let sender = write_thread::require_sender()?;
-
-    let relative_path = paths::resolve_zone_relative(abs_path, zone)?;
-    let rel_path_str = relative_path.to_string_lossy();
 
     // 2. Read committed tags from zone-appropriate table
     let db_tags = read_db.get_tags_for_zone(inode, zone)?;
@@ -839,7 +820,7 @@ pub fn execute_flush_tags_to_disk(
         .with_context(|| format!("Failed to flush tags to {}", abs_path.display()))?;
 
     // Clear needs_disk_flush flag only on success
-    sender.set_needs_disk_flush(&rel_path_str, false, witness);
+    sender.set_needs_disk_flush(inode, false, witness);
 
     Ok(())
 }
@@ -897,8 +878,9 @@ pub fn execute_assimilate_disk_tags_to_db(
         .ok_or_else(|| anyhow::anyhow!("Zone {:?} has no tag table", zone_enum))?;
 
     // Update DB with disk tags via db_thread
-    // Use rel_path_str (from mutation param), not track.path (potentially stale)
-    sender.set_index_track_tags(&rel_path_str, disk_tagset, tag_table, session_id, witness);
+    // Use inode directly (from mutation param) to avoid ambiguous path->inode resolution.
+    // Use rel_path_str (from mutation param), not track.path (potentially stale).
+    sender.set_index_track_tags(inode, &rel_path_str, disk_tagset, tag_table, session_id, witness);
 
     // Read disk metadata using portable API
     let file_metadata = std::fs::metadata(abs_path)
@@ -911,9 +893,6 @@ pub fn execute_assimilate_disk_tags_to_db(
 
     // Update file mtime via db_thread using (zone, inode) key
     sender.update_file_mtime(zone, current_inode, mtime_secs, mtime_nanos, witness);
-
-    // Clear tag_mismatches for this track via db_thread
-    sender.clear_tag_mismatches_for_track(&rel_path_str, witness);
 
     // Clear OOB signals via db_thread
     // NOTE: New signals are keyed by inode. Clear both inode-keyed (new) and path-keyed (legacy) signals.

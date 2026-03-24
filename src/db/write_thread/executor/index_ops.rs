@@ -1,6 +1,6 @@
 //! Index operations: audio file indexing, tag manipulation, file entry management.
 
-use rusqlite::{params, OptionalExtension};
+use rusqlite::params;
 
 use crate::corpus::tags::TagSet;
 use crate::db::Database;
@@ -158,18 +158,6 @@ fn apply_tagset_to_inode(
     Ok(TagMutationResult { removed, added })
 }
 
-/// Get inode by path from files table. Returns None if file doesn't exist.
-fn get_inode_by_path(db: &Database, path: &str) -> anyhow::Result<Option<i64>> {
-    db.conn()
-        .query_row(
-            "SELECT inode FROM files WHERE path = ?1",
-            params![path],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|e: rusqlite::Error| anyhow::anyhow!(e))
-}
-
 // ============================================================================
 // Index Operation Functions
 // ============================================================================
@@ -269,14 +257,9 @@ pub(super) fn execute_index_audio_file(
 }
 
 /// Execute DropFromIndex: delete file entry and cascades.
-/// audio_info and tags cascade via foreign keys.
-pub(super) fn execute_drop_from_index(db: &Database, path: &str) -> anyhow::Result<()> {
-
-    // Get inode first
-    let inode = match get_inode_by_path(db, path)? {
-        Some(id) => id,
-        None => return Ok(()), // File doesn't exist, nothing to do
-    };
+/// Zone-scoped: only deletes the file entry matching both inode AND zone,
+/// preventing cross-zone collateral damage.
+pub(super) fn execute_drop_from_index(db: &Database, inode: i64, zone: &str) -> anyhow::Result<()> {
 
     // Delete tag_edit_history first (plain FK without CASCADE)
     db.conn().execute(
@@ -284,11 +267,13 @@ pub(super) fn execute_drop_from_index(db: &Database, path: &str) -> anyhow::Resu
         params![inode],
     )?;
 
-    // Delete the file entry (audio_info, corpus_tags cascade automatically)
-    db.conn()
-        .execute("DELETE FROM files WHERE path = ?1", params![path])?;
+    // Delete the file entry scoped to zone (audio_info, corpus_tags cascade automatically)
+    db.conn().execute(
+        "DELETE FROM files WHERE inode = ?1 AND zone = ?2",
+        params![inode, zone],
+    )?;
 
-    // If no other paths reference this inode, clean up audio_info
+    // If no other file entries reference this inode, clean up audio_info
     // (FK CASCADE should handle this, but be explicit)
     let count: i64 = db.conn().query_row(
         "SELECT COUNT(*) FROM files WHERE inode = ?1",
@@ -312,16 +297,15 @@ pub(super) fn execute_drop_from_index(db: &Database, path: &str) -> anyhow::Resu
 /// Writes tag edit history for all changes (this IS an edit, not discovery).
 ///
 /// Used by AssimilateDiskTagsToDb when accepting disk changes.
+/// The inode is passed directly from the mutation (which resolved it via
+/// zone-aware lookup), avoiding ambiguous path->inode resolution.
 pub(super) fn execute_set_index_track_tags(
     db: &Database,
-    path: &str,
+    inode: i64,
     tags: &TagSet,
     tag_table: &str,
     session_id: &str,
 ) -> anyhow::Result<()> {
-    let inode =
-        get_inode_by_path(db, path)?.ok_or_else(|| anyhow::anyhow!("File not found: {}", path))?;
-
     let tx = db.conn().unchecked_transaction()?;
 
     // Apply tags using the unified helper
@@ -348,16 +332,15 @@ pub(super) fn execute_set_index_track_tags(
 /// - replace (old=Some, new=Some) → UPDATE with exact match
 ///
 /// All operations run in a single transaction for atomicity.
+/// The inode is passed directly from the mutation (which resolved it via
+/// zone-aware lookup), avoiding ambiguous path→inode resolution.
 pub(super) fn execute_apply_index_tag_ops(
     db: &Database,
-    path: &str,
+    inode: i64,
     ops: &[crate::meta::mutations::TagOp],
     tag_table: &str,
     session_id: &str,
 ) -> anyhow::Result<()> {
-
-    let inode =
-        get_inode_by_path(db, path)?.ok_or_else(|| anyhow::anyhow!("File not found: {}", path))?;
 
     // Filter to non-nop operations
     let effective_ops: Vec<_> = ops.iter().filter(|op| !op.is_nop()).collect();
@@ -422,33 +405,33 @@ pub(super) fn execute_apply_index_tag_ops(
 /// Execute UpdateTrackPathWithMetadata: update path and file metadata for transcoded file.
 /// Updates files table path/inode/file_size, and audio_info file_type.
 ///
+/// Uses old_inode+zone for precise lookup instead of path-based resolution,
+/// avoiding ambiguity when corpus and library share relative paths.
+///
 /// All operations wrapped in a single transaction for atomicity.
 pub(super) fn execute_update_track_path_with_metadata(
     db: &Database,
-    old_path: &str,
+    old_inode: i64,
+    zone: &str,
     new_path: &str,
     new_inode: i64,
     new_file_size: i64,
     new_file_type: &str,
 ) -> anyhow::Result<()> {
 
-    // Get old inode
-    let old_inode = get_inode_by_path(db, old_path)?
-        .ok_or_else(|| anyhow::anyhow!("File not found at old path: {}", old_path))?;
-
     let scanned_at = current_unix_secs();
 
     // Wrap all operations in a single transaction
     let tx = db.conn().unchecked_transaction()?;
 
-    // Update files table
+    // Update files table using inode+zone for precise targeting
     let rows_updated = tx.execute(
-        "UPDATE files SET path = ?1, inode = ?2, file_size = ?3, scanned_at = ?4 WHERE path = ?5",
-        params![new_path, new_inode, new_file_size, scanned_at, old_path],
+        "UPDATE files SET path = ?1, inode = ?2, file_size = ?3, scanned_at = ?4 WHERE inode = ?5 AND zone = ?6",
+        params![new_path, new_inode, new_file_size, scanned_at, old_inode, zone],
     )?;
 
     if rows_updated == 0 {
-        anyhow::bail!("File not found at old path: {}", old_path);
+        anyhow::bail!("No file found for inode={} zone={}", old_inode, zone);
     }
 
     // Get old audio_info to copy to new inode
@@ -614,20 +597,8 @@ pub(super) fn execute_upsert_image_info(
 }
 
 /// Execute SetNeedsDiskFlush: update the needs_tag_flush flag on audio_info.
-pub(super) fn execute_set_needs_disk_flush(db: &Database, path: &str, value: bool) -> anyhow::Result<()> {
-
-    // Get inode from path
-    let inode = match get_inode_by_path(db, path)? {
-        Some(id) => id,
-        None => {
-            crate::logging::log_error(format!(
-                "[DB_THREAD] set_needs_disk_flush: no file found for path={}",
-                path
-            ));
-            return Ok(());
-        }
-    };
-
+/// The inode is passed directly from the mutation to avoid ambiguous path→inode resolution.
+pub(super) fn execute_set_needs_disk_flush(db: &Database, inode: i64, value: bool) -> anyhow::Result<()> {
     let rows_updated = db.conn().execute(
         "UPDATE audio_info SET needs_tag_flush = ?1 WHERE inode = ?2",
         params![value as i32, inode],
@@ -640,11 +611,5 @@ pub(super) fn execute_set_needs_disk_flush(db: &Database, path: &str, value: boo
         ));
     }
 
-    Ok(())
-}
-
-/// No-op: tag_mismatches table was dropped. Tag conflicts are now handled
-/// via OOB signals (OutOfBandTagSyncSignal, OutOfBandTagConflictSignal, MtimeOnlyMismatchSignal).
-pub(super) fn execute_clear_tag_mismatches_for_track(_db: &Database, _path: &str) -> anyhow::Result<()> {
     Ok(())
 }

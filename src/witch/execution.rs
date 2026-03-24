@@ -381,20 +381,16 @@ fn apply_post_execution(
     // Phase 1b: Drop files table entry for stash mutations
     // When stashing a file, we must also remove it from the files table (not just signals).
     // Otherwise DeriveCorpusSignals will emit MissingFile for the stashed path.
-    let stash_path: Option<&std::path::Path> = match mutation {
-        Mutation::StashFromZone(ref m) => Some(&m.path),
-        Mutation::StashLeftovers(ref m) => Some(&m.path),
+    // Zone is determined by mutation type: StashFromZone = corpus, StashLeftovers = library.
+    let stash_zone: Option<&str> = match mutation {
+        Mutation::StashFromZone(_) => Some("corpus"),
+        Mutation::StashLeftovers(_) => Some("library"),
         _ => None,
     };
-    if let Some(path) = stash_path {
+    if let Some(zone) = stash_zone {
         if let Some(sender) = write_thread::signal_sender() {
-            let rel_path = if path.is_absolute() {
-                resolver.to_relative(path)
-            } else {
-                Some(path.to_path_buf())
-            };
-            if let Some(rel) = rel_path {
-                sender.drop_from_index(&rel.to_string_lossy(), witness);
+            for &inode in discovered_inodes {
+                sender.drop_from_index(inode, zone, witness);
             }
         }
     }

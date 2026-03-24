@@ -265,11 +265,12 @@ impl SignalWriteSender {
         });
     }
 
-    /// Drop a file from the index by path.
-    pub fn drop_from_index(&self, path: &str, _witness: &MutationExecutionWitness) {
+    /// Drop a file from the index by inode, scoped to zone.
+    pub fn drop_from_index(&self, inode: i64, zone: &str, _witness: &MutationExecutionWitness) {
         self.mark_enqueued();
         let _ = self.tx.send(DbWriteOp::DropFromIndex {
-            path: path.to_string(),
+            inode,
+            zone: zone.to_string(),
         });
     }
 
@@ -277,8 +278,12 @@ impl SignalWriteSender {
     ///
     /// Used by AssimilateDiskTagsToDb when accepting disk changes.
     /// For incremental tag edits (ApplyTagOps), use `apply_index_tag_ops` instead.
+    ///
+    /// The inode is passed directly to avoid ambiguous path->inode resolution
+    /// (corpus and library can share relative paths with different inodes).
     pub fn set_index_track_tags(
         &self,
+        inode: i64,
         path: &str,
         tags: crate::corpus::tags::TagSet,
         tag_table: &str,
@@ -287,6 +292,7 @@ impl SignalWriteSender {
     ) {
         self.mark_enqueued();
         let _ = self.tx.send(DbWriteOp::SetIndexTrackTags {
+            inode,
             path: path.to_string(),
             tags,
             tag_table: tag_table.to_string(),
@@ -301,8 +307,12 @@ impl SignalWriteSender {
     /// - add → INSERT OR IGNORE
     /// - drop → DELETE
     /// - replace → DELETE + INSERT
+    ///
+    /// The inode is passed directly to avoid ambiguous path→inode resolution
+    /// (corpus and library can share relative paths with different inodes).
     pub fn apply_index_tag_ops(
         &self,
+        inode: i64,
         path: &str,
         ops: Vec<crate::meta::mutations::TagOp>,
         tag_table: &str,
@@ -311,6 +321,7 @@ impl SignalWriteSender {
     ) {
         self.mark_enqueued();
         let _ = self.tx.send(DbWriteOp::ApplyIndexTagOps {
+            inode,
             path: path.to_string(),
             ops,
             tag_table: tag_table.to_string(),
@@ -320,9 +331,12 @@ impl SignalWriteSender {
 
     /// Update track path and file metadata atomically.
     /// Used when a file is transcoded/converted to a new format.
+    /// old_inode+zone provide precise lookup; old_path is retained for logging.
     pub fn update_track_path_with_metadata(
         &self,
         old_path: &str,
+        old_inode: i64,
+        zone: &str,
         new_path: &str,
         new_inode: i64,
         new_file_size: i64,
@@ -332,6 +346,8 @@ impl SignalWriteSender {
         self.mark_enqueued();
         let _ = self.tx.send(DbWriteOp::UpdateTrackPathWithMetadata {
             old_path: old_path.to_string(),
+            old_inode,
+            zone: zone.to_string(),
             new_path: new_path.to_string(),
             new_inode,
             new_file_size,
@@ -455,14 +471,6 @@ impl SignalWriteSender {
         });
     }
 
-    /// No-op vestige: tag_mismatches table was dropped. OOB signals handle conflicts now.
-    pub fn clear_tag_mismatches_for_track(&self, path: &str, _witness: &MutationExecutionWitness) {
-        self.mark_enqueued();
-        let _ = self.tx.send(DbWriteOp::ClearTagMismatchesForTrack {
-            path: path.to_string(),
-        });
-    }
-
     /// Set the needs_disk_flush flag for a track.
     ///
     /// Used by the DB-first tag editing pattern:
@@ -471,13 +479,13 @@ impl SignalWriteSender {
     /// - Tracks with TRUE can be recovered via OOB modal
     pub fn set_needs_disk_flush(
         &self,
-        path: &str,
+        inode: i64,
         value: bool,
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
         let _ = self.tx.send(DbWriteOp::SetNeedsDiskFlush {
-            path: path.to_string(),
+            inode,
             value,
         });
     }

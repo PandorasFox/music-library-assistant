@@ -202,8 +202,8 @@ fn execute_apply_tag_ops(
 
         // Send ops directly to DB - TagOps map to INSERT/UPDATE/DELETE
         let tag_table = zone.tag_table().expect("zone must have tag table");
-        sender.apply_index_tag_ops(file_path, validated_ops, tag_table, session_id, witness);
-        sender.set_needs_disk_flush(file_path, true, witness);
+        sender.apply_index_tag_ops(inode, file_path, validated_ops, tag_table, session_id, witness);
+        sender.set_needs_disk_flush(inode, true, witness);
 
         // Spawn disk flush — carries expected_tags for post-drain validation
         let resolver = paths::get_resolver();

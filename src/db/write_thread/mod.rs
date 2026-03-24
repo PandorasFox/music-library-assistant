@@ -237,13 +237,16 @@ enum DbWriteOp {
 
     /// Drop file from index (file no longer exists or excluded).
     /// Cascades to audio_info, corpus_tags, tag_edit_history.
+    /// Zone-scoped DELETE avoids cross-zone collateral damage.
     DropFromIndex {
-        path: String,
+        inode: i64,
+        zone: String,
     },
 
     /// Set all tags for a track (replaces existing).
     /// Used by AssimilateDiskTagsToDb when accepting disk changes.
     SetIndexTrackTags {
+        inode: i64,
         path: String,
         tags: TagSet,
         tag_table: String,
@@ -253,6 +256,7 @@ enum DbWriteOp {
     /// Apply incremental tag operations directly.
     /// Used by ApplyTagOps for precise INSERT/DELETE operations.
     ApplyIndexTagOps {
+        inode: i64,
         path: String,
         ops: Vec<crate::meta::mutations::TagOp>,
         tag_table: String,
@@ -260,9 +264,12 @@ enum DbWriteOp {
     },
 
     /// Update track path and file metadata (for transcode/format conversion).
-    /// Looks up track by old_path, updates to new_path with new file metadata.
+    /// Uses old_inode+zone for precise lookup, updates to new_path with new file metadata.
+    /// old_path is retained for logging context in with_retry.
     UpdateTrackPathWithMetadata {
         old_path: String,
+        old_inode: i64,
+        zone: String,
         new_path: String,
         new_inode: i64,
         new_file_size: i64,
@@ -324,16 +331,11 @@ enum DbWriteOp {
         role: String,
     },
 
-    /// No-op vestige: tag_mismatches table was dropped. OOB signals handle conflicts now.
-    ClearTagMismatchesForTrack {
-        path: String,
-    },
-
     /// Set the needs_disk_flush flag for a track.
     /// Used by DB-first tag editing pattern: set TRUE after ApplyTagOps,
     /// set FALSE after ApplyDbTagsToDisk completes successfully.
     SetNeedsDiskFlush {
-        path: String,
+        inode: i64,
         value: bool,
     },
 

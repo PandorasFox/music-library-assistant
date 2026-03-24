@@ -211,9 +211,11 @@ fn execute_transcode_impl(
     let zone_str = existing_file.entry.zone.as_str();
 
     // Update audio_info record: path, inode, file_size, file_type
-    // Use old path for lookup, update to new path
+    // Uses old_inode+zone for precise lookup instead of path-based resolution
     sender.update_track_path_with_metadata(
-        old_path,           // Old path (already relative in DB)
+        old_path,           // For logging context
+        old_inode,          // Precise inode-based lookup
+        zone_str,           // Zone-scoped targeting
         &relative_path_str, // New path
         new_inode,
         new_file_size,

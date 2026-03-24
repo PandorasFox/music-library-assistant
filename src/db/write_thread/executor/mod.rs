@@ -323,36 +323,40 @@ pub(super) fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             });
         }
 
-        DbWriteOp::DropFromIndex { path } => {
-            with_retry("drop_from_index", path, || {
-                index_ops::execute_drop_from_index(db, path)
+        DbWriteOp::DropFromIndex { inode, zone } => {
+            with_retry("drop_from_index", zone, || {
+                index_ops::execute_drop_from_index(db, *inode, zone)
             });
         }
 
         DbWriteOp::SetIndexTrackTags {
+            inode,
             path,
             tags,
             tag_table,
             session_id,
         } => {
             with_retry("set_index_track_tags", path, || {
-                index_ops::execute_set_index_track_tags(db, path, tags, tag_table, session_id)
+                index_ops::execute_set_index_track_tags(db, *inode, tags, tag_table, session_id)
             });
         }
 
         DbWriteOp::ApplyIndexTagOps {
+            inode,
             path,
             ops,
             tag_table,
             session_id,
         } => {
             with_retry("apply_index_tag_ops", path, || {
-                index_ops::execute_apply_index_tag_ops(db, path, ops, tag_table, session_id)
+                index_ops::execute_apply_index_tag_ops(db, *inode, ops, tag_table, session_id)
             });
         }
 
         DbWriteOp::UpdateTrackPathWithMetadata {
             old_path,
+            old_inode,
+            zone,
             new_path,
             new_inode,
             new_file_size,
@@ -361,7 +365,8 @@ pub(super) fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             with_retry("update_track_path_with_metadata", old_path, || {
                 index_ops::execute_update_track_path_with_metadata(
                     db,
-                    old_path,
+                    *old_inode,
+                    zone,
                     new_path,
                     *new_inode,
                     *new_file_size,
@@ -451,15 +456,9 @@ pub(super) fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             });
         }
 
-        DbWriteOp::ClearTagMismatchesForTrack { path } => {
-            with_retry("clear_tag_mismatches_for_track", path, || {
-                index_ops::execute_clear_tag_mismatches_for_track(db, path)
-            });
-        }
-
-        DbWriteOp::SetNeedsDiskFlush { path, value } => {
-            with_retry("set_needs_disk_flush", path, || {
-                index_ops::execute_set_needs_disk_flush(db, path, *value)
+        DbWriteOp::SetNeedsDiskFlush { inode, value } => {
+            with_retry("set_needs_disk_flush", &inode.to_string(), || {
+                index_ops::execute_set_needs_disk_flush(db, *inode, *value)
             });
         }
 

@@ -57,8 +57,7 @@ async fn handle_ws(mut socket: WebSocket, state: AppState) {
                 // Client fell behind — stale snapshots skipped, next recv is fresh
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                let _ = socket.close().await;
-                return;
+                return; // Witch shut down — drop socket
             }
         }
     }

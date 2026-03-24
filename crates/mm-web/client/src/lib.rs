@@ -261,12 +261,6 @@ fn start_event_stream() {
             el.set_inner_html(&node.to_html());
         }
 
-        // Update fetch progress if visible (ExternalMatches view).
-        if let Some(el) = doc.get_element_by_id("mm-fetch-progress") {
-            let node = views::render_fetch_progress_section(&status);
-            el.set_inner_html(&node.to_html());
-        }
-
         // On generation counter change, refresh view-specific data that isn't in WitchStatus.
         if data_changed {
             spawn_local(async {

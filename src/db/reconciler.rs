@@ -148,9 +148,9 @@ impl ReconciliationPlan {
         // A version mismatch means the bincode struct layout changed —
         // old blobs are undeserializable, so the table needs recreation.
         let stored_blob_versions = get_stored_blob_versions(conn);
-        let recreated_tables: HashSet<&str> = plan.recreated_signals
+        let recreated_tables: HashSet<String> = plan.recreated_signals
             .iter()
-            .map(|s| s.table.as_str())
+            .map(|s| s.table.clone())
             .collect();
 
         for (table_name, compiled_version) in crate::meta::signals::registry::signal_blob_versions() {

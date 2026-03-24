@@ -752,4 +752,267 @@ impl Config {
             .map(|sd| sd.path.display().to_string())
             .collect()
     }
+
+    // =========================================================================
+    // Path root nesting validation
+    // =========================================================================
+
+    /// Collect all unique library names from source directories.
+    pub fn configured_library_names(&self) -> Vec<String> {
+        let mut names = std::collections::HashSet::new();
+        for sd in &self.source_dirs {
+            for lib in &sd.libraries {
+                names.insert(lib.clone());
+            }
+        }
+        names.into_iter().collect()
+    }
+
+    /// Validate that path roots don't create ambiguous nesting.
+    ///
+    /// Hard rules:
+    /// - Libraries must not be inside storage (or equal) — would create path ambiguity
+    /// - Stash must not be inside storage (or equal) — same ambiguity class
+    /// - No two roots may be equal
+    ///
+    /// Allowed nesting:
+    /// - Storage inside libraries — real-world layout, with library name collision check
+    /// - Stash inside libraries — acceptable, stash paths never collide with library deployments
+    /// - All roots fully disjoint
+    ///
+    /// When storage is inside libraries, the first path component from libraries_root
+    /// to storage_root must not match any configured library name, since libraries
+    /// deploy to `libraries_root/{name}/...`.
+    pub fn validate_path_nesting(&self) -> Result<(), String> {
+        let storage = &self.storage_root;
+        let libraries = self.libraries_dir();
+        let stash = self.stash_dir();
+
+        // REJECT: any two roots equal
+        if storage == &libraries {
+            return Err("storage-root and libraries-root must not be the same directory".into());
+        }
+        if storage == &stash {
+            return Err("storage-root and stash-root must not be the same directory".into());
+        }
+        if libraries == stash {
+            return Err("libraries-root and stash-root must not be the same directory".into());
+        }
+
+        // REJECT: libraries inside storage
+        if libraries.starts_with(storage) {
+            return Err(format!(
+                "libraries-root ({}) must not be inside storage-root ({}). \
+                 Set an explicit libraries-root outside the corpus directory.",
+                libraries.display(), storage.display()
+            ));
+        }
+
+        // REJECT: stash inside storage
+        if stash.starts_with(storage) {
+            return Err(format!(
+                "stash-root ({}) must not be inside storage-root ({}). \
+                 Set an explicit stash-root outside the corpus directory.",
+                stash.display(), storage.display()
+            ));
+        }
+
+        // REJECT: storage inside stash
+        if storage.starts_with(&stash) {
+            return Err(format!(
+                "storage-root ({}) must not be inside stash-root ({}).",
+                storage.display(), stash.display()
+            ));
+        }
+
+        // REJECT: libraries inside stash
+        if libraries.starts_with(&stash) {
+            return Err(format!(
+                "libraries-root ({}) must not be inside stash-root ({}).",
+                libraries.display(), stash.display()
+            ));
+        }
+
+        // ALLOW: storage inside libraries (with collision check)
+        if storage.starts_with(&libraries) {
+            let relative = storage.strip_prefix(&libraries).unwrap();
+            if let Some(first_component) = relative.components().next() {
+                let first_segment = first_component.as_os_str().to_string_lossy();
+                for lib_name in self.configured_library_names() {
+                    if lib_name == first_segment.as_ref() {
+                        return Err(format!(
+                            "Library name '{}' collides with the path from libraries-root ({}) \
+                             to storage-root ({}). The directory '{}/{}' would overlap with \
+                             library deployments.",
+                            lib_name, libraries.display(), storage.display(),
+                            libraries.display(), lib_name,
+                        ));
+                    }
+                }
+            }
+        }
+
+        // ALLOW: stash inside libraries (with collision check)
+        if stash.starts_with(&libraries) {
+            let relative = stash.strip_prefix(&libraries).unwrap();
+            if let Some(first_component) = relative.components().next() {
+                let first_segment = first_component.as_os_str().to_string_lossy();
+                for lib_name in self.configured_library_names() {
+                    if lib_name == first_segment.as_ref() {
+                        return Err(format!(
+                            "Library name '{}' collides with the path from libraries-root ({}) \
+                             to stash-root ({}). The directory '{}/{}' would overlap with \
+                             library deployments.",
+                            lib_name, libraries.display(), stash.display(),
+                            libraries.display(), lib_name,
+                        ));
+                    }
+                }
+            }
+        }
+
+        // ALLOW: all roots fully disjoint.
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn cfg(storage: &str, libraries: Option<&str>, stash: Option<&str>) -> Config {
+        Config {
+            storage_root: PathBuf::from(storage),
+            libraries_root: libraries.map(PathBuf::from),
+            stash_root: stash.map(PathBuf::from),
+            source_dirs: vec![],
+            opinions: Default::default(),
+        }
+    }
+
+    fn cfg_with_library(storage: &str, libraries: &str, stash: &str, lib_name: &str) -> Config {
+        Config {
+            storage_root: PathBuf::from(storage),
+            libraries_root: Some(PathBuf::from(libraries)),
+            stash_root: Some(PathBuf::from(stash)),
+            source_dirs: vec![SourceDir {
+                path: PathBuf::from(""),
+                libraries: vec![lib_name.to_string()],
+                can_stash_dupes: None,
+                interior_dupes: None,
+                path_schema: None,
+                enable_acoustid: None,
+                pinned_release: None,
+            }],
+            opinions: Default::default(),
+        }
+    }
+
+    #[test]
+    fn nesting_allows_sibling_roots() {
+        let c = cfg("/mnt/audio", Some("/mnt/libraries"), Some("/mnt/stash"));
+        assert!(c.validate_path_nesting().is_ok());
+    }
+
+    #[test]
+    fn nesting_allows_storage_inside_libraries() {
+        let c = cfg(
+            "/mnt/libraries/archive/audio",
+            Some("/mnt/libraries"),
+            Some("/mnt/stash"),
+        );
+        assert!(c.validate_path_nesting().is_ok());
+    }
+
+    #[test]
+    fn nesting_allows_stash_inside_libraries() {
+        let c = cfg(
+            "/mnt/audio",
+            Some("/mnt/libraries"),
+            Some("/mnt/libraries/stash"),
+        );
+        assert!(c.validate_path_nesting().is_ok());
+    }
+
+    #[test]
+    fn nesting_rejects_libraries_inside_storage() {
+        let c = cfg("/mnt/audio", Some("/mnt/audio/libraries"), Some("/mnt/stash"));
+        let err = c.validate_path_nesting().unwrap_err();
+        assert!(err.contains("libraries-root"), "{err}");
+        assert!(err.contains("must not be inside storage-root"), "{err}");
+    }
+
+    #[test]
+    fn nesting_rejects_stash_inside_storage() {
+        let c = cfg("/mnt/audio", Some("/mnt/libraries"), Some("/mnt/audio/stash"));
+        let err = c.validate_path_nesting().unwrap_err();
+        assert!(err.contains("stash-root"), "{err}");
+        assert!(err.contains("must not be inside storage-root"), "{err}");
+    }
+
+    #[test]
+    fn nesting_rejects_equal_storage_and_libraries() {
+        let c = cfg("/mnt/data", Some("/mnt/data"), Some("/mnt/stash"));
+        let err = c.validate_path_nesting().unwrap_err();
+        assert!(err.contains("must not be the same"), "{err}");
+    }
+
+    #[test]
+    fn nesting_rejects_storage_inside_stash() {
+        let c = cfg("/mnt/stash/audio", Some("/mnt/libraries"), Some("/mnt/stash"));
+        let err = c.validate_path_nesting().unwrap_err();
+        assert!(err.contains("storage-root"), "{err}");
+        assert!(err.contains("must not be inside stash-root"), "{err}");
+    }
+
+    #[test]
+    fn nesting_rejects_libraries_inside_stash() {
+        let c = cfg("/mnt/audio", Some("/mnt/stash/libraries"), Some("/mnt/stash"));
+        let err = c.validate_path_nesting().unwrap_err();
+        assert!(err.contains("libraries-root"), "{err}");
+        assert!(err.contains("must not be inside stash-root"), "{err}");
+    }
+
+    #[test]
+    fn nesting_rejects_library_name_collision_with_storage_path() {
+        // storage at /mnt/libraries/archive/audio, library named "archive"
+        // => libraries_root/archive/ would overlap with the corpus path
+        let c = cfg_with_library(
+            "/mnt/libraries/archive/audio",
+            "/mnt/libraries",
+            "/mnt/stash",
+            "archive",
+        );
+        let err = c.validate_path_nesting().unwrap_err();
+        assert!(err.contains("collides"), "{err}");
+        assert!(err.contains("archive"), "{err}");
+    }
+
+    #[test]
+    fn nesting_allows_non_colliding_library_name() {
+        // storage at /mnt/libraries/archive/audio, library named "music" (not "archive")
+        let c = cfg_with_library(
+            "/mnt/libraries/archive/audio",
+            "/mnt/libraries",
+            "/mnt/stash",
+            "music",
+        );
+        assert!(c.validate_path_nesting().is_ok());
+    }
+
+    #[test]
+    fn nesting_rejects_library_name_collision_with_stash_path() {
+        // stash at /mnt/libraries/stash, library named "stash"
+        let c = cfg_with_library(
+            "/mnt/audio",
+            "/mnt/libraries",
+            "/mnt/libraries/stash",
+            "stash",
+        );
+        let err = c.validate_path_nesting().unwrap_err();
+        assert!(err.contains("collides"), "{err}");
+        assert!(err.contains("stash"), "{err}");
+    }
 }

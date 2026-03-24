@@ -845,6 +845,10 @@ impl Witch {
         std::fs::create_dir_all(cfg.stash_dir())
             .map_err(|e| format!("Failed to create stash dir: {}", e))?;
 
+        // Validate path root nesting invariants (no I/O needed)
+        cfg.validate_path_nesting()
+            .map_err(|e| format!("Path nesting validation failed: {}", e))?;
+
         // Validate all roots are on the same filesystem (hard links require it)
         crate::corpus::paths::validate_same_filesystem(&cfg)
             .map_err(|e| format!("Filesystem validation failed: {}", e))?;

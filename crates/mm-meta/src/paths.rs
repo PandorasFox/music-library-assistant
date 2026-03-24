@@ -40,20 +40,6 @@ impl PathResolver {
         }
     }
 
-    /// Create from an archive root path (single-root legacy layout).
-    pub fn from_root(root: PathBuf) -> Self {
-        let libraries_root = root.join("libraries");
-        let stash_root = root.join("stash");
-        // In legacy layout, corpus was root/corpus. In multi-root, storage_root IS corpus.
-        // But from_root is used by old callers expecting root/corpus layout. Keep for compat
-        // during transition — new code uses from_config().
-        Self {
-            storage_root: root.join("corpus"),
-            libraries_root,
-            stash_root,
-        }
-    }
-
     /// Create a new PathResolver from a Config.
     pub fn from_config(config: &crate::config::Config) -> Self {
         Self::new(
@@ -68,20 +54,22 @@ impl PathResolver {
     /// Returns e.g. `corpus/Artist/Album/track.flac`. Used for routing — do NOT
     /// store the result in the DB. Use `to_zone_relative()` for DB paths.
     ///
-    /// Tries each root in order: stash, libraries, storage (longest-prefix first
-    /// to handle nested case where libraries_root is under storage_root).
+    /// Check order: storage → stash → libraries. Storage may be inside libraries
+    /// (the real-world layout), so it's the most specific prefix and must be
+    /// checked first. The path nesting invariant (`Config::validate_path_nesting`)
+    /// guarantees this is the only allowed nesting direction.
     pub fn to_relative(&self, abs: &Path) -> Option<PathBuf> {
-        // Check stash first (may be under storage_root)
+        // Storage first — may be inside libraries_root, so most specific.
+        if let Ok(rel) = abs.strip_prefix(&self.storage_root) {
+            return Some(Path::new("corpus").join(rel));
+        }
+        // Stash next — may be inside libraries_root, more specific than libraries.
         if let Ok(rel) = abs.strip_prefix(&self.stash_root) {
             return Some(Path::new("stash").join(rel));
         }
-        // Then libraries (may be under storage_root)
+        // Libraries last — may be parent of storage/stash, so least specific.
         if let Ok(rel) = abs.strip_prefix(&self.libraries_root) {
             return Some(Path::new("libraries").join(rel));
-        }
-        // Then corpus (storage_root)
-        if let Ok(rel) = abs.strip_prefix(&self.storage_root) {
-            return Some(Path::new("corpus").join(rel));
         }
         None
     }
@@ -184,8 +172,8 @@ mod tests {
     fn test_config() -> crate::config::Config {
         crate::config::Config {
             storage_root: PathBuf::from("/archive/audio"),
-            libraries_root: None,
-            stash_root: None,
+            libraries_root: Some(PathBuf::from("/archive/libraries")),
+            stash_root: Some(PathBuf::from("/archive/stash")),
             source_dirs: vec![],
             opinions: Default::default(),
         }
@@ -209,9 +197,13 @@ mod tests {
         let rel = t!(resolver.to_relative(abs));
         assert_eq!(rel, PathBuf::from("corpus/Artist/Album/track.mp3"));
 
-        let abs = Path::new("/archive/audio/libraries/music/track.mp3");
+        let abs = Path::new("/archive/libraries/music/track.mp3");
         let rel = t!(resolver.to_relative(abs));
         assert_eq!(rel, PathBuf::from("libraries/music/track.mp3"));
+
+        let abs = Path::new("/archive/stash/dupes/track.flac");
+        let rel = t!(resolver.to_relative(abs));
+        assert_eq!(rel, PathBuf::from("stash/dupes/track.flac"));
     }
 
     #[test]
@@ -249,7 +241,11 @@ mod tests {
 
         let rel = Path::new("libraries/music/track.opus");
         let abs = resolver.resolve(rel);
-        assert_eq!(abs, PathBuf::from("/archive/audio/libraries/music/track.opus"));
+        assert_eq!(abs, PathBuf::from("/archive/libraries/music/track.opus"));
+
+        let rel = Path::new("stash/dupes/track.flac");
+        let abs = resolver.resolve(rel);
+        assert_eq!(abs, PathBuf::from("/archive/stash/dupes/track.flac"));
     }
 
     #[test]
@@ -289,7 +285,7 @@ mod tests {
         let rel = t!(resolver.to_zone_relative(abs, Zone::Corpus));
         assert_eq!(rel, PathBuf::from("Artist/Album/track.flac"));
 
-        let abs = Path::new("/archive/audio/libraries/music/Artist/track.opus");
+        let abs = Path::new("/archive/libraries/music/Artist/track.opus");
         let rel = t!(resolver.to_zone_relative(abs, Zone::Library));
         assert_eq!(rel, PathBuf::from("music/Artist/track.opus"));
 
@@ -306,7 +302,7 @@ mod tests {
         assert_eq!(abs, PathBuf::from("/archive/audio/Artist/Album/track.flac"));
 
         let abs = resolver.resolve_for_zone(Zone::Library, Path::new("music/Artist/track.opus"));
-        assert_eq!(abs, PathBuf::from("/archive/audio/libraries/music/Artist/track.opus"));
+        assert_eq!(abs, PathBuf::from("/archive/libraries/music/Artist/track.opus"));
     }
 
 }

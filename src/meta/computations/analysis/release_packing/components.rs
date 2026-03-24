@@ -209,10 +209,9 @@ pub(super) fn emit_isolated_proposal_signals(
     // Per-inode ReleasePackingSignal
     let mut count = 0usize;
     for row in &proposal.rows {
-        let path = match corpus_paths.get(&row.inode) {
-            Some(p) => p.clone(),
-            None => continue,
-        };
+        let path = corpus_paths.get(&row.inode)
+            .unwrap_or_else(|| unreachable!("inode {} missing from corpus_paths", row.inode))
+            .clone();
 
         let breakdown: PackingScoreBreakdown =
             bincode::deserialize(&row.score_breakdown).unwrap_or_default();
@@ -894,10 +893,9 @@ pub(crate) fn execute_resolve_packing_component(
 
         // Emit per-inode ReleasePackingSignal
         for row in &proposal.rows {
-            let path = match corpus_paths.get(&row.inode) {
-                Some(p) => p.clone(),
-                None => continue,
-            };
+            let path = corpus_paths.get(&row.inode)
+                .unwrap_or_else(|| unreachable!("inode {} missing from corpus_paths", row.inode))
+                .clone();
 
             let alternatives_count = local_inode_proposals
                 .get(&row.inode)

@@ -65,22 +65,30 @@ pub fn router(state: AppState) -> Router {
         .route("/tx/confirm", post(api::transactions::confirm))
         .route("/tx/discard", post(api::transactions::discard))
         .route("/tx/approve-releases", post(api::transactions::approve_releases))
+        // Build info (unauthenticated — just a timestamp)
+        .route("/build-info", get(serve_build_info))
         // Actions (typed protocol bindings)
         .route("/actions/execute", post(api::actions::execute))
         // Commands
         .route("/commands/queue-task", post(api::commands::queue_task))
         .route("/commands/shutdown", post(api::commands::shutdown))
-        // Static files (CSS, WASM, JS) — cached aggressively, busted by ?v= in index.html
+        // Static files (CSS, JS) — cached aggressively, busted by ?v= in index.html.
+        // WASM files get no-cache because wasm-bindgen's loader doesn't propagate
+        // query params from the JS URL to the .wasm URL.
         .nest_service(
             "/static",
             SetResponseHeader::overriding(
                 ServeDir::new(static_dir),
                 header::CACHE_CONTROL,
-                HeaderValue::from_static("public, max-age=31536000"),
+                HeaderValue::from_static("no-cache"),
             ),
         )
         .layer(cors)
         .with_state(state)
+}
+
+async fn serve_build_info() -> impl IntoResponse {
+    axum::Json(serde_json::json!({ "build": BUILD_TIMESTAMP }))
 }
 
 async fn serve_index(

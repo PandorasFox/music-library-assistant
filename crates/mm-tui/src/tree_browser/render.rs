@@ -71,7 +71,6 @@ fn render_corpus_browser(
     // Extract variant state for rendering
     let BrowserVariant::CorpusBrowser(ref v) = variant;
     let pending_edit_paths = v.pending_edit_paths().clone();
-    let corpus_dir_rel = v.corpus_dir_rel().to_string();
     let wizard_state = v.wizard_state();
     let wizard_offer_snapshot = v.wizard_offer().cloned();
 
@@ -93,7 +92,7 @@ fn render_corpus_browser(
             .split(content_area);
 
         tree_area = h_chunks[0];
-        render_corpus_tree(f, h_chunks[0], browser, variant, &pending_edit_paths, &corpus_dir_rel, click_targets);
+        render_corpus_tree(f, h_chunks[0], browser, variant, &pending_edit_paths, click_targets);
 
         let BrowserVariant::CorpusBrowser(ref v) = variant;
         if let Some(ref panel) = v.dir_config_panel {
@@ -107,7 +106,7 @@ fn render_corpus_browser(
             .split(content_area);
 
         tree_area = h_chunks[0];
-        render_corpus_tree(f, h_chunks[0], browser, variant, &pending_edit_paths, &corpus_dir_rel, click_targets);
+        render_corpus_tree(f, h_chunks[0], browser, variant, &pending_edit_paths, click_targets);
 
         let BrowserVariant::CorpusBrowser(ref mut v) = variant;
         if let Some(ref offer) = wizard_offer_snapshot {
@@ -130,7 +129,7 @@ fn render_corpus_browser(
             .split(content_area);
 
         tree_area = h_chunks[0];
-        render_corpus_tree(f, h_chunks[0], browser, variant, &pending_edit_paths, &corpus_dir_rel, click_targets);
+        render_corpus_tree(f, h_chunks[0], browser, variant, &pending_edit_paths, click_targets);
 
         // Render art preview: resolve relative path to absolute for file loading
         let selected_entry = browser.current_entry();
@@ -145,7 +144,7 @@ fn render_corpus_browser(
             art_cache,
         );
     } else {
-        render_corpus_tree(f, content_area, browser, variant, &pending_edit_paths, &corpus_dir_rel, click_targets);
+        render_corpus_tree(f, content_area, browser, variant, &pending_edit_paths, click_targets);
     }
 
     // Overlay wizard popup when showing
@@ -274,7 +273,6 @@ fn render_corpus_tree(
     browser: &mut DirectoryBrowser,
     variant: &mut BrowserVariant,
     pending_edit_paths: &HashSet<PathBuf>,
-    corpus_dir_rel: &str,
     click_targets: &mut ListClickTargets,
 ) {
     let main_chunks = Layout::default()
@@ -287,7 +285,7 @@ fn render_corpus_tree(
 
     render_filter_bar(f, main_chunks[0], browser, variant);
 
-    render_tree_pane(f, main_chunks[1], browser, variant, pending_edit_paths, corpus_dir_rel, click_targets);
+    render_tree_pane(f, main_chunks[1], browser, variant, pending_edit_paths, click_targets);
 
     variant.render_overlays(f, area);
 }
@@ -346,7 +344,6 @@ fn render_tree_pane(
     browser: &mut DirectoryBrowser,
     variant: &BrowserVariant,
     pending_edit_paths: &HashSet<PathBuf>,
-    corpus_dir_rel: &str,
     click_targets: &mut ListClickTargets,
 ) {
     let inner_height = area.height.saturating_sub(2) as usize;
@@ -378,11 +375,8 @@ fn render_tree_pane(
             let is_dimmed = entry.depth == 0 && v.is_dimmed(&entry.path);
 
             let is_pending = if entry.is_dir && !pending_edit_paths.is_empty() {
-                // Strip corpus_dir_rel prefix to get the config-relative path
-                entry.path.strip_prefix(corpus_dir_rel)
-                    .and_then(|rest| rest.strip_prefix('/'))
-                    .map(|rel| pending_edit_paths.contains(std::path::Path::new(rel)))
-                    .unwrap_or(false)
+                // Entry paths are already zone-relative (config-relative).
+                pending_edit_paths.contains(std::path::Path::new(&entry.path))
             } else {
                 false
             };
@@ -412,8 +406,9 @@ fn render_hints(f: &mut Frame, area: Rect, browser: &DirectoryBrowser, variant: 
         ])
     } else {
         let cursor_entry = browser.current_entry();
+        // All entries in this browser are corpus entries by construction (zone-filtered query).
         let on_corpus_dir = cursor_entry
-            .map(|e| e.is_dir && e.path.starts_with(v.corpus_dir_rel()))
+            .map(|e| e.is_dir)
             .unwrap_or(false);
         let on_dir = cursor_entry.map(|e| e.is_dir).unwrap_or(false);
 

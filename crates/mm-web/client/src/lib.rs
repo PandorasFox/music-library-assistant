@@ -66,6 +66,8 @@ thread_local! {
     /// Active resolution state for Dispatchable resolution types.
     /// Set by `load_resolution_view()`, consumed by `mm_resolve_action()`.
     static ACTIVE_RESOLUTION: RefCell<Option<ActiveResolution>> = const { RefCell::new(None) };
+    /// Cached server build timestamp, fetched once at init.
+    static BUILD_ID: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
 // ============================================================================
@@ -91,6 +93,11 @@ async fn init() -> Result<(), JsValue> {
     if status.needs_setup {
         mount(&render_setup_form(None, status.suggested_root.as_deref()));
         return Ok(());
+    }
+
+    // Fetch build identifier once (best-effort; status bar shows empty on failure).
+    if let Ok(build) = api::get_build_info().await {
+        BUILD_ID.with(|cell| *cell.borrow_mut() = build);
     }
 
     // Listen for browser-initiated hash changes (back/forward, anchor clicks).
@@ -393,23 +400,9 @@ async fn load_view_for_route(route: &Route) -> Result<Node, JsValue> {
         Route::Search(_) => {
             Ok(views::render_search_view())
         }
-        Route::Files(ref r) => {
+        Route::Files(_) => {
             let data = api::get_directory_listing(None).await?;
-            let mut content = views::render_files_view(&data);
-
-            // If panel=config with a path, overlay the dir config editor
-            if r.panel.as_deref() == Some("config") {
-                if let Some(ref path) = r.path {
-                    let source_dir = api::get_dir_config(path).await?;
-                    let editor = views::render_dir_config_editor(path, &source_dir);
-                    content = mm_ui::html::div()
-                        .child(content)
-                        .child(editor)
-                        .into();
-                }
-            }
-
-            Ok(content)
+            Ok(views::render_files_view(&data))
         }
 
         // -- Overlay views --
@@ -868,15 +861,51 @@ async fn load_from_hash() -> Result<(), JsValue> {
     let route = current_route();
     let lateral = lateral_view_for_route(&route);
 
-    // Check if a transaction is active to show the Transaction tab.
-    let tx_open = api::get_status()
-        .await
-        .ok()
-        .map_or(false, |s| s.transaction.is_some());
+    // Fetch status for transaction tab visibility and work state.
+    let status = api::get_status().await.ok();
+    let tx_open = status.as_ref().map_or(false, |s| s.transaction.is_some());
+    let status_line = format_status_line(status.as_ref());
 
     let content = load_view_for_route(&route).await?;
-    mount(&render_app_shell(lateral, tx_open, content, Some("Connected")));
+    mount(&render_app_shell(lateral, tx_open, content, Some(&status_line)));
     Ok(())
+}
+
+/// Format the status bar line from WitchStatus + cached build info.
+fn format_status_line(status: Option<&mm_meta::witch_types::WitchStatus>) -> String {
+    let build = BUILD_ID.with(|cell| cell.borrow().clone());
+
+    let work = status.map(|s| {
+        use mm_meta::witch_types::WorkStateSnapshot;
+        match s.work.state {
+            WorkStateSnapshot::Idle => "idle".to_string(),
+            WorkStateSnapshot::Working => {
+                if s.work.session_queued > 0 {
+                    format!("working ({}/{})", s.work.total_processed, s.work.session_queued)
+                } else {
+                    format!("working ({})", s.work.pending)
+                }
+            }
+            WorkStateSnapshot::Done => format!("done ({})", s.work.total_processed),
+        }
+    }).unwrap_or_else(|| "disconnected".to_string());
+
+    let fetch = status.and_then(|s| {
+        if s.is_external_fetch_active {
+            Some("fetch active")
+        } else {
+            None
+        }
+    });
+
+    let mut parts = vec![work];
+    if let Some(f) = fetch {
+        parts.push(f.to_string());
+    }
+    if !build.is_empty() {
+        parts.push(format!("build {build}"));
+    }
+    parts.join(" | ")
 }
 
 // ============================================================================
@@ -993,7 +1022,7 @@ async fn do_resolve_action(action_name: &str) -> Result<(), JsValue> {
 
     match result {
         DispatchResult::Stage { key, label, mutations } => {
-            stage_resolution_decision(&key, &label, &mutations).await?;
+            stage_decision(&key, &label, &mutations).await?;
             let has_more = advance_active_resolution(&mut state);
             if has_more {
                 // Put state back and re-render from held state (no re-fetch).
@@ -1006,7 +1035,7 @@ async fn do_resolve_action(action_name: &str) -> Result<(), JsValue> {
             }
         }
         DispatchResult::StageKeep { key, label, mutations } => {
-            stage_resolution_decision(&key, &label, &mutations).await?;
+            stage_decision(&key, &label, &mutations).await?;
             // Don't advance — put state back and re-render from held state.
             ACTIVE_RESOLUTION.with(|cell| *cell.borrow_mut() = Some(state));
             render_active_resolution();
@@ -1393,8 +1422,9 @@ pub fn mm_resolve_confirm_with_field() {
     });
 }
 
-/// Stage a resolution decision: ensure a transaction is active, then add the decision.
-async fn stage_resolution_decision(
+/// Stage a decision: ensure a transaction is active, then add the decision.
+/// Caller navigates to transaction review afterward — never auto-confirms.
+async fn stage_decision(
     key: &DecisionKey,
     label: &str,
     mutations: &[mm_meta::mutations::Mutation],
@@ -1415,8 +1445,9 @@ async fn stage_resolution_decision(
 
 #[wasm_bindgen]
 pub fn mm_tx_confirm() {
+    let witness = api::ConfirmationWitness::new();
     spawn_local(async {
-        match api::tx_confirm().await {
+        match api::tx_confirm(witness).await {
             Ok(_) => { load_from_hash().await.ok(); }
             Err(e) => web_sys::console::error_1(&format!("tx confirm error: {e:?}").into()),
         }
@@ -1990,12 +2021,14 @@ async fn do_config_save() -> Result<(), JsValue> {
         mutations: vec![mutation],
     };
 
-    // Auto-confirm: start transaction, add decision, confirm immediately.
-    api::tx_start("Config edit").await?;
-    api::tx_add(&mm_ui::decision_keys::config_edit(), &decision).await?;
-    api::tx_confirm().await?;
+    stage_decision(
+        &mm_ui::decision_keys::config_edit(),
+        &decision.label,
+        &decision.mutations,
+    ).await?;
 
-    // Reload config view to show saved state.
+    // Navigate to transaction review for operator confirmation.
+    navigate_to(&Route::TransactionReview(route::TransactionReviewRoute::default()));
     load_from_hash().await?;
     Ok(())
 }
@@ -2004,7 +2037,7 @@ async fn do_config_save() -> Result<(), JsValue> {
 // Tag Editor Actions
 // ============================================================================
 
-/// Save tag edits — collects changed/added/deleted tags, builds mutations, auto-confirms.
+/// Save tag edits — collects changed/added/deleted tags, builds mutations, stages decision.
 #[wasm_bindgen]
 pub fn mm_tag_save() {
     spawn_local(async {
@@ -2222,14 +2255,16 @@ async fn do_tag_save() -> Result<(), JsValue> {
         mutations,
     };
 
-    // Auto-confirm: start transaction, add decision, confirm immediately.
-    api::tx_start("Tag edit").await?;
-    api::tx_add(&mm_ui::decision_keys::tag_edit(key_item), &decision).await?;
-    api::tx_confirm().await?;
+    stage_decision(
+        &mm_ui::decision_keys::tag_edit(key_item),
+        &decision.label,
+        &decision.mutations,
+    ).await?;
 
-    show_tag_status("Tags saved.", false);
+    show_tag_status("Decision staged.", false);
 
-    // Reload the tag editor to reflect the committed state.
+    // Navigate to transaction review for operator confirmation.
+    navigate_to(&Route::TransactionReview(route::TransactionReviewRoute::default()));
     load_from_hash().await?;
     Ok(())
 }
@@ -2279,31 +2314,48 @@ pub fn mm_expand_dir(path: &str) {
 // ============================================================================
 
 /// Navigate to the dir config editor for a given path.
+/// Open the dir config editor as an inline overlay (no route navigation).
+/// Fetches config from server, renders editor DOM, injects it.
 #[wasm_bindgen]
 pub fn mm_open_dir_config(path: &str) {
-    use mm_ui::route::{FilesRoute, Route};
-    let route = Route::Files(FilesRoute {
-        path: Some(path.to_string()),
-        panel: Some("config".to_string()),
-        ..Default::default()
-    });
-    navigate_to(&route);
-    spawn_local(async {
-        load_from_hash().await.ok();
+    let dir_path = path.to_string();
+    spawn_local(async move {
+        let source_dir = match api::get_dir_config(&dir_path).await {
+            Ok(sd) => sd,
+            Err(e) => {
+                web_sys::console::error_1(&format!("dir config fetch error: {e:?}").into());
+                return;
+            }
+        };
+        let editor = views::render_dir_config_editor(&dir_path, &source_dir);
+        let doc = web_sys::window().unwrap().document().unwrap();
+
+        // Remove any existing overlay first.
+        if let Some(existing) = doc.get_element_by_id("mm-dir-config-overlay") {
+            existing.remove();
+        }
+
+        // Inject overlay into the content area.
+        if let Some(content) = doc.query_selector(".mm-content").ok().flatten() {
+            let wrapper = doc.create_element("div").unwrap();
+            wrapper.set_id("mm-dir-config-overlay");
+            wrapper.set_class_name("mm-dir-config-overlay");
+            wrapper.set_inner_html(&editor.to_html());
+            content.append_child(&wrapper).ok();
+        }
     });
 }
 
-/// Cancel the dir config editor — navigate back to files view.
+/// Cancel the dir config editor — remove the overlay, no route navigation.
 #[wasm_bindgen]
 pub fn mm_dir_config_cancel() {
-    use mm_ui::route::{FilesRoute, Route};
-    navigate_to(&Route::Files(FilesRoute::default()));
-    spawn_local(async {
-        load_from_hash().await.ok();
-    });
+    let doc = web_sys::window().unwrap().document().unwrap();
+    if let Some(overlay) = doc.get_element_by_id("mm-dir-config-overlay") {
+        overlay.remove();
+    }
 }
 
-/// Save dir config edits — reads form values, builds mutation, auto-confirms.
+/// Save dir config edits — reads form values, builds mutation, stages decision.
 #[wasm_bindgen]
 pub fn mm_dir_config_save(path: &str) {
     let dir_path = path.to_string();
@@ -2395,17 +2447,17 @@ async fn do_dir_config_save(dir_path: &str) -> Result<(), JsValue> {
         mutations: vec![mutation],
     };
 
-    // Auto-confirm: start transaction, add decision, confirm
-    api::tx_start("Dir config edit").await?;
-    api::tx_add(
+    stage_decision(
         &mm_ui::decision_keys::dir_config_edit(source_path),
-        &decision,
-    )
-    .await?;
-    api::tx_confirm().await?;
+        &decision.label,
+        &decision.mutations,
+    ).await?;
 
-    // Navigate back to files view
-    navigate_to(&mm_ui::route::Route::Files(mm_ui::route::FilesRoute::default()));
+    // Close the overlay.
+    mm_dir_config_cancel();
+
+    // Navigate to transaction review for operator confirmation.
+    navigate_to(&Route::TransactionReview(route::TransactionReviewRoute::default()));
     load_from_hash().await?;
     Ok(())
 }

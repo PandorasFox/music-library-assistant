@@ -177,6 +177,12 @@ pub async fn get_status() -> Result<WitchStatus, JsValue> {
     from_json(get("/status").await?)
 }
 
+/// GET /build-info → build timestamp string
+pub async fn get_build_info() -> Result<String, JsValue> {
+    let json: serde_json::Value = from_json(get("/build-info").await?)?;
+    Ok(json.get("build").and_then(|v| v.as_str()).unwrap_or("unknown").to_string())
+}
+
 /// GET /config → raw JSON (for config editor's generic field renderer)
 pub async fn get_config_json() -> Result<serde_json::Value, JsValue> {
     get("/config").await
@@ -303,9 +309,25 @@ pub async fn tx_remove(key: &mm_meta::decisions::DecisionKey) -> Result<serde_js
     post("/tx/remove", &serde_json::json!({ "key": key })).await
 }
 
-/// POST /tx/confirm → commit transaction
-pub async fn tx_confirm() -> Result<serde_json::Value, JsValue> {
+/// POST /tx/confirm → commit transaction.
+///
+/// Requires a [`ConfirmationWitness`] — only [`super::mm_tx_confirm`] can mint one,
+/// ensuring no code path auto-confirms without operator intent.
+pub async fn tx_confirm(_witness: ConfirmationWitness) -> Result<serde_json::Value, JsValue> {
     post("/tx/confirm", &serde_json::json!({})).await
+}
+
+/// Zero-sized proof that the current call originated from the operator's
+/// explicit "Confirm" action in the transaction review UI.
+///
+/// Constructor is `pub(super)` — only the `mm_tx_confirm` wasm_bindgen export
+/// in `lib.rs` can mint one.
+pub struct ConfirmationWitness(());
+
+impl ConfirmationWitness {
+    pub(super) fn new() -> Self {
+        Self(())
+    }
 }
 
 /// POST /tx/discard → discard transaction

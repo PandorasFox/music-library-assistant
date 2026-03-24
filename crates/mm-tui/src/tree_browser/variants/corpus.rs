@@ -547,10 +547,10 @@ impl CorpusBrowserVariant {
                     None
                 }
             }
-            // C opens dir config editor on any corpus directory
+            // C opens dir config editor on any directory (all entries are corpus by construction)
             InputAction::Char('C') => {
                 if let Some(entry) = browser.current_entry() {
-                    if entry.is_dir && entry.path.starts_with(&self.corpus_dir_rel) {
+                    if entry.is_dir {
                         return Some(TreeBrowserAction::OpenDirConfig(entry.path.clone()));
                     }
                 }

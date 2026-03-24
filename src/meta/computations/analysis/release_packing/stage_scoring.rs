@@ -822,30 +822,38 @@ fn score_candidates_against_tracklist(
 
         for medium in &release.media {
             for track in &medium.tracks {
-                if track.recording.id == rec_match.recording_id {
-                    let (score, breakdown) = compute_score(
-                        rec_match,
-                        track,
-                        resolved_artist,
-                        &release.title,
-                        corpus,
-                        duration_tolerance_pct,
-                        candidate_weights,
-                    );
-
-                    candidates.push(CandidateAssignment {
-                        inode: *inode,
-                        recording_id: rec_match.recording_id.clone(),
-                        release_id: release_id.to_string(),
-                        medium_pos: medium.position,
-                        track_pos: track.position,
-                        medium_format: medium.format.clone(),
-                        track_number: track.number.clone(),
-                        track_title: track.title.clone(),
-                        score,
-                        breakdown,
-                    });
+                // AcoustID-matched candidates: only score against the matched recording.
+                // Synthetic candidates (empty recording_id, e.g. from pinned releases):
+                // score against all tracks so Hungarian can find optimal assignment
+                // using title/duration/track-number similarity.
+                if !rec_match.recording_id.is_empty()
+                    && track.recording.id != rec_match.recording_id
+                {
+                    continue;
                 }
+
+                let (score, breakdown) = compute_score(
+                    rec_match,
+                    track,
+                    resolved_artist,
+                    &release.title,
+                    corpus,
+                    duration_tolerance_pct,
+                    candidate_weights,
+                );
+
+                candidates.push(CandidateAssignment {
+                    inode: *inode,
+                    recording_id: rec_match.recording_id.clone(),
+                    release_id: release_id.to_string(),
+                    medium_pos: medium.position,
+                    track_pos: track.position,
+                    medium_format: medium.format.clone(),
+                    track_number: track.number.clone(),
+                    track_title: track.title.clone(),
+                    score,
+                    breakdown,
+                });
             }
         }
     }

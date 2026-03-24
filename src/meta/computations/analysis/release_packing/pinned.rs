@@ -38,20 +38,10 @@ pub fn execute_resolve_pin_for_dir(
 
     let read_db = ctx.read_db;
 
-    // Fast path: do we already have scored results for this release?
-    if read_db.has_packing_scores_for_release(release_id) {
-        log_general(format!(
-            "[PIN] Fast path: scores exist for release {} — committing",
-            release_id
-        ));
-        return Result::success(
-            computation,
-            vec![Computation::CommitPinnedRelease {
-                release_id: release_id.to_string(),
-                dir_path: dir_path.to_path_buf(),
-            }],
-        );
-    }
+    // Always go through warm/cold path to ensure comprehensive scoring.
+    // Pre-existing scores from the full pipeline may only cover AcoustID-matched
+    // recordings (e.g., Volume 3 of a 3-disc release), missing tracks that are
+    // matchable by title/duration/track-number similarity.
 
     // Warm path: do we have MB cache data for this release?
     match read_db.get_mb_release_cache(release_id) {

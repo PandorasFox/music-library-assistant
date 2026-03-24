@@ -182,9 +182,9 @@ enum DbWriteOp {
     },
 
     // =========================================================================
-    // Library File Operations (Awakening phase - reconciliation)
+    // Library File Operations
     // =========================================================================
-    /// Upsert a library file during reconciliation (new or changed).
+    /// Upsert a library file in the files table (reconciliation or post-mutation).
     UpsertLibraryFile {
         stored_path: String,
         inode: i64,
@@ -192,7 +192,7 @@ enum DbWriteOp {
         mtime_nanos: i64,
         file_size: i64,
     },
-    /// Delete a stale library file during reconciliation.
+    /// Delete a library file from the files table.
     DeleteLibraryFile {
         stored_path: String,
     },

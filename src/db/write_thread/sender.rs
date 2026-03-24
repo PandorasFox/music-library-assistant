@@ -187,10 +187,13 @@ impl SignalWriteSender {
     }
 
     // =========================================================================
-    // Library File Operations (Awakening phase - reconciliation)
+    // Library File Operations
     // =========================================================================
 
-    /// Upsert a library file during reconciliation (new or changed).
+    /// Upsert a library file entry in the files table.
+    ///
+    /// Called from ReconcileLibraryFiles (startup reconciliation) and
+    /// UpdateLibraryFileSignals (post-mutation inline registration).
     pub fn upsert_library_file(
         &self,
         stored_path: &str,
@@ -210,7 +213,7 @@ impl SignalWriteSender {
         });
     }
 
-    /// Delete a stale library file during reconciliation.
+    /// Delete a library file entry from the files table.
     pub fn delete_library_file(&self, stored_path: &str, _witness: &ComputationWitness) {
         self.mark_enqueued();
         let _ = self.tx.send(DbWriteOp::DeleteLibraryFile {

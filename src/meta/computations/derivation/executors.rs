@@ -560,10 +560,16 @@ pub fn execute_update_corpus_file_signals(
     Result::success(computation, Vec::new())
 }
 
-/// Update library signals for a single file after a mutation.
+/// Update library file DB state and signals after a mutation.
 ///
 /// Only valid for paths within library directories.
-/// Handles LibraryLeftover signals when files are added/removed from libraries.
+///
+/// When a mutation creates, moves, or removes a library file the DB `files`
+/// table must be updated immediately so that later bulk recomputations
+/// (DeriveCorpusDeployStatus, DeriveDeployHealthSignals) see consistent state.
+/// Previously this only cleared signals, relying on ReconcileLibraryFiles to
+/// register the file — but that computation only runs at startup, creating a
+/// race where bulk analysis would overwrite correct inline signal updates.
 pub fn execute_update_library_file_signals(
     _read_only_db: &ReadOnlyDb<'_>,
     path: &Path,
@@ -579,14 +585,33 @@ pub fn execute_update_library_file_signals(
     let resolver = paths::get_resolver();
     let path_str = to_zone_relative_str(resolver, path, Zone::Library);
 
-    // For library files, we check if the file exists and clear any leftover/stale signals
-    // The full library health is recomputed during the Analysis phase
-    if path.exists() && is_audio_file(path) {
-        // File exists - clear any LibraryLeftover/LibraryStale for this path
+    if path.exists() && (is_audio_file(path) || is_image_file(path)) {
+        // Register/update the library file in the DB so that bulk deploy
+        // recomputations see it without waiting for ReconcileLibraryFiles.
+        match std::fs::metadata(path) {
+            Ok(metadata) => {
+                let inode = metadata.ino() as i64;
+                let (mtime_secs, mtime_nanos) = paths::read_mtime(&metadata);
+                let file_size = metadata.len() as i64;
+                sender.upsert_library_file(
+                    &path_str, inode, mtime_secs, mtime_nanos, file_size, witness,
+                );
+            }
+            Err(e) => {
+                log_general(format!(
+                    "[COMPUTE] UpdateLibraryFileSignals: stat failed for {}: {}",
+                    path_str, e,
+                ));
+            }
+        }
+
+        // Clear any LibraryLeftover/LibraryStale for this path
         clear_library_signals_for_path(&sender, &path_str, witness);
+    } else if !path.exists() {
+        // File was removed — clean up DB entry. (For stash mutations this is
+        // redundant with Phase 1b drop_from_index, but idempotent.)
+        sender.delete_library_file(&path_str, witness);
     }
-    // If file doesn't exist, LibraryLeftover signals will be created during
-    // the next full library scan in the Analysis phase
 
     Result::success(computation, Vec::new())
 }

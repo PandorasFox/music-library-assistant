@@ -182,99 +182,100 @@ fn insight_route(ty: &InsightType) -> Option<String> {
 // Health view — typed
 // ============================================================================
 
-pub fn render_status_content(status: &WitchStatus) -> Node {
-    let mut sections = Vec::new();
+/// Render compact status bar inner content (line divs only, no footer wrapper).
+///
+/// Called from `render_app_shell` (wrapped in `<footer id="mm-status-bar">`)
+/// and from the WebSocket handler (set as innerHTML of that footer).
+pub fn render_status_bar_inner(status: &WitchStatus, build_id: &str) -> Node {
+    // -- Line 1: work state + transaction --
+    let mut parts1 = Vec::new();
 
-    // Work status with progress.
-    let work = &status.work;
-    let state_str = match work.state {
-        WorkStateSnapshot::Idle => "Idle",
-        WorkStateSnapshot::Working => "Working",
-        WorkStateSnapshot::Done => "Done",
-    };
-
-    let mut work_items = Vec::new();
-    work_items.push(kv("state", state_str));
-
-    if work.session_queued > 0 {
-        let pct = if work.session_queued > 0 {
-            (work.total_processed as f64 / work.session_queued as f64 * 100.0) as u64
-        } else {
-            0
-        };
-        work_items.push(kv(
-            "progress",
-            &format!("{}/{} ({}%)", work.total_processed, work.session_queued, pct),
-        ));
+    match status.work.state {
+        WorkStateSnapshot::Idle => parts1.push("Idle".to_string()),
+        WorkStateSnapshot::Working => {
+            if status.work.session_queued > 0 {
+                let pct = (status.work.total_processed as f64
+                    / status.work.session_queued as f64
+                    * 100.0) as u64;
+                parts1.push(format!(
+                    "Working {}/{} ({}%)",
+                    status.work.total_processed, status.work.session_queued, pct
+                ));
+            } else if status.work.pending > 0 {
+                parts1.push(format!("Working ({})", status.work.pending));
+            } else {
+                parts1.push("Working".to_string());
+            }
+        }
+        WorkStateSnapshot::Done => {
+            parts1.push(format!("Done ({})", status.work.total_processed));
+        }
     }
-    if work.pending > 0 {
-        work_items.push(kv("pending", &work.pending.to_string()));
+
+    if status.work.pending > 0 {
+        parts1.push(format!("{} pending", status.work.pending));
     }
     if status.db_queue_depth > 0 {
-        work_items.push(kv("DB queue", &status.db_queue_depth.to_string()));
-    }
-    sections.push(titled_section("Work", work_items));
-
-    // Task breakdown.
-    if !work.pending_by_label.is_empty() {
-        let items: Vec<Node> = work
-            .pending_by_label
-            .iter()
-            .map(|(k, v)| kv(k, &v.to_string()))
-            .collect();
-        sections.push(titled_section("Pending Work", items));
+        parts1.push(format!("DB:{}", status.db_queue_depth));
     }
 
-    // Transaction.
     if let Some(ref tx) = status.transaction {
-        let tx_items = vec![
-            kv("Label", &tx.label),
-            kv("Decisions", &tx.decision_count.to_string()),
-            kv("Mutations", &tx.mutation_count.to_string()),
-        ];
-        sections.push(titled_section("Transaction", tx_items));
+        parts1.push(format!(
+            "TX: {} ({}d, {}m)",
+            tx.label, tx.decision_count, tx.mutation_count
+        ));
     }
 
-    // External fetch progress.
-    if let Some(ref progress) = status.external_fetch_progress {
-        let a = &progress.acoustid;
-        let m = &progress.mb;
-        let mut items = vec![
-            kv(
-                "AcoustID",
-                &format!(
-                    "{}/{} ({} matched, {} no match)",
-                    a.processed, a.total, a.matched, a.no_match
-                ),
-            ),
-            kv(
-                "MusicBrainz",
-                &format!(
-                    "{}/{} ({} matched, {} no match)",
-                    m.processed, m.total, m.matched, m.no_match
-                ),
-            ),
-        ];
-        if progress.acoustid_rps > 0.0 || progress.mb_rps > 0.0 {
-            items.push(kv(
-                "rate",
-                &format!("{:.1} aid/s, {:.1} mb/s", progress.acoustid_rps, progress.mb_rps),
+    // -- Line 2: external fetch + cover art + build --
+    let mut parts2 = Vec::new();
+
+    if let Some(ref p) = status.external_fetch_progress {
+        let a = &p.acoustid;
+        let m = &p.mb;
+        parts2.push(format!(
+            "AID {}/{} ({}m, {}nm)",
+            a.processed, a.total, a.matched, a.no_match
+        ));
+        parts2.push(format!(
+            "MB {}/{} ({}m, {}nm)",
+            m.processed, m.total, m.matched, m.no_match
+        ));
+        if p.acoustid_rps > 0.0 || p.mb_rps > 0.0 {
+            parts2.push(format!(
+                "{:.1} aid/s, {:.1} mb/s",
+                p.acoustid_rps, p.mb_rps
             ));
         }
-        sections.push(titled_section("External Fetch", items));
     }
 
-    // Last error.
+    if let Some(ref ca) = status.cover_art_progress {
+        parts2.push(format!(
+            "CAA {}/{} ({}w, {}s, {}u)",
+            ca.processed, ca.total_releases, ca.images_written, ca.images_skipped, ca.images_upgraded
+        ));
+    }
+
+    if !build_id.is_empty() {
+        parts2.push(format!("build {build_id}"));
+    }
+
+    let sep = " \u{00b7} "; // middle dot
+    let mut wrapper = div();
+
     if let Some(ref err) = status.last_error {
-        sections.push(
+        wrapper = wrapper.child(
             div()
-                .class("mm-alert mm-alert--warning")
-                .child(span().class("mm-alert__text").text(err))
-                .into(),
+                .class("mm-status__line mm-status__line--error")
+                .text(err),
         );
     }
 
-    div().attr("id", "mm-status-section").children(sections).into()
+    wrapper = wrapper.child(div().class("mm-status__line").text(parts1.join(sep)));
+    if !parts2.is_empty() {
+        wrapper = wrapper.child(div().class("mm-status__line").text(parts2.join(sep)));
+    }
+
+    wrapper.into()
 }
 
 pub fn render_insights_content(insights: &InsightsData) -> Node {

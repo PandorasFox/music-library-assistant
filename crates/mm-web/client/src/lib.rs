@@ -16,8 +16,8 @@ use wasm_bindgen_futures::spawn_local;
 
 use mm_meta::decisions::{Decision, DecisionKey};
 use mm_meta::paths::PathResolver;
-use mm_ui::html::widgets::{render_status_bar, render_titlebar};
-use mm_ui::html::{self, div, Node};
+use mm_ui::html::widgets::render_titlebar;
+use mm_ui::html::{self, div, footer, Node};
 use mm_ui::lateral_view::LateralView;
 use mm_ui::resolutions::dispatch::{DispatchResult, Dispatchable};
 use mm_ui::route::{self, Route};
@@ -254,9 +254,10 @@ fn start_event_stream() {
         // Store the latest status for use by view loading and on-demand reads.
         LAST_STATUS.with(|cell| *cell.borrow_mut() = Some(status.clone()));
 
-        // Update the status section if visible (Health view).
-        if let Some(el) = doc.get_element_by_id("mm-status-section") {
-            let node = views::render_status_content(&status);
+        // Update the global status bar footer on every push.
+        if let Some(el) = doc.get_element_by_id("mm-status-bar") {
+            let build_id = BUILD_ID.with(|cell| cell.borrow().clone());
+            let node = views::render_status_bar_inner(&status, &build_id);
             el.set_inner_html(&node.to_html());
         }
 
@@ -420,13 +421,24 @@ fn render_app_shell(
     active_view: LateralView,
     transactions_open: bool,
     content: Node,
-    status: Option<&str>,
+    status: Option<&mm_meta::witch_types::WitchStatus>,
 ) -> Node {
+    let build_id = BUILD_ID.with(|cell| cell.borrow().clone());
+    let status_inner = if let Some(s) = status {
+        views::render_status_bar_inner(s, &build_id)
+    } else {
+        div().child(div().class("mm-status__line").text("disconnected")).into()
+    };
+    let status_bar = footer()
+        .class("mm-status")
+        .attr("id", "mm-status-bar")
+        .child(status_inner);
+
     div()
         .attr("id", "mm-app")
         .child(render_titlebar(active_view, transactions_open))
         .child(div().class("mm-content").child(content))
-        .child(render_status_bar(status, None))
+        .child(status_bar)
         .into()
 }
 
@@ -440,13 +452,12 @@ async fn load_view_for_route(route: &Route) -> Result<Node, JsValue> {
     match route {
         // -- Lateral views --
         Route::Health(_) => {
-            let status = get_status_cached().await?;
             let insights = api::get_insights().await.ok();
-            let mut children = vec![views::render_status_content(&status)];
             if let Some(ref ins) = insights {
-                children.push(views::render_insights_content(ins));
+                Ok(views::render_insights_content(ins))
+            } else {
+                Ok(html::span().class("mm-kv__val").text("Loading insights\u{2026}").into())
             }
-            Ok(div().children(children).into())
         }
         Route::Config(_) => {
             let config_json = api::get_config_json().await?;
@@ -939,52 +950,15 @@ async fn load_from_hash() -> Result<(), JsValue> {
     let route = current_route();
     let lateral = lateral_view_for_route(&route);
 
-    // Use cached pushed status for transaction tab visibility and work state.
+    // Use cached pushed status for transaction tab visibility and status bar.
     let status = get_status_cached().await.ok();
     let tx_open = status.as_ref().map_or(false, |s| s.transaction.is_some());
-    let status_line = format_status_line(status.as_ref());
 
     let content = load_view_for_route(&route).await?;
-    mount(&render_app_shell(lateral, tx_open, content, Some(&status_line)));
+    mount(&render_app_shell(lateral, tx_open, content, status.as_ref()));
     Ok(())
 }
 
-/// Format the status bar line from WitchStatus + cached build info.
-fn format_status_line(status: Option<&mm_meta::witch_types::WitchStatus>) -> String {
-    let build = BUILD_ID.with(|cell| cell.borrow().clone());
-
-    let work = status.map(|s| {
-        use mm_meta::witch_types::WorkStateSnapshot;
-        match s.work.state {
-            WorkStateSnapshot::Idle => "idle".to_string(),
-            WorkStateSnapshot::Working => {
-                if s.work.session_queued > 0 {
-                    format!("working ({}/{})", s.work.total_processed, s.work.session_queued)
-                } else {
-                    format!("working ({})", s.work.pending)
-                }
-            }
-            WorkStateSnapshot::Done => format!("done ({})", s.work.total_processed),
-        }
-    }).unwrap_or_else(|| "disconnected".to_string());
-
-    let fetch = status.and_then(|s| {
-        if s.is_external_fetch_active {
-            Some("fetch active")
-        } else {
-            None
-        }
-    });
-
-    let mut parts = vec![work];
-    if let Some(f) = fetch {
-        parts.push(f.to_string());
-    }
-    if !build.is_empty() {
-        parts.push(format!("build {build}"));
-    }
-    parts.join(" | ")
-}
 
 // ============================================================================
 // Global callbacks (wasm_bindgen exports → window globals via index.html)

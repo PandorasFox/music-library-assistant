@@ -225,18 +225,44 @@ impl super::dispatch::Dispatchable for CompoundSplitViewState {
                     return DispatchResult::Handled;
                 }
 
+                let tag_upper = group.tag_name.to_uppercase();
+                let is_artist_tag =
+                    matches!(tag_upper.as_str(), "ARTIST" | "ALBUMARTIST");
+
                 let mut ops = Vec::new();
                 for file in &group.files {
-                    if let Some(first_part) = parts.first() {
-                        ops.push(TagOp::replace_tag(
-                            file.inode,
-                            &group.tag_name,
-                            &group.compound_value,
-                            first_part,
-                        ));
-                    }
-                    for part in parts.iter().skip(1) {
-                        ops.push(TagOp::add_tag(file.inode, &group.tag_name, part));
+                    if is_artist_tag {
+                        // Artist-family: leave the singular tag intact (it's the
+                        // display string) and emit individual values as the plural
+                        // form (ARTISTS / ALBUMARTISTS) per Navidrome convention.
+                        // TODO: Edge case — semicolon-delimited ARTIST values (e.g.
+                        // "Artist A; Artist B") aren't really display strings; they
+                        // look like someone crammed the plural form into the singular
+                        // field. For now we still preserve + split to plural, but we
+                        // may want to rewrite the singular value too. Revisit once we
+                        // have bookkeeping for "was this tag operator-curated or
+                        // auto-imported".
+                        let plural_tag = format!("{}S", group.tag_name);
+                        for part in &parts {
+                            ops.push(TagOp::add_tag(file.inode, &plural_tag, part));
+                        }
+                    } else {
+                        // Non-artist tags: replace the compound value in-place.
+                        if let Some(first_part) = parts.first() {
+                            ops.push(TagOp::replace_tag(
+                                file.inode,
+                                &group.tag_name,
+                                &group.compound_value,
+                                first_part,
+                            ));
+                        }
+                        for part in parts.iter().skip(1) {
+                            ops.push(TagOp::add_tag(
+                                file.inode,
+                                &group.tag_name,
+                                part,
+                            ));
+                        }
                     }
                 }
 
@@ -253,12 +279,21 @@ impl super::dispatch::Dispatchable for CompoundSplitViewState {
 
                 DispatchResult::Stage {
                     key,
-                    label: format!(
-                        "Split \"{}\" in {} \u{2192} [{}]",
-                        group.compound_value,
-                        group.tag_name,
-                        parts.join(", "),
-                    ),
+                    label: if is_artist_tag {
+                        format!(
+                            "Add {}S from \"{}\" \u{2192} [{}]",
+                            group.tag_name,
+                            group.compound_value,
+                            parts.join(", "),
+                        )
+                    } else {
+                        format!(
+                            "Split \"{}\" in {} \u{2192} [{}]",
+                            group.compound_value,
+                            group.tag_name,
+                            parts.join(", "),
+                        )
+                    },
                     mutations: vec![Mutation::ApplyTagOps(ApplyTagOpsMutation {
                         ops,
                         zone: data.zone,

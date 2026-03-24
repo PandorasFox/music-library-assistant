@@ -423,9 +423,18 @@ pub fn execute_detect_compound_tag_values(
     // Skip MB-tagged files (externally authoritative tags)
     let mb_tagged_inodes = load_mb_tagged_inodes(read_only_db, config);
 
-    // Note: We do NOT clear existing signals here. Each per-inode computation will
-    // emit or clear its own signal as appropriate. Signals for unchanged inodes
-    // (not in dirty list) are preserved.
+    // Clear stale CompoundTagSignals for MB-tagged inodes that were dirty.
+    // These files may have had compound signals emitted before MB matching
+    // tagged them as externally authoritative — now we need to clean up.
+    let sender = require_sender!(computation);
+    for &inode in &dirty_inodes {
+        if mb_tagged_inodes.contains(&inode) {
+            helpers::drop_stale_corpus_signal::<CompoundTagSignal>(
+                read_only_db, &sender, inode, ctx.witness,
+            );
+            sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, ctx.witness);
+        }
+    }
 
     // Spawn per-inode computations only for dirty inodes (excluding MB-tagged)
     let spawn: Vec<Computation> = dirty_inodes
@@ -481,9 +490,25 @@ pub(super) fn detect_compounds_in_tags(
 
     let mut compounds: Vec<TypedCompoundEntry> = Vec::new();
 
+    // Build a set of present tag names (uppercased) so we can check for plural forms.
+    let present_tag_names: std::collections::HashSet<String> = tags
+        .iter()
+        .map(|t| t.tag_name.to_uppercase())
+        .collect();
+
     for tag in tags {
         let tag_name_upper = tag.tag_name.to_uppercase();
         let is_artist_tag = matches!(tag_name_upper.as_str(), "ARTIST" | "ALBUMARTIST");
+
+        // If the plural form exists (ARTISTS / ALBUMARTISTS), the singular tag is
+        // display-only — the decomposed values already live in the plural tag.
+        // No compound signal needed.
+        if is_artist_tag {
+            let plural = format!("{}S", tag_name_upper);
+            if present_tag_names.contains(&plural) {
+                continue;
+            }
+        }
 
         // Check if this value is whitelisted as canonical
         if read_only_db

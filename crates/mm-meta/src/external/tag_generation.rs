@@ -152,6 +152,30 @@ pub fn generate_tag_ops(
         ));
     }
 
+    // Picard-compatible aliases (for Navidrome and other Picard-aware consumers).
+    // Only emitted when enabled, and skipped if the configured name already IS
+    // the Picard name (no duplicate tags).
+    if tag_names.picard_compat {
+        if tag_names.release != MbTagNameConfig::PICARD_RELEASE {
+            desired.push((
+                MbTagNameConfig::PICARD_RELEASE.to_string(),
+                input.release_id.clone(),
+            ));
+        }
+        if tag_names.recording != MbTagNameConfig::PICARD_RECORDING {
+            desired.push((
+                MbTagNameConfig::PICARD_RECORDING.to_string(),
+                input.recording_id.clone(),
+            ));
+        }
+        if !track_id.is_empty() && tag_names.track != MbTagNameConfig::PICARD_TRACK {
+            desired.push((
+                MbTagNameConfig::PICARD_TRACK.to_string(),
+                track_id.to_string(),
+            ));
+        }
+    }
+
     compute_tag_diff(input.inode, &desired, &input.current_tags)
 }
 

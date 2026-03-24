@@ -424,8 +424,10 @@ impl CreditRoutingConfig {
 /// Configurable Vorbis Comment tag names for MusicBrainz entity IDs.
 ///
 /// Defaults to sane names (`MUSICBRAINZ_RECORDING`, `MUSICBRAINZ_RELEASE`,
-/// `MUSICBRAINZ_TRACK`). Can be set to Picard-standard names for interop:
-/// `MUSICBRAINZ_TRACKID`, `MUSICBRAINZ_ALBUMID`, `MUSICBRAINZ_RELEASETRACKID`.
+/// `MUSICBRAINZ_TRACK`). When `picard_compat` is enabled, the Picard-standard
+/// aliases (`MUSICBRAINZ_ALBUMID`, `MUSICBRAINZ_TRACKID`,
+/// `MUSICBRAINZ_RELEASETRACKID`) are also written alongside the clean names,
+/// for interop with Navidrome and other Picard-aware software.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MbTagNameConfig {
     /// Tag name for the recording MBID.
@@ -434,6 +436,10 @@ pub struct MbTagNameConfig {
     pub release: String,
     /// Tag name for the track-on-release MBID.
     pub track: String,
+    /// Also write Picard-compatible alias tags alongside the clean names.
+    /// Adds: MUSICBRAINZ_ALBUMID (release), MUSICBRAINZ_TRACKID (recording),
+    /// MUSICBRAINZ_RELEASETRACKID (track).
+    pub picard_compat: bool,
 }
 
 impl Default for MbTagNameConfig {
@@ -442,6 +448,7 @@ impl Default for MbTagNameConfig {
             recording: "MUSICBRAINZ_RECORDING".to_string(),
             release: "MUSICBRAINZ_RELEASE".to_string(),
             track: "MUSICBRAINZ_TRACK".to_string(),
+            picard_compat: false,
         }
     }
 }
@@ -451,6 +458,12 @@ impl MbTagNameConfig {
     pub const KDL_RECORDING: &str = "recording";
     pub const KDL_RELEASE: &str = "release";
     pub const KDL_TRACK: &str = "track";
+    pub const KDL_PICARD_COMPAT: &str = "picard-compat";
+
+    // Picard-standard Vorbis Comment names (for compatibility writes).
+    pub const PICARD_RELEASE: &str = "MUSICBRAINZ_ALBUMID";
+    pub const PICARD_RECORDING: &str = "MUSICBRAINZ_TRACKID";
+    pub const PICARD_TRACK: &str = "MUSICBRAINZ_RELEASETRACKID";
 }
 
 /// Configuration for external metadata matching (AcoustID, MusicBrainz).
@@ -466,6 +479,12 @@ pub struct ExternalMatchingConfig {
     pub tag_templates: Vec<(String, String)>,
     pub credit_routing: CreditRoutingConfig,
     pub mb_tag_names: MbTagNameConfig,
+    /// Master switch for Cover Art Archive fetching.
+    pub cover_art_fetch: bool,
+    /// Re-fetch cover art if higher-resolution is available.
+    pub cover_art_upgrade: bool,
+    /// Which CAA image types to download (e.g. "Front", "Back").
+    pub cover_art_types: Vec<String>,
 }
 
 impl Default for ExternalMatchingConfig {
@@ -481,6 +500,9 @@ impl Default for ExternalMatchingConfig {
             tag_templates: Vec::new(),
             credit_routing: CreditRoutingConfig::default(),
             mb_tag_names: MbTagNameConfig::default(),
+            cover_art_fetch: false,
+            cover_art_upgrade: false,
+            cover_art_types: vec!["Front".to_string(), "Back".to_string()],
         }
     }
 }
@@ -497,6 +519,9 @@ impl ExternalMatchingConfig {
     pub const KDL_PREFERRED_LOCALES: &str = "preferred-locales";
     pub const KDL_TAG_TEMPLATES: &str = "tag-templates";
     pub const KDL_CREDIT_ROUTING: &str = "credit-routing";
+    pub const KDL_COVER_ART_FETCH: &str = "cover-art-fetch";
+    pub const KDL_COVER_ART_UPGRADE: &str = "cover-art-upgrade";
+    pub const KDL_COVER_ART_TYPES: &str = "cover-art-types";
 }
 
 /// Opinions for disc extraction from ALBUM and TRACKNUMBER tags.

@@ -8,7 +8,7 @@ use super::types::*;
 use mm_meta::config::{
     AlbumArtOpinions, CanonicalizationOpinions, Config, DiscExtractionOpinions,
     DuplicateAnalysisOpinions, ExternalMatchingConfig, HealthDetectionOpinions,
-    Opinions, PackingWeights, PerformanceOpinions,
+    MbTagNameConfig, Opinions, PackingWeights, PerformanceOpinions,
     ReleasePackingOpinions, SidecarDeployMode, StartupOpinions,
     StartupView, TagSplittingOpinions,
 };
@@ -45,7 +45,7 @@ config_enum_map!(StartupView, StartupView::Health, [
     StartupView::Health => "Health",
     StartupView::Search => "Search",
     StartupView::Browser => "Browser",
-    StartupView::ExternalMatches => "Ext Matches",
+    StartupView::ExternalMatches => "Ext Authorities",
 ]);
 
 config_enum_map!(SidecarDeployMode, SidecarDeployMode::PrimaryCover, [
@@ -321,6 +321,15 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                 false, |v, c| { if let ConfigValue::String(s) = v {
                     c.opinions.external_matching.mb_base_url = s.trim_end_matches('/').to_string();
                 } }),
+            cf!(bool, external_matching.mb_tag_names.picard_compat, "Picard-compat MB tags",
+                "Also write Picard-style aliases (MUSICBRAINZ_ALBUMID, etc.) for Navidrome",
+                &["TODO"], MbTagNameConfig::KDL_PICARD_COMPAT),
+            cf!(bool, external_matching.cover_art_fetch, "Cover art fetch",
+                "Master switch for Cover Art Archive fetching",
+                &["TODO"], ExternalMatchingConfig::KDL_COVER_ART_FETCH),
+            cf!(bool, external_matching.cover_art_upgrade, "Cover art upgrade",
+                "Re-fetch cover art if higher-resolution is available",
+                &["TODO"], ExternalMatchingConfig::KDL_COVER_ART_UPGRADE),
         ]},
         ConfigGroup { name: "Disc Extraction", collapsed: false, fields: vec![
             cf!(string, disc_extraction.disc_tag_name, "Disc tag name",

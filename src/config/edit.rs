@@ -317,6 +317,9 @@ pub fn apply_config_edits_to_kdl(
         || new_em.auto_enrich_on_match != old_em.auto_enrich_on_match
         || new_em.mb_cache_ttl_days != old_em.mb_cache_ttl_days
         || new_em.preferred_locales != old_em.preferred_locales
+        || new_em.cover_art_fetch != old_em.cover_art_fetch
+        || new_em.cover_art_upgrade != old_em.cover_art_upgrade
+        || new_em.cover_art_types != old_em.cover_art_types
     {
         let block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_EXTERNAL_MATCHING);
         if new_em.acoustid_api_key != old_em.acoustid_api_key {
@@ -372,6 +375,30 @@ pub fn apply_config_edits_to_kdl(
             }
             block.nodes_mut().push(node);
         }
+        if new_em.cover_art_fetch != old_em.cover_art_fetch {
+            set_or_create_bool_node(
+                block,
+                ExternalMatchingConfig::KDL_COVER_ART_FETCH,
+                new_em.cover_art_fetch,
+            );
+        }
+        if new_em.cover_art_upgrade != old_em.cover_art_upgrade {
+            set_or_create_bool_node(
+                block,
+                ExternalMatchingConfig::KDL_COVER_ART_UPGRADE,
+                new_em.cover_art_upgrade,
+            );
+        }
+        if new_em.cover_art_types != old_em.cover_art_types {
+            block
+                .nodes_mut()
+                .retain(|n| n.name().value() != ExternalMatchingConfig::KDL_COVER_ART_TYPES);
+            let mut node = kdl::KdlNode::new(ExternalMatchingConfig::KDL_COVER_ART_TYPES);
+            for art_type in &new_em.cover_art_types {
+                node.push(kdl::KdlEntry::new(kdl::KdlValue::String(art_type.clone())));
+            }
+            block.nodes_mut().push(node);
+        }
     }
 
     // --- MB Tag Names ---
@@ -388,6 +415,9 @@ pub fn apply_config_edits_to_kdl(
         }
         if new_tn.track != old_tn.track {
             set_or_create_string_node(tn_block, MbTagNameConfig::KDL_TRACK, &new_tn.track);
+        }
+        if new_tn.picard_compat != old_tn.picard_compat {
+            set_or_create_bool_node(tn_block, MbTagNameConfig::KDL_PICARD_COMPAT, new_tn.picard_compat);
         }
     }
 

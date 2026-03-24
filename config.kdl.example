@@ -92,19 +92,17 @@ opinions {
     //     mb-base-url "https://musicbrainz.org/ws/2"
     //
     //     // MusicBrainz tag names written to corpus files.
-    //     // Defaults are clean entity names; override for Picard interop.
+    //     // Defaults are clean entity names that map directly to MB concepts.
     //     mb-tag-names {
     //         recording "MUSICBRAINZ_RECORDING"
     //         release "MUSICBRAINZ_RELEASE"
     //         track "MUSICBRAINZ_TRACK"
-    //     }
     //
-    //     // --- Picard-compatible tag names ---
-    //     // mb-tag-names {
-    //     //     recording "MUSICBRAINZ_TRACKID"
-    //     //     release "MUSICBRAINZ_ALBUMID"
-    //     //     track "MUSICBRAINZ_RELEASETRACKID"
-    //     // }
+    //         // Also write Picard-style aliases (MUSICBRAINZ_ALBUMID, etc.)
+    //         // alongside the clean names. Needed for Navidrome PID matching
+    //         // and other Picard-aware software.
+    //         picard-compat false
+    //     }
     // }
 
     // -------------------------------------------------------------------------

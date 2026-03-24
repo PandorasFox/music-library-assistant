@@ -277,49 +277,46 @@ Configures which Vorbis Comment tag names MM writes for MusicBrainz entity IDs. 
 | `recording` | string | `"MUSICBRAINZ_RECORDING"` | Tag name for the recording MBID |
 | `release` | string | `"MUSICBRAINZ_RELEASE"` | Tag name for the release MBID |
 | `track` | string | `"MUSICBRAINZ_TRACK"` | Tag name for the track-on-release MBID |
+| `picard-compat` | bool | `false` | Also write Picard-style aliases alongside clean names |
 
 **MB-tagged file detection**: A file is considered "fully MusicBrainz-tagged" when it has both the `track` and `release` tags present. These files are automatically elided from tag-based health checks (missing tags, canonicity, compound tags, etc.) since their tags are externally authoritative.
 
 ##### Tag Name Mapping
 
-MM defaults to clean entity names that map 1:1 to MusicBrainz concepts. The standard Picard names are confusing (e.g., `MUSICBRAINZ_TRACKID` is actually the *recording* ID, not the track ID).
+MM defaults to clean entity names that map 1:1 to MusicBrainz concepts. Picard's names are historically confusing (e.g., `MUSICBRAINZ_TRACKID` is actually the *recording* ID, `MUSICBRAINZ_ALBUMID` is the *release* ID).
 
-| MB Entity | MM Default | Picard Standard | Notes |
-|-----------|-----------|-----------------|-------|
+| MB Entity | MM Default | Picard Name | Notes |
+|-----------|-----------|-------------|-------|
 | Recording | `MUSICBRAINZ_RECORDING` | `MUSICBRAINZ_TRACKID` | Picard name is misleading |
 | Release | `MUSICBRAINZ_RELEASE` | `MUSICBRAINZ_ALBUMID` | Picard name is misleading |
 | Track (on release) | `MUSICBRAINZ_TRACK` | `MUSICBRAINZ_RELEASETRACKID` | — |
 
-##### Picard-Compatible Config
+##### Picard Compatibility Mode
 
-To use standard Picard tag names (for interop with files tagged by MusicBrainz Picard):
+When `picard-compat true` is set, MM writes **both** the clean tag names and the Picard aliases. The clean names are the source of truth for MM; the Picard aliases exist for interop with Navidrome and other software that reads Picard-named tags.
 
 ```kdl
 mb-tag-names {
-    recording "MUSICBRAINZ_TRACKID"
-    release "MUSICBRAINZ_ALBUMID"
-    track "MUSICBRAINZ_RELEASETRACKID"
+    picard-compat true
 }
 ```
 
+A file tagged with `picard-compat true` will contain, e.g.:
+- `MUSICBRAINZ_RELEASE=<uuid>` (MM's clean name)
+- `MUSICBRAINZ_ALBUMID=<uuid>` (Picard alias, same value)
+
+If the configured clean name already matches the Picard name (because you overrode it), the duplicate is suppressed.
+
 ##### Navidrome Persistent ID Config
 
-When using MM's default tag names, configure Navidrome to read them for persistent IDs. In your Navidrome config:
+Navidrome's PID system references its internal field names, which are populated from Picard-named tags. With `picard-compat true`, Navidrome's default PID config works:
 
 ```
-ND_PID_TRACK=musicbrainz_track|albumid,discnumber,tracknumber,title
-ND_PID_ALBUM=musicbrainz_release|albumartistid,album,albumversion,releasedate
+ND_PID_ALBUM=musicbrainz_albumid|albumartistid,album,albumversion
+ND_PID_TRACK=musicbrainz_trackid|albumid,discnumber,tracknumber,title
 ```
 
-Or in `navidrome.toml`:
-
-```toml
-[Scanner]
-PID.Track = "musicbrainz_track|albumid,discnumber,tracknumber,title"
-PID.Album = "musicbrainz_release|albumartistid,album,albumversion,releasedate"
-```
-
-If using Picard-compatible tag names, Navidrome's defaults work out of the box (no config needed).
+Without `picard-compat`, Navidrome won't see MB IDs (it doesn't read MM's clean tag names) and will fall back to the hash-based PID components (`albumartistid,album,albumversion`).
 
 ### `disc-extraction` Block
 

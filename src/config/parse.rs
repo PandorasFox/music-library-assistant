@@ -413,6 +413,31 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
                 MbTagNameConfig::KDL_MB_TAG_NAMES => {
                     parse_mb_tag_names(child, &mut opinions.mb_tag_names);
                 }
+                ExternalMatchingConfig::KDL_COVER_ART_FETCH => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_bool() {
+                            opinions.cover_art_fetch = val;
+                        }
+                    }
+                }
+                ExternalMatchingConfig::KDL_COVER_ART_UPGRADE => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_bool() {
+                            opinions.cover_art_upgrade = val;
+                        }
+                    }
+                }
+                ExternalMatchingConfig::KDL_COVER_ART_TYPES => {
+                    // Multi-value node: cover-art-types "Front" "Back"
+                    let types: Vec<String> = child
+                        .entries()
+                        .iter()
+                        .filter_map(|e| e.value().as_string().map(|s| s.to_string()))
+                        .collect();
+                    if !types.is_empty() {
+                        opinions.cover_art_types = types;
+                    }
+                }
                 _ => {}
             }
         }
@@ -485,17 +510,26 @@ fn parse_credit_routing(node: &kdl::KdlNode, config: &mut CreditRoutingConfig) {
 fn parse_mb_tag_names(node: &kdl::KdlNode, config: &mut MbTagNameConfig) {
     if let Some(children) = node.children() {
         for child in children.nodes() {
-            let val = child
-                .entries()
-                .first()
-                .and_then(|e| e.value().as_string())
-                .map(|s| s.to_uppercase());
-            let Some(val) = val else { continue };
             match child.name().value() {
-                MbTagNameConfig::KDL_RECORDING => config.recording = val,
-                MbTagNameConfig::KDL_RELEASE => config.release = val,
-                MbTagNameConfig::KDL_TRACK => config.track = val,
-                _ => {}
+                MbTagNameConfig::KDL_PICARD_COMPAT => {
+                    if let Some(val) = child.entries().first().and_then(|e| e.value().as_bool()) {
+                        config.picard_compat = val;
+                    }
+                }
+                name => {
+                    let val = child
+                        .entries()
+                        .first()
+                        .and_then(|e| e.value().as_string())
+                        .map(|s| s.to_uppercase());
+                    let Some(val) = val else { continue };
+                    match name {
+                        MbTagNameConfig::KDL_RECORDING => config.recording = val,
+                        MbTagNameConfig::KDL_RELEASE => config.release = val,
+                        MbTagNameConfig::KDL_TRACK => config.track = val,
+                        _ => {}
+                    }
+                }
             }
         }
     }

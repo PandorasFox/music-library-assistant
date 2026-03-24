@@ -843,9 +843,20 @@ pub fn execute_derive_corpus_deploy_status(
 
     let healthy_inodes: HashSet<i64> = healthy_signals.iter().map(|s| s.inode).collect();
 
+    log_general(format!(
+        "[COMPUTE] DeriveCorpusDeployStatus: {} corpus inodes, {} healthy inodes, {} source_dirs: [{}]",
+        all_corpus_inodes.len(),
+        healthy_inodes.len(),
+        config.source_dirs.len(),
+        config.source_dirs.iter().map(|sd| format!("{:?}(libs={:?})", sd.path, sd.libraries)).collect::<Vec<_>>().join(", "),
+    ));
+
     let mut precomputed: Vec<PrecomputedFile> = Vec::new();
     let mut deploy_path_counts: HashMap<String, usize> = HashMap::new();
     let mut skipped_not_configured = 0usize;
+    let mut skipped_no_tags = 0usize;
+    let mut skipped_not_healthy = 0usize;
+    let mut sample_not_in_source: Option<String> = None;
 
     for (&inode, corpus_path) in &all_corpus_inodes {
         let tags = match read_only_db.get_tags::<crate::zones::CorpusZone>(inode) {
@@ -859,6 +870,7 @@ pub fn execute_derive_corpus_deploy_status(
             }
         };
         if tags.is_empty() {
+            skipped_no_tags += 1;
             continue;
         }
 
@@ -867,8 +879,16 @@ pub fn execute_derive_corpus_deploy_status(
         let deploy_path = expected_relative.to_string_lossy().to_string();
 
         // Only build precomputed entries for healthy, source-configured files.
-        let keep = healthy_inodes.contains(&inode)
-            && config.is_path_in_source(Path::new(corpus_path));
+        let is_healthy = healthy_inodes.contains(&inode);
+        let in_source = config.is_path_in_source(Path::new(corpus_path));
+        let keep = is_healthy && in_source;
+
+        if !is_healthy {
+            skipped_not_healthy += 1;
+        }
+        if is_healthy && !in_source && sample_not_in_source.is_none() {
+            sample_not_in_source = Some(corpus_path.clone());
+        }
 
         if keep {
             // Move into PrecomputedFile, then count via reference to stored string.
@@ -892,6 +912,15 @@ pub fn execute_derive_corpus_deploy_status(
             }
         }
     }
+
+    log_general(format!(
+        "[COMPUTE] DeriveCorpusDeployStatus filter: {} precomputed, {} skipped_no_tags, {} skipped_not_healthy, {} skipped_not_configured{}",
+        precomputed.len(),
+        skipped_no_tags,
+        skipped_not_healthy,
+        skipped_not_configured,
+        sample_not_in_source.as_ref().map(|p| format!(", sample_not_in_source={}", p)).unwrap_or_default(),
+    ));
 
     // Phase 2: Build conflict set — deploy paths claimed by 2+ corpus files.
     let conflict_paths: HashSet<&str> = deploy_path_counts

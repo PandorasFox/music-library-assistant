@@ -1607,31 +1607,30 @@ impl Witch {
 
             // Convert watcher library observations to ObservedLibraryFile format
             // and queue ReconcileLibraryFiles directly (no WalkLibrary/ScanLibraryDirectory needed).
-            if !self.observed_inodes.library.is_empty() {
-                let observed_files: Vec<derivation::ObservedLibraryFile> = self
-                    .observed_inodes
-                    .library
-                    .iter()
-                    .map(|(inode, meta)| derivation::ObservedLibraryFile {
-                        stored_path: meta.path.clone(),
-                        inode: *inode,
-                        mtime_secs: meta.mtime_secs,
-                        mtime_nanos: meta.mtime_nanos,
-                        file_size: meta.file_size,
-                    })
-                    .collect();
+            // Always run even with empty observed set — stale library entries must be cleaned up.
+            let observed_files: Vec<derivation::ObservedLibraryFile> = self
+                .observed_inodes
+                .library
+                .iter()
+                .map(|(inode, meta)| derivation::ObservedLibraryFile {
+                    stored_path: meta.path.clone(),
+                    inode: *inode,
+                    mtime_secs: meta.mtime_secs,
+                    mtime_nanos: meta.mtime_nanos,
+                    file_size: meta.file_size,
+                })
+                .collect();
 
-                crate::logging::log_general(format!(
-                    "[STATE] Queueing ReconcileLibraryFiles from watcher data ({} files)",
-                    observed_files.len()
-                ));
-                self.queue_computation_with_label(
-                    Computation::Derivation(derivation::Computation::ReconcileLibraryFiles {
-                        observed_files,
-                    }),
-                    Some("Reconciling library files".to_string()),
-                );
-            }
+            crate::logging::log_general(format!(
+                "[STATE] Queueing ReconcileLibraryFiles from watcher data ({} files)",
+                observed_files.len()
+            ));
+            self.queue_computation_with_label(
+                Computation::Derivation(derivation::Computation::ReconcileLibraryFiles {
+                    observed_files,
+                }),
+                Some("Reconciling library files".to_string()),
+            );
         }
     }
 

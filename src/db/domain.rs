@@ -145,7 +145,10 @@ impl_domain_query! {
 }
 
 impl_domain_query! {
-    GetDeployStatus => DeployStatus, db.get_deploy_status()
+    GetDeployStatus => DeployStatus, |_db| {
+        // Unreachable — dispatch_domain_query intercepts with server config.
+        unreachable!("GetDeployStatus handled in dispatch_domain_query")
+    }
 }
 
 impl_domain_query! {
@@ -982,6 +985,13 @@ macro_rules! dispatch_domain_query_impl {
                 // No config available — return empty data.
                 return DomainQueryResult::GetExternalMatches(ExternalMatchesData::default());
             }
+            if let DomainQueryPayload::GetDeployStatus(_) = &payload {
+                let libraries = config
+                    .map(|cfg| crate::meta::computations::helpers::get_configured_library_names(cfg))
+                    .unwrap_or_default();
+                let result = db.get_deploy_status(&libraries).unwrap_or_default();
+                return DomainQueryResult::GetDeployStatus(result);
+            }
             match payload {
                 $( DomainQueryPayload::$query(q) => DomainQueryResult::$query(q.execute(db)), )+
             }
@@ -1062,9 +1072,18 @@ mod tests {
     fn get_deploy_status_empty_db() {
         let db = test_db();
         let read_db = ReadOnlyDb::new(&db);
-        let result = GetDeployStatus.execute(&read_db);
-        assert!(!result.needs_action);
-        assert!(result.library_file_counts.is_empty());
+        // GetDeployStatus is intercepted in dispatch_domain_query (needs config).
+        let result = dispatch_domain_query(
+            DomainQueryPayload::GetDeployStatus(GetDeployStatus),
+            &read_db,
+            None,
+        );
+        if let DomainQueryResult::GetDeployStatus(data) = result {
+            assert!(!data.needs_action);
+            assert!(data.library_file_counts.is_empty());
+        } else {
+            panic!("unexpected result variant");
+        }
     }
 
     #[test]
@@ -1345,9 +1364,13 @@ mod tests {
 
         // Summary queries
         t!(serde_json::to_string(&GetInsights.execute(&read_db)));
-        t!(serde_json::to_string(&GetDeployStatus.execute(&read_db)));
         t!(serde_json::to_string(&GetEditHistory.execute(&read_db)));
-        // GetExternalMatches is intercepted in dispatch — test via dispatch with no config.
+        // GetDeployStatus and GetExternalMatches are intercepted in dispatch — test via dispatch with no config.
+        if let DomainQueryResult::GetDeployStatus(data) = dispatch_domain_query(
+            DomainQueryPayload::GetDeployStatus(GetDeployStatus), &read_db, None,
+        ) {
+            t!(serde_json::to_string(&data));
+        }
         if let DomainQueryResult::GetExternalMatches(data) = dispatch_domain_query(
             DomainQueryPayload::GetExternalMatches(GetExternalMatches), &read_db, None,
         ) {

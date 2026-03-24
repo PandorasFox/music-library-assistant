@@ -64,11 +64,23 @@ pub(crate) struct CachedInodeState {
     pub tags: crate::corpus::tags::TagSet,
 }
 
+/// A zone to watch, with optional subdirectory filter.
+///
+/// When `allowed_subdirs` is set, only those top-level subdirectories of `root`
+/// are walked. Used for the Library zone to restrict scanning to configured
+/// deployment directories (e.g., "music", "soundtracks") rather than walking
+/// everything under the library root.
+pub(crate) struct WatchedZone {
+    pub zone: Zone,
+    pub root: PathBuf,
+    pub allowed_subdirs: Option<Vec<String>>,
+}
+
 /// Command from Witch to fs-thread.
 pub(super) enum WatcherCommand {
     /// Begin watching zone roots. Triggers initial directory walk.
     Start {
-        zones: Vec<(Zone, PathBuf)>,
+        zones: Vec<WatchedZone>,
         /// DB-cached state seeded by the Witch. Watcher skips tag reads
         /// for files whose disk mtime matches the cached mtime.
         db_cache: HashMap<i64, CachedInodeState>,
@@ -171,7 +183,7 @@ impl FsThreadHandle {
     }
 
     /// Request the fs-thread to start scanning zone roots.
-    pub fn start(&self, zones: Vec<(Zone, PathBuf)>, db_cache: HashMap<i64, CachedInodeState>) {
+    pub fn start(&self, zones: Vec<WatchedZone>, db_cache: HashMap<i64, CachedInodeState>) {
         let _ = self
             .command_tx
             .send(WatcherCommand::Start { zones, db_cache });
@@ -224,15 +236,19 @@ struct ZoneState {
     files: HashMap<i64, (String, CachedFileState)>,
     /// path → inode (reverse index for event lookup)
     path_to_inode: HashMap<PathBuf, i64>,
+    /// When set, only paths under these top-level subdirs of `root` are accepted.
+    /// Used for Library zone to ignore events from non-deployment directories.
+    allowed_subdirs: Option<Vec<String>>,
 }
 
 impl ZoneState {
-    fn new(zone: Zone, root: PathBuf) -> Self {
+    fn new(zone: Zone, root: PathBuf, allowed_subdirs: Option<Vec<String>>) -> Self {
         Self {
             zone,
             root,
             files: HashMap::new(),
             path_to_inode: HashMap::new(),
+            allowed_subdirs,
         }
     }
 
@@ -259,6 +275,23 @@ impl ZoneState {
         self.path_to_inode.get(path).copied()
     }
 
+    /// Check if an absolute path is within this zone's allowed scope.
+    /// Returns true if no subdirectory filter is set, or if the path falls
+    /// under one of the allowed top-level subdirectories.
+    fn accepts_path(&self, path: &Path) -> bool {
+        let Some(ref subdirs) = self.allowed_subdirs else {
+            return path.starts_with(&self.root);
+        };
+        // path must be under root/{allowed_subdir}/...
+        let Ok(rel) = path.strip_prefix(&self.root) else {
+            return false;
+        };
+        let Some(first_component) = rel.components().next() else {
+            return false;
+        };
+        let first = first_component.as_os_str().to_string_lossy();
+        subdirs.iter().any(|s| s == first.as_ref())
+    }
 }
 
 /// Debounce window for coalescing rapid FS events (e.g. editor write patterns).
@@ -298,7 +331,7 @@ async fn run_fs_thread(
 /// Perform initial scan, set up inotify, enter async monitoring loop.
 /// Returns true if shutdown requested.
 async fn run_scan_and_monitor(
-    zones: &[(Zone, PathBuf)],
+    zones: &[WatchedZone],
     db_cache: &HashMap<i64, CachedInodeState>,
     command_rx: &mut mpsc::UnboundedReceiver<WatcherCommand>,
     message_tx: &mpsc::UnboundedSender<WatcherMessage>,
@@ -306,14 +339,14 @@ async fn run_scan_and_monitor(
     // Phase 1: Initial scan — walk and report (blocking I/O, fine on dedicated thread)
     let mut zone_states = Vec::new();
 
-    for (zone, root) in zones {
-        if !root.exists() {
+    for wz in zones {
+        if !wz.root.exists() {
             crate::logging::log_general(format!(
                 "[FS_THREAD] Zone {:?} root does not exist: {:?}, skipping",
-                zone, root
+                wz.zone, wz.root
             ));
             let _ = message_tx.send(WatcherMessage::InitialScanComplete {
-                zone: *zone,
+                zone: wz.zone,
                 inodes: HashMap::new(),
             });
             continue;
@@ -321,15 +354,15 @@ async fn run_scan_and_monitor(
 
         crate::logging::log_general(format!(
             "[FS_THREAD] Starting initial scan for zone {:?} at {:?}",
-            zone, root
+            wz.zone, wz.root
         ));
 
-        let mut zone_state = ZoneState::new(*zone, root.clone());
-        let raw_inodes = walk_zone_root(root, db_cache);
+        let mut zone_state = ZoneState::new(wz.zone, wz.root.clone(), wz.allowed_subdirs.clone());
+        let raw_inodes = walk_zone_root(&wz.root, db_cache, wz.allowed_subdirs.as_deref());
 
         crate::logging::log_general(format!(
             "[FS_THREAD] Zone {:?} initial scan complete: {} tracked files found",
-            zone,
+            wz.zone,
             raw_inodes.len()
         ));
 
@@ -349,7 +382,7 @@ async fn run_scan_and_monitor(
             // For image files, report to Witch (no content reads — just FS-level data)
             if crate::meta::computations::helpers::is_image_file_ext_from_path(&observed.path) {
                 let _ = message_tx.send(WatcherMessage::ImageFileObserved(ObservedImage {
-                    zone: *zone,
+                    zone: wz.zone,
                     inode: *inode,
                     path: observed.path.clone(),
                     mtime_secs: observed.mtime_secs,
@@ -363,12 +396,12 @@ async fn run_scan_and_monitor(
         if image_count > 0 {
             crate::logging::log_general(format!(
                 "[FS_THREAD] Zone {:?}: {} image files observed with metadata",
-                zone, image_count
+                wz.zone, image_count
             ));
         }
 
         let _ = message_tx.send(WatcherMessage::InitialScanComplete {
-            zone: *zone,
+            zone: wz.zone,
             inodes: raw_inodes,
         });
 
@@ -438,17 +471,17 @@ async fn run_scan_and_monitor(
 
                         // Re-scan zones
                         zone_states.clear();
-                        for (zone, root) in &zones {
-                            if !root.exists() {
+                        for wz in &zones {
+                            if !wz.root.exists() {
                                 let _ = message_tx.send(WatcherMessage::InitialScanComplete {
-                                    zone: *zone,
+                                    zone: wz.zone,
                                     inodes: HashMap::new(),
                                 });
                                 continue;
                             }
 
-                            let mut zone_state = ZoneState::new(*zone, root.clone());
-                            let raw_inodes = walk_zone_root(root, &rescan_cache);
+                            let mut zone_state = ZoneState::new(wz.zone, wz.root.clone(), wz.allowed_subdirs.clone());
+                            let raw_inodes = walk_zone_root(&wz.root, &rescan_cache, wz.allowed_subdirs.as_deref());
 
                             for (inode, observed) in &raw_inodes {
                                 zone_state.insert(
@@ -463,7 +496,7 @@ async fn run_scan_and_monitor(
                             }
 
                             let _ = message_tx.send(WatcherMessage::InitialScanComplete {
-                                zone: *zone,
+                                zone: wz.zone,
                                 inodes: raw_inodes,
                             });
 
@@ -585,7 +618,7 @@ fn drain_settled_events(
 /// Returns true if shutdown requested, false if a Start command arrived
 /// (caller should retry inotify via the outer run_fs_thread loop).
 async fn run_polling_loop(
-    zones: &[(Zone, PathBuf)],
+    zones: &[WatchedZone],
     mut db_cache: HashMap<i64, CachedInodeState>,
     mut poll_interval: Duration,
     command_rx: &mut mpsc::UnboundedReceiver<WatcherCommand>,
@@ -627,14 +660,14 @@ async fn run_polling_loop(
         }
 
         // Re-walk all zones
-        for (zone, root) in zones {
-            let inodes = if root.exists() {
-                walk_zone_root(root, &db_cache)
+        for wz in zones {
+            let inodes = if wz.root.exists() {
+                walk_zone_root(&wz.root, &db_cache, wz.allowed_subdirs.as_deref())
             } else {
                 HashMap::new()
             };
             let _ = message_tx.send(WatcherMessage::InitialScanComplete {
-                zone: *zone,
+                zone: wz.zone,
                 inodes,
             });
         }
@@ -669,8 +702,8 @@ fn process_notify_event(
 
     let now = Instant::now();
     for path in &event.paths {
-        // Only process files in our zone roots
-        let in_zone = zone_states.iter().any(|zs| path.starts_with(&zs.root));
+        // Only process files in our zone roots (respecting subdir filters)
+        let in_zone = zone_states.iter().any(|zs| zs.accepts_path(path));
         if !in_zone {
             continue;
         }
@@ -699,8 +732,8 @@ fn process_settled_event(
     zone_states: &mut [ZoneState],
     message_tx: &mpsc::UnboundedSender<WatcherMessage>,
 ) {
-    // Find which zone this path belongs to
-    let zone_idx = match zone_states.iter().position(|zs| path.starts_with(&zs.root)) {
+    // Find which zone this path belongs to (respecting subdir filters)
+    let zone_idx = match zone_states.iter().position(|zs| zs.accepts_path(path)) {
         Some(i) => i,
         None => return,
     };
@@ -916,11 +949,15 @@ fn maybe_send_image_observed(
 /// For audio files, checks `db_cache` for matching mtime — if matched, carries
 /// the cached tags through without a disk read. Otherwise tags are left as None
 /// (they'll be read on first change via steady-state monitoring).
-fn walk_zone_root(root: &Path, db_cache: &HashMap<i64, CachedInodeState>) -> HashMap<i64, ObservedFile> {
+fn walk_zone_root(
+    root: &Path,
+    db_cache: &HashMap<i64, CachedInodeState>,
+    allowed_subdirs: Option<&[String]>,
+) -> HashMap<i64, ObservedFile> {
     let mut result = HashMap::new();
 
     // Enumerate all directories (including root itself)
-    let (directories, symlink_count) = enumerate_directories(root);
+    let (directories, symlink_count) = enumerate_directories(root, allowed_subdirs);
 
     if symlink_count > 0 {
         crate::logging::log_general(format!(
@@ -940,11 +977,26 @@ fn walk_zone_root(root: &Path, db_cache: &HashMap<i64, CachedInodeState>) -> Has
 /// Enumerate all directories under root, including root itself.
 ///
 /// Returns (directories, symlink_count). Checks mount boundaries.
-fn enumerate_directories(root: &Path) -> (Vec<PathBuf>, usize) {
+/// When `allowed_subdirs` is Some, only top-level children of root whose
+/// name matches are entered (used for Library zone to skip non-deployment dirs).
+fn enumerate_directories(root: &Path, allowed_subdirs: Option<&[String]>) -> (Vec<PathBuf>, usize) {
     let mut directories = Vec::new();
     let mut symlink_count = 0;
-    enumerate_directories_recursive(root, &mut directories, &mut symlink_count);
-    directories.push(root.to_path_buf());
+
+    if let Some(subdirs) = allowed_subdirs {
+        // Only recurse into allowed top-level subdirectories
+        for subdir in subdirs {
+            let subdir_path = root.join(subdir);
+            if subdir_path.is_dir() && !subdir_path.is_symlink() {
+                directories.push(subdir_path.clone());
+                enumerate_directories_recursive(&subdir_path, &mut directories, &mut symlink_count);
+            }
+        }
+    } else {
+        enumerate_directories_recursive(root, &mut directories, &mut symlink_count);
+        directories.push(root.to_path_buf());
+    }
+
     (directories, symlink_count)
 }
 

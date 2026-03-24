@@ -138,7 +138,7 @@ pub(super) fn parse_inodes_csv(s: &str) -> Vec<i64> {
 // ============================================================================
 
 /// Extract unique library names from source directories.
-pub(super) fn get_configured_library_names(config: &crate::config::Config) -> Vec<String> {
+pub(crate) fn get_configured_library_names(config: &crate::config::Config) -> Vec<String> {
     use std::collections::HashSet;
     let mut names = HashSet::new();
     for source in &config.source_dirs {

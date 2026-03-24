@@ -231,7 +231,12 @@ impl Database {
     /// Get deploy status for the Deploy view and titlebar indicator.
     ///
     /// Returns whether there's actionable deploy work and per-library file counts.
-    pub fn get_deploy_status(&self) -> Result<crate::meta::views::DeployStatus> {
+    /// `configured_libraries` limits counting to only the configured deployment
+    /// directories, ignoring other top-level dirs under the library root.
+    pub fn get_deploy_status(
+        &self,
+        configured_libraries: &[String],
+    ) -> Result<crate::meta::views::DeployStatus> {
         let needs_action: bool = self.conn.query_row(
             "SELECT
                 EXISTS(SELECT 1 FROM signal_deploy_ready)
@@ -242,28 +247,18 @@ impl Database {
             |row| row.get(0),
         )?;
 
-        // Per-library file counts: extract library_name from the path prefix before first '/'
-        let mut stmt = self.conn.prepare(
-            "SELECT
-                CASE
-                    WHEN INSTR(path, '/') > 0 THEN SUBSTR(path, 1, INSTR(path, '/') - 1)
-                    ELSE path
-                END AS library_name,
-                COUNT(*) AS cnt
-            FROM files
-            WHERE zone = 'library'
-            GROUP BY library_name
-            ORDER BY library_name",
-        )?;
-
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
-        })?;
-
+        // Per-library file counts: only count files in configured library dirs
         let mut library_file_counts = Vec::new();
-        for row in rows {
-            library_file_counts.push(row?);
+        for lib_name in configured_libraries {
+            let pattern = super::super::dir_like_pattern_str(lib_name);
+            let count: usize = self.conn.query_row(
+                "SELECT COUNT(*) FROM files WHERE zone = 'library' AND path LIKE ?1 ESCAPE '\\'",
+                params![pattern],
+                |row| row.get(0),
+            )?;
+            library_file_counts.push((lib_name.clone(), count));
         }
+        library_file_counts.sort_by(|a, b| a.0.cmp(&b.0));
 
         Ok(crate::meta::views::DeployStatus {
             needs_action,

@@ -1028,13 +1028,18 @@ pub(crate) mod startup_socket {
             };
             mm_meta::wire::write_frame(self.socket, &req)
                 .map_err(|e| mm_meta::protocol::ProtocolError::Internal(format!("socket write: {e}")))?;
-            let resp: mm_meta::wire::WireResponse = mm_meta::wire::read_frame(self.socket)
-                .map_err(|e| mm_meta::protocol::ProtocolError::Internal(format!("socket read: {e}")))?;
-            match resp {
-                mm_meta::wire::WireResponse::Unauthenticated { result, .. } => result,
-                _ => Err(mm_meta::protocol::ProtocolError::Internal(
-                    "unexpected wire response type".to_string(),
-                )),
+            // The server may push WitchEvent frames at any time. Skip them
+            // until we receive the actual response to our request.
+            loop {
+                let resp: mm_meta::wire::WireResponse = mm_meta::wire::read_frame(self.socket)
+                    .map_err(|e| mm_meta::protocol::ProtocolError::Internal(format!("socket read: {e}")))?;
+                match resp {
+                    mm_meta::wire::WireResponse::Unauthenticated { result, .. } => return result,
+                    mm_meta::wire::WireResponse::Event(_) => continue,
+                    _ => return Err(mm_meta::protocol::ProtocolError::Internal(
+                        "unexpected wire response type".to_string(),
+                    )),
+                }
             }
         }
 
@@ -1073,8 +1078,13 @@ pub(crate) mod startup_socket {
                 self.socket,
                 &mm_meta::wire::WireRequest::NotifyDbReady { request_id: id },
             );
-            let _: Result<mm_meta::wire::WireResponse, _> =
-                mm_meta::wire::read_frame(self.socket);
+            // Drain until we get the Ack, skipping any pushed events.
+            loop {
+                match mm_meta::wire::read_frame::<_, mm_meta::wire::WireResponse>(self.socket) {
+                    Ok(mm_meta::wire::WireResponse::Event(_)) => continue,
+                    _ => break,
+                }
+            }
         }
 
         pub fn login(

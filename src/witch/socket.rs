@@ -113,6 +113,12 @@ async fn run_listener(
         match listener.accept().await {
             Ok((stream, _)) => {
                 let cmd_tx = cmd_tx.clone();
+                // NOTE: event subscription starts before authentication.
+                // mm-web connects over this socket without per-request auth
+                // and relies on status pushes to feed its own web clients.
+                // Mild info leak (status snapshots to unauthenticated connections)
+                // accepted: socket is local-only ($XDG_RUNTIME_DIR), leaked
+                // data is operational status not corpus content.
                 let event_rx = event_tx.subscribe();
                 tokio::spawn(async move {
                     handle_connection(stream, cmd_tx, event_rx).await;

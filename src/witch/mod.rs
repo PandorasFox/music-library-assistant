@@ -190,6 +190,16 @@ pub struct Witch {
     /// Populated by `handle_fetch_requests()`, drained when fetch scheduler reports done.
     post_fetch_computations: Vec<Computation>,
 
+    /// Set when `auto_index_unindexed_files()` queues mutations (new fingerprints incoming).
+    /// At `transition_to_idle()`, triggers auto AcoustID fetch if API key is configured.
+    /// Cleared when auto-fetch triggers or at transition_to_idle.
+    files_indexed_this_cycle: bool,
+
+    /// Set when external fetch completes with new match data (EXTERNAL scope).
+    /// At `transition_to_idle()`, triggers full release packing pipeline.
+    /// Cleared when auto-packing triggers.
+    packing_needed: bool,
+
     /// Handle to the dedicated DB write thread.
     /// Provides stats access and shutdown coordination.
     /// Spawned at construction time — always present.
@@ -342,6 +352,8 @@ impl Witch {
             pending_mutation_phases: VecDeque::new(),
             pending_computation_phases: VecDeque::new(),
             post_fetch_computations: Vec::new(),
+            files_indexed_this_cycle: false,
+            packing_needed: false,
             db_thread_handle: write_thread::spawn(),
             cache_thread_handle: cache_witch_handle,
             mutations_generation: 0,
@@ -1329,6 +1341,30 @@ impl Witch {
                         self.queue_computation_with_label(comp, None);
                     }
                 }
+
+                // If external data arrived, queue content analysis to derive
+                // ExternalMatch signals, and mark packing as needed for when
+                // the system next goes idle.
+                if self.session_recomputation_scope.contains(
+                    crate::meta::recomputation::RecomputationScope::EXTERNAL,
+                ) {
+                    let scope = std::mem::replace(
+                        &mut self.session_recomputation_scope,
+                        crate::meta::recomputation::RecomputationScope::EMPTY,
+                    );
+                    crate::logging::log_general(
+                        "[WITCH] External data arrived — queuing post-fetch content analysis",
+                    );
+                    self.queue_computation_with_label(
+                        Computation::Analysis(
+                            crate::meta::computations::analysis::Computation::ScheduleContentAnalysis {
+                                scope: Some(scope),
+                            },
+                        ),
+                        Some("Post-fetch content analysis".to_string()),
+                    );
+                    self.packing_needed = true;
+                }
             }
             external_fetch::SchedulerMessage::CoverArtProgress(progress) => {
                 self.cover_art_progress = Some(progress);
@@ -1882,6 +1918,40 @@ impl Witch {
     }
 
     fn transition_to_idle(&mut self) {
+        // Auto-trigger AcoustID fetch after new files were indexed.
+        // The fetch scheduler handles "nothing to do" gracefully (sends AllDone immediately),
+        // so we don't pre-check — just let it figure out if there's work.
+        if self.files_indexed_this_cycle {
+            self.files_indexed_this_cycle = false;
+
+            let has_api_key = self
+                .read_config(|c| !c.opinions.external_matching.acoustid_api_key.is_empty())
+                .unwrap_or(false);
+
+            if has_api_key && !self.is_external_fetch_active() {
+                crate::logging::log_general(
+                    "[WITCH] Auto-triggering AcoustID fetch after indexing",
+                );
+                let _ = self.request_external_fetch();
+                // Stay in Done — fetch will produce scheduler messages,
+                // and if new data arrives, more work will be queued.
+                return;
+            }
+        }
+
+        // Auto-trigger release packing after external fetch brought new data.
+        // The 30s LINGER_DURATION debounces this naturally — packing only runs
+        // after the system has been quiet for 30 seconds.
+        if self.packing_needed {
+            self.packing_needed = false;
+            crate::logging::log_general(
+                "[WITCH] Auto-triggering release packing after external fetch",
+            );
+            self.request_release_packing();
+            // Stay in Done — packing work transitions to Working.
+            return;
+        }
+
         self.work_state = WorkState::Idle;
     }
 
@@ -2105,6 +2175,7 @@ impl Witch {
             mutations,
             Some("Auto-index unindexed files".to_string()),
         );
+        self.files_indexed_this_cycle = true;
         true
     }
 

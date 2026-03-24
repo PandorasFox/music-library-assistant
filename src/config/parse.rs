@@ -413,17 +413,12 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
                 MbTagNameConfig::KDL_MB_TAG_NAMES => {
                     parse_mb_tag_names(child, &mut opinions.mb_tag_names);
                 }
-                ExternalMatchingConfig::KDL_COVER_ART_FETCH => {
+                ExternalMatchingConfig::KDL_COVER_ART_SANCTITY => {
                     if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_bool() {
-                            opinions.cover_art_fetch = val;
-                        }
-                    }
-                }
-                ExternalMatchingConfig::KDL_COVER_ART_UPGRADE => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_bool() {
-                            opinions.cover_art_upgrade = val;
+                        if let Some(val) = entry.value().as_string() {
+                            if let Some(sanctity) = CoverArtSanctity::from_str(val) {
+                                opinions.cover_art_sanctity = sanctity;
+                            }
                         }
                     }
                 }

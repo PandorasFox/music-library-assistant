@@ -41,6 +41,7 @@ use crate::external::acoustid::{AcoustIDClient, LookupOutcome};
 use crate::external::coverart::CoverArtClient;
 use crate::external::musicbrainz::{MbLookupOutcome, MusicBrainzClient};
 use crate::meta::external::ExternalSource;
+use mm_meta::config::CoverArtSanctity;
 use mm_meta::paths::PathResolver;
 
 use rate_limiter::{AdaptiveRateLimiter, RateLimiter};
@@ -136,8 +137,8 @@ async fn scheduler_loop(
                             continue;
                         }
                         crate::logging::log_general(format!(
-                            "[FETCH] Cover art: {} releases to process, upgrade={}",
-                            cab.queue.len(), cab.upgrade_mode,
+                            "[FETCH] Cover art: {} releases to process, sanctity={:?}",
+                            cab.queue.len(), cab.sanctity,
                         ));
                         let _ = message_tx.send(SchedulerMessage::CoverArtProgress(cab.progress.clone()));
                     }
@@ -153,7 +154,7 @@ async fn scheduler_loop(
                             let client = cab.client.clone();
                             let corpus_root = cab.corpus_root.clone();
                             let stash_root = cab.stash_root.clone();
-                            let upgrade_mode = cab.upgrade_mode;
+                            let sanctity = cab.sanctity;
                             let wanted_types = cab.wanted_types.clone();
                             let release_id = item.release_id.clone();
 
@@ -164,7 +165,7 @@ async fn scheduler_loop(
                             caa_in_flight.spawn(async move {
                                 let result = execute_cover_art_fetch(
                                     &client, &release_id, &target_dir, &corpus_root, &stash_root,
-                                    upgrade_mode, &wanted_types, existing_front, existing_back,
+                                    sanctity, &wanted_types, existing_front, existing_back,
                                 ).await;
                                 (result, release_id)
                             });
@@ -444,7 +445,7 @@ struct CoverArtBatch {
     progress: CoverArtProgress,
     corpus_root: std::path::PathBuf,
     stash_root: std::path::PathBuf,
-    upgrade_mode: bool,
+    sanctity: CoverArtSanctity,
     wanted_types: Vec<String>,
 }
 
@@ -571,12 +572,12 @@ fn extend_acoustid_queue(
 
 /// Initialize a cover art fetch batch from config + DB state.
 fn init_cover_art_batch(db: &Database, shared_config: &SharedConfig) -> CoverArtBatch {
-    let (upgrade_mode, wanted_types, corpus_root, stash_root) = {
+    let (sanctity, wanted_types, corpus_root, stash_root) = {
         let config = shared_config.read().expect("SharedConfig lock poisoned");
         let em = &config.opinions.external_matching;
         let resolver = PathResolver::from_config(&config);
         (
-            em.cover_art_upgrade,
+            em.cover_art_sanctity,
             em.cover_art_types.clone(),
             resolver.corpus_dir(),
             resolver.stash_dir(),
@@ -584,7 +585,7 @@ fn init_cover_art_batch(db: &Database, shared_config: &SharedConfig) -> CoverArt
     };
 
     let mut queue = VecDeque::new();
-    populate_cover_art_queue(db, &wanted_types, upgrade_mode, &corpus_root, &mut queue);
+    populate_cover_art_queue(db, &wanted_types, sanctity, &corpus_root, &mut queue);
 
     let progress = CoverArtProgress {
         total_releases: queue.len(),
@@ -597,7 +598,7 @@ fn init_cover_art_batch(db: &Database, shared_config: &SharedConfig) -> CoverArt
         progress,
         corpus_root,
         stash_root,
-        upgrade_mode,
+        sanctity,
         wanted_types,
     }
 }
@@ -993,7 +994,7 @@ fn extract_entities_from_recording(
 fn populate_cover_art_queue(
     db: &Database,
     wanted_types: &[String],
-    upgrade_mode: bool,
+    sanctity: CoverArtSanctity,
     _corpus_root: &std::path::Path,
     queue: &mut VecDeque<CaaQueueItem>,
 ) {
@@ -1042,8 +1043,8 @@ fn populate_cover_art_queue(
             None
         };
 
-        // Skip if all wanted art already exists and we're not in upgrade mode
-        if !upgrade_mode {
+        // In DontTouch mode, skip releases that already have all wanted art
+        if sanctity == CoverArtSanctity::DontTouch {
             let front_ok = !wants_front || existing_front.is_some();
             let back_ok = !wants_back || existing_back.is_some();
             if front_ok && back_ok {
@@ -1089,15 +1090,15 @@ fn get_existing_art_dims(db: &Database, dir: &str, role: &str) -> Option<(u32, u
 /// Execute a cover art fetch for a single release.
 ///
 /// Fetches the CAA listing, downloads wanted image types, and writes sidecar
-/// files to the corpus directory. In upgrade mode, compares new images with
-/// existing ones via perceptual hashing and only replaces visual matches.
+/// files to the corpus directory. Sanctity controls existing-art behavior:
+/// DontTouch skips, ReplaceIfBetter uses perceptual hashing, ReplaceAlways overwrites.
 async fn execute_cover_art_fetch(
     client: &CoverArtClient,
     release_id: &str,
     target_dir: &str,
     corpus_root: &std::path::Path,
     stash_root: &std::path::Path,
-    upgrade_mode: bool,
+    sanctity: CoverArtSanctity,
     wanted_types: &[String],
     existing_front: Option<(u32, u32)>,
     existing_back: Option<(u32, u32)>,
@@ -1141,9 +1142,17 @@ async fn execute_cover_art_fetch(
                 _ => continue,
             };
 
-            if existing_dims.is_some() && !upgrade_mode {
-                skipped += 1;
-                continue;
+            // Existing art: behavior depends on sanctity setting
+            if existing_dims.is_some() {
+                match sanctity {
+                    CoverArtSanctity::DontTouch => {
+                        skipped += 1;
+                        continue;
+                    }
+                    CoverArtSanctity::ReplaceIfBetter | CoverArtSanctity::ReplaceAlways => {
+                        // Need to download to compare or replace
+                    }
+                }
             }
 
             // Download the original image
@@ -1164,34 +1173,16 @@ async fn execute_cover_art_fetch(
             let abs_dir = corpus_root.join(target_dir);
             let abs_path = abs_dir.join(&filename);
 
-            // Upgrade mode: compare with existing
-            if let Some(_dims) = existing_dims {
-                if upgrade_mode {
-                    // Read existing file for perceptual comparison
-                    let existing_path = find_existing_sidecar(&abs_dir, sidecar_name);
-                    if let Some(ref ep) = existing_path {
+            // Handle existing art replacement
+            if existing_dims.is_some() {
+                let existing_path = find_existing_sidecar(&abs_dir, sidecar_name);
+                if let Some(ref ep) = existing_path {
+                    if sanctity == CoverArtSanctity::ReplaceIfBetter {
+                        // Perceptual comparison: only replace if visually identical
                         match std::fs::read(ep) {
                             Ok(existing_bytes) => {
                                 match mm_utils::image_hash::is_visual_match(&existing_bytes, &downloaded.bytes) {
-                                    Ok(true) => {
-                                        // Same image, higher res — stash old and write new
-                                        if let Err(e) = stash_file(ep, stash_root, corpus_root) {
-                                            crate::logging::log_error(format!(
-                                                "[FETCH] Failed to stash {}: {:#}", ep.display(), e
-                                            ));
-                                            skipped += 1;
-                                            continue;
-                                        }
-                                        if let Err(e) = write_sidecar(&abs_path, &downloaded.bytes) {
-                                            crate::logging::log_error(format!(
-                                                "[FETCH] Failed to write upgraded cover art: {:#}", e
-                                            ));
-                                            skipped += 1;
-                                            continue;
-                                        }
-                                        upgraded += 1;
-                                        continue;
-                                    }
+                                    Ok(true) => {} // proceed to stash + write below
                                     Ok(false) => {
                                         crate::logging::log_general(format!(
                                             "[FETCH] CAA art for {} differs visually from existing, skipping",
@@ -1220,13 +1211,28 @@ async fn execute_cover_art_fetch(
                             }
                         }
                     }
-                } else {
+                    // ReplaceAlways: skip comparison, just stash and replace
+                    // ReplaceIfBetter: comparison passed, stash and replace
+                    if let Err(e) = stash_file(ep, stash_root, corpus_root) {
+                        crate::logging::log_error(format!(
+                            "[FETCH] Failed to stash {}: {:#}", ep.display(), e
+                        ));
+                        skipped += 1;
+                        continue;
+                    }
+                }
+                if let Err(e) = write_sidecar(&abs_path, &downloaded.bytes) {
+                    crate::logging::log_error(format!(
+                        "[FETCH] Failed to write upgraded cover art: {:#}", e
+                    ));
                     skipped += 1;
                     continue;
                 }
+                upgraded += 1;
+                continue;
             }
 
-            // Write new sidecar
+            // Write new sidecar (no existing art)
             if let Err(e) = write_sidecar(&abs_path, &downloaded.bytes) {
                 crate::logging::log_error(format!(
                     "[FETCH] Failed to write cover art to {}: {:#}", abs_path.display(), e

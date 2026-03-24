@@ -360,15 +360,9 @@ fn apply_generic_field(config: &mut Config, block: &str, field: &str, val: &str)
                 return true;
             }
         }
-        (Opinions::KDL_BLOCK_EXTERNAL_MATCHING, ExternalMatchingConfig::KDL_COVER_ART_FETCH) => {
-            if let Ok(b) = parse_bool(val) {
-                config.opinions.external_matching.cover_art_fetch = b;
-                return true;
-            }
-        }
-        (Opinions::KDL_BLOCK_EXTERNAL_MATCHING, ExternalMatchingConfig::KDL_COVER_ART_UPGRADE) => {
-            if let Ok(b) = parse_bool(val) {
-                config.opinions.external_matching.cover_art_upgrade = b;
+        (Opinions::KDL_BLOCK_EXTERNAL_MATCHING, ExternalMatchingConfig::KDL_COVER_ART_SANCTITY) => {
+            if let Some(sanctity) = CoverArtSanctity::from_str(val) {
+                config.opinions.external_matching.cover_art_sanctity = sanctity;
                 return true;
             }
         }

@@ -5,11 +5,12 @@
 
 // Re-export all config types from mm-meta
 pub use mm_meta::config::{
-    read_shared_config, AlbumArtOpinions, CanonicalizationOpinions, Config, CreditRoutingConfig,
-    DiscExtractionOpinions, DuplicateAnalysisOpinions, ExternalMatchingConfig,
-    HealthDetectionOpinions, MbTagNameConfig, Opinions, PackingWeights, PerformanceOpinions,
-    QualityResolutionOpinions, RelationRouting, ReleasePackingOpinions, SharedConfig,
-    SidecarDeployMode, SourceDir, StartupOpinions, StartupView, TagSplittingOpinions,
+    read_shared_config, AlbumArtOpinions, CanonicalizationOpinions, Config, CoverArtSanctity,
+    CreditRoutingConfig, DiscExtractionOpinions, DuplicateAnalysisOpinions,
+    ExternalMatchingConfig, HealthDetectionOpinions, MbTagNameConfig, Opinions, PackingWeights,
+    PerformanceOpinions, QualityResolutionOpinions, RelationRouting, ReleasePackingOpinions,
+    SharedConfig, SidecarDeployMode, SourceDir, StartupOpinions, StartupView,
+    TagSplittingOpinions,
 };
 
 // Config validation (filesystem checks, source path containment) previously lived here.

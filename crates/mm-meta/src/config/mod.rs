@@ -484,10 +484,9 @@ pub struct ExternalMatchingConfig {
     pub tag_templates: Vec<(String, String)>,
     pub credit_routing: CreditRoutingConfig,
     pub mb_tag_names: MbTagNameConfig,
-    /// Master switch for Cover Art Archive fetching.
-    pub cover_art_fetch: bool,
-    /// Re-fetch cover art if higher-resolution is available.
-    pub cover_art_upgrade: bool,
+    /// How to handle existing sidecar art when CAA art is available.
+    /// Only governs replacement behavior — missing art is always fetched.
+    pub cover_art_sanctity: CoverArtSanctity,
     /// Which CAA image types to download (e.g. "Front", "Back").
     pub cover_art_types: Vec<String>,
 }
@@ -505,8 +504,7 @@ impl Default for ExternalMatchingConfig {
             tag_templates: Vec::new(),
             credit_routing: CreditRoutingConfig::default(),
             mb_tag_names: MbTagNameConfig::default(),
-            cover_art_fetch: false,
-            cover_art_upgrade: false,
+            cover_art_sanctity: CoverArtSanctity::default(),
             cover_art_types: vec!["Front".to_string(), "Back".to_string()],
         }
     }
@@ -524,8 +522,7 @@ impl ExternalMatchingConfig {
     pub const KDL_PREFERRED_LOCALES: &str = "preferred-locales";
     pub const KDL_TAG_TEMPLATES: &str = "tag-templates";
     pub const KDL_CREDIT_ROUTING: &str = "credit-routing";
-    pub const KDL_COVER_ART_FETCH: &str = "cover-art-fetch";
-    pub const KDL_COVER_ART_UPGRADE: &str = "cover-art-upgrade";
+    pub const KDL_COVER_ART_SANCTITY: &str = "cover-art-sanctity";
     pub const KDL_COVER_ART_TYPES: &str = "cover-art-types";
 }
 
@@ -548,6 +545,40 @@ impl Default for DiscExtractionOpinions {
 impl DiscExtractionOpinions {
     pub const KDL_DISC_TAG_NAME: &str = "disc-tag-name";
     pub const KDL_MAP_LETTERS: &str = "map-letters-to-numbers";
+}
+
+/// How to handle existing sidecar art when Cover Art Archive has art available.
+///
+/// Only governs replacement behavior — missing art is always fetched regardless.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub enum CoverArtSanctity {
+    /// Never replace existing art. Only fetch for releases with no sidecar.
+    #[default]
+    DontTouch,
+    /// Replace existing art if CAA has a higher-res visually-identical version.
+    /// Stashes the old file before replacing.
+    ReplaceIfBetter,
+    /// Always replace existing art with CAA version. Stashes the old file.
+    ReplaceAlways,
+}
+
+impl CoverArtSanctity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DontTouch => "dont-touch",
+            Self::ReplaceIfBetter => "replace-if-better",
+            Self::ReplaceAlways => "replace-always",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "dont-touch" => Some(Self::DontTouch),
+            "replace-if-better" => Some(Self::ReplaceIfBetter),
+            "replace-always" => Some(Self::ReplaceAlways),
+            _ => None,
+        }
+    }
 }
 
 /// Controls whether sidecar images are deployed alongside audio files.

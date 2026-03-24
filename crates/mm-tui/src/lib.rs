@@ -587,13 +587,11 @@ impl App {
         let cover_art_active = ws.is_cover_art_fetch_active;
         let config = self.config();
         let singles_before_incompletes = config.opinions.release_packing.singles_before_incompletes;
-        let cover_art_enabled = config.opinions.external_matching.cover_art_fetch;
         let mut data = external_match_view::ExternalMatchesViewData::new(
             fetch_active,
             has_api_key,
             singles_before_incompletes,
             cover_art_active,
-            cover_art_enabled,
         );
         let ext_data = self.query(mm_meta::domain_queries::GetExternalMatches);
         data.update(ext_data);

@@ -1816,20 +1816,13 @@ impl Witch {
 
     /// Request a cover art fetch from the Cover Art Archive.
     ///
-    /// No API key needed (CAA is public). Requires `cover_art_fetch` enabled
-    /// in config. Lazy-spawns the external fetch thread if needed.
-    /// Returns `Err(reason)` if the fetch cannot start.
+    /// No API key needed (CAA is public). Lazy-spawns the external fetch
+    /// thread if needed. Returns `Err(reason)` if the fetch cannot start.
     pub fn request_cover_art_fetch(&mut self) -> Result<(), String> {
         let shared_config = match self.shared_config {
             Some(ref sc) => sc.clone(),
             None => return Err("Server config not yet available".to_string()),
         };
-        {
-            let config = shared_config.read().expect("SharedConfig lock poisoned");
-            if !config.opinions.external_matching.cover_art_fetch {
-                return Err("Cover art fetching is not enabled in config".to_string());
-            }
-        }
         // Lazy-spawn the fetch thread if needed
         if self.external_fetch.is_none() {
             let (handle, rx) = external_fetch::ExternalFetchHandle::spawn(shared_config);

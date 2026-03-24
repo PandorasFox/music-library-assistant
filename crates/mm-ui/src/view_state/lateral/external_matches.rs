@@ -136,8 +136,6 @@ pub struct ExternalMatchesViewData {
     pub singles_before_incompletes: bool,
     /// Whether a cover art fetch is currently active.
     pub cover_art_active: bool,
-    /// Whether the `cover_art_fetch` config option is enabled.
-    pub cover_art_enabled: bool,
     /// Latest cover art fetch progress snapshot.
     pub cover_art_progress: Option<mm_meta::witch_types::CoverArtProgress>,
 }
@@ -152,7 +150,6 @@ impl ExternalMatchesViewData {
         has_api_key: bool,
         singles_before_incompletes: bool,
         cover_art_active: bool,
-        cover_art_enabled: bool,
     ) -> Self {
         let mut data = Self {
             cached_data: None,
@@ -162,7 +159,6 @@ impl ExternalMatchesViewData {
             fetch_progress: None,
             singles_before_incompletes,
             cover_art_active,
-            cover_art_enabled,
             cover_art_progress: None,
         };
         data.rebuild_items();
@@ -601,25 +597,7 @@ impl ExternalMatchesViewData {
             Line::from(""),
         ];
 
-        if !self.cover_art_enabled {
-            lines.push(Line::from(vec![
-                Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
-                Span::styled("Disabled", Style::default().fg(Color::DarkGray)),
-            ]));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "Enable cover_art_fetch in Config",
-                Style::default().fg(Color::DarkGray),
-            )));
-            lines.push(Line::from(Span::styled(
-                "to download album art from the",
-                Style::default().fg(Color::DarkGray),
-            )));
-            lines.push(Line::from(Span::styled(
-                "Cover Art Archive.",
-                Style::default().fg(Color::DarkGray),
-            )));
-        } else if self.cover_art_active {
+        if self.cover_art_active {
             if let Some(ref p) = self.cover_art_progress {
                 lines.push(Line::from(vec![
                     Span::styled("Releases: ", Style::default().fg(Color::DarkGray)),
@@ -814,7 +792,7 @@ impl ExternalMatchesViewData {
                 }
             }
             NavigableEntry::CoverArtAction => {
-                if self.cover_art_enabled && !self.cover_art_active {
+                if !self.cover_art_active {
                     Some(ExternalMatchesAction::RequestCoverArt)
                 } else {
                     None

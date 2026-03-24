@@ -25,7 +25,6 @@ pub(crate) fn render(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewS
         fetch_progress: state.data.fetch_progress.as_ref(),
         cached_data: state.data.cached_data.as_ref(),
         cover_art_active: state.data.cover_art_active,
-        cover_art_enabled: state.data.cover_art_enabled,
         cover_art_progress: state.data.cover_art_progress.as_ref(),
     };
 
@@ -51,7 +50,6 @@ struct RenderSnapshot<'a> {
     fetch_progress: Option<&'a mm_meta::witch_types::FetchProgress>,
     cached_data: Option<&'a mm_meta::views::ExternalMatchesData>,
     cover_art_active: bool,
-    cover_art_enabled: bool,
     cover_art_progress: Option<&'a mm_meta::witch_types::CoverArtProgress>,
 }
 
@@ -182,9 +180,7 @@ fn render_pack_releases_line(is_cursor: bool, snap: &RenderSnapshot) -> Line<'st
 }
 
 fn render_cover_art_line(is_cursor: bool, snap: &RenderSnapshot) -> Line<'static> {
-    let (status_label, status_color) = if !snap.cover_art_enabled {
-        ("Disabled".to_string(), Color::DarkGray)
-    } else if snap.cover_art_active {
+    let (status_label, status_color) = if snap.cover_art_active {
         if let Some(p) = &snap.cover_art_progress {
             (
                 format!(
@@ -200,7 +196,7 @@ fn render_cover_art_line(is_cursor: bool, snap: &RenderSnapshot) -> Line<'static
         ("Idle".to_string(), Color::Green)
     };
 
-    let disabled = !snap.cover_art_enabled || snap.cover_art_active;
+    let disabled = snap.cover_art_active;
     let (marker, label_style) = cursor_marker_style(is_cursor, disabled);
 
     Line::from(vec![

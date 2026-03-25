@@ -806,6 +806,109 @@ pub fn execute_update_deploy_signals(
     Result::success(computation, Vec::new())
 }
 
+// ============================================================================
+// Sidecar Stash & Replace
+// ============================================================================
+
+/// Stash inferior sidecar images and write their CAA replacements.
+///
+/// For each replacement: stat old file → move to stash → write new bytes →
+/// clear all corpus signals for old inode → drop old inode from index.
+///
+/// This is safe as a computation because sidecar images don't participate in
+/// the tag/audio/fingerprint signal graph — no downstream computations depend
+/// on their inode-keyed signals.
+pub fn execute_stash_and_replace_sidecars(
+    snapshot: &crate::witch::types::HadesSnapshot,
+    replacements: &[mm_meta::computations::derivation::SidecarReplacement],
+    witness: &ComputationWitness,
+) -> Result {
+    let computation = Computation::StashAndReplaceSidecars {
+        replacements: replacements.to_vec(),
+    };
+
+    let sender = require_sender!(computation);
+
+    let config = match snapshot.config.as_deref() {
+        Some(c) => c,
+        None => {
+            return Result::failure(computation, "Config not available (pre-setup)".to_string());
+        }
+    };
+    let stash_root = config.stash_dir();
+
+    let mut stashed = 0usize;
+    let mut written = 0usize;
+    let mut errors = 0usize;
+
+    for r in replacements {
+        // 1. Discover inode before the move
+        let inode = match std::fs::metadata(&r.existing_path) {
+            Ok(m) => m.ino() as i64,
+            Err(e) => {
+                crate::logging::log_error(format!(
+                    "[COMPUTE] StashAndReplaceSidecars: stat failed for {}: {}",
+                    r.existing_path.display(), e,
+                ));
+                errors += 1;
+                continue;
+            }
+        };
+
+        // 2. Move old sidecar to stash (cover-art subdirectory)
+        if let Err(e) = crate::meta::mutations::file_ops::execute_move_to_stash(
+            &r.existing_path, "cover-art", &stash_root,
+        ) {
+            crate::logging::log_error(format!(
+                "[COMPUTE] StashAndReplaceSidecars: stash failed for {}: {:#}",
+                r.existing_path.display(), e,
+            ));
+            errors += 1;
+            continue;
+        }
+        stashed += 1;
+
+        // 3. Write new sidecar bytes.
+        //    NOTE: not atomic w.r.t. disk-full — if the FS fills up after stash,
+        //    old file is safely stashed but new one may not land.
+        if let Some(parent) = r.new_path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                crate::logging::log_error(format!(
+                    "[COMPUTE] StashAndReplaceSidecars: mkdir failed for {}: {}",
+                    parent.display(), e,
+                ));
+                errors += 1;
+                continue;
+            }
+        }
+        if let Err(e) = std::fs::write(&r.new_path, &r.new_bytes) {
+            crate::logging::log_error(format!(
+                "[COMPUTE] StashAndReplaceSidecars: write failed for {}: {}",
+                r.new_path.display(), e,
+            ));
+            errors += 1;
+            continue;
+        }
+        written += 1;
+
+        // 4. Clean up DB state for the old inode
+        sender.clear_all_corpus_signals(inode, witness);
+        sender.drop_from_index(inode, "corpus", witness);
+
+        log_general(format!(
+            "[COMPUTE] StashAndReplaceSidecars: stashed {} (inode {}), wrote {}",
+            r.existing_path.display(), inode, r.new_path.display(),
+        ));
+    }
+
+    log_general(format!(
+        "[COMPUTE] StashAndReplaceSidecars: {} stashed, {} written, {} errors",
+        stashed, written, errors,
+    ));
+
+    Result::success(computation, Vec::new())
+}
+
 /// Clear library-side signals (LibraryLeftover, LibraryStale) for a library path.
 ///
 /// Constructs exact keys from the library path (O(1) instead of scanning all keys).

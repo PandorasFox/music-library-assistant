@@ -269,7 +269,11 @@ impl SignalWriteSender {
     }
 
     /// Drop a file from the index by inode, scoped to zone.
-    pub fn drop_from_index(&self, inode: i64, zone: &str, _witness: &MutationExecutionWitness) {
+    ///
+    /// Accepts any `SignalWitness` (mutation or computation context). Widened
+    /// from `MutationExecutionWitness` to allow `StashAndReplaceSidecars`
+    /// (a computation) to drop stashed sidecar inodes from the index.
+    pub fn drop_from_index(&self, inode: i64, zone: &str, _witness: &impl SignalWitness) {
         self.mark_enqueued();
         let _ = self.tx.send(DbWriteOp::DropFromIndex {
             inode,

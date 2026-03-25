@@ -63,6 +63,11 @@ pub(in crate::witch) enum SchedulerMessage {
     CoverArtProgress(CoverArtProgress),
     /// Cover art fetch complete.
     CoverArtDone(CoverArtProgress),
+    /// Sidecar images that need stash-and-replace via computation.
+    ///
+    /// Sent per-release when the CAA fetch decides to replace existing art.
+    /// The Witch queues a `StashAndReplaceSidecars` derivation computation.
+    SidecarReplacements(Vec<mm_meta::computations::derivation::SidecarReplacement>),
 }
 
 /// Command from Witch to scheduler.

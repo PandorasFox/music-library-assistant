@@ -31,6 +31,21 @@ pub struct ObservedLibraryFile {
 // Derivation Computation Enum
 // ============================================================================
 
+/// A sidecar image that the CAA fetch wants to replace with a better version.
+///
+/// Carries the downloaded bytes from the scheduler thread to a computation
+/// that handles the full lifecycle: stash old → write new → clean up DB state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SidecarReplacement {
+    /// Absolute path of the existing sidecar to stash.
+    pub existing_path: PathBuf,
+    /// Absolute path where the new sidecar should be written.
+    /// May differ from `existing_path` if the format changed (e.g. jpg → png).
+    pub new_path: PathBuf,
+    /// The downloaded image bytes.
+    pub new_bytes: Vec<u8>,
+}
+
 /// A computation that runs during the Derivation phase.
 ///
 /// These computations derive first-level signals from corpus observations.
@@ -85,6 +100,20 @@ pub enum Computation {
         /// Library path (destination of HardLink)
         library_path: PathBuf,
     },
+
+    /// Stash inferior sidecar images and write their CAA replacements.
+    ///
+    /// Handles the full lifecycle for sidecar replacement: stash old file to
+    /// the cover-art stash, write new bytes, clear signals and drop old inode
+    /// from the index. This is a computation (not a mutation) because sidecar
+    /// images don't participate in the tag/audio/fingerprint signal graph.
+    ///
+    /// NOTE: The write of the new sidecar is not atomic w.r.t. disk-full — if
+    /// the FS fills up between stash and write, the old file is safely stashed
+    /// but the new one may not land. Acceptable for now.
+    StashAndReplaceSidecars {
+        replacements: Vec<SidecarReplacement>,
+    },
 }
 
 impl Computation {
@@ -97,6 +126,7 @@ impl Computation {
             Computation::UpdateLibraryFileSignals { .. } => "Updating library file signals",
             Computation::ReconcileLibraryFiles { .. } => "Reconciling library files",
             Computation::UpdateDeploySignals { .. } => "Updating deploy signals",
+            Computation::StashAndReplaceSidecars { .. } => "Stashing and replacing sidecar images",
         }
     }
 }

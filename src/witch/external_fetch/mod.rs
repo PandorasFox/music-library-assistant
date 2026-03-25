@@ -153,7 +153,6 @@ async fn scheduler_loop(
                         if let Some(item) = cab.queue.pop_front() {
                             let client = cab.client.clone();
                             let corpus_root = cab.corpus_root.clone();
-                            let stash_root = cab.stash_root.clone();
                             let sanctity = item.sanctity;
                             let wanted_types = cab.wanted_types.clone();
                             let release_id = item.release_id.clone();
@@ -164,7 +163,7 @@ async fn scheduler_loop(
 
                             caa_in_flight.spawn(async move {
                                 let result = execute_cover_art_fetch(
-                                    &client, &release_id, &target_dir, &corpus_root, &stash_root,
+                                    &client, &release_id, &target_dir, &corpus_root,
                                     sanctity, &wanted_types, existing_front, existing_back,
                                 ).await;
                                 (result, release_id)
@@ -392,6 +391,13 @@ async fn scheduler_loop(
                     );
                 }
 
+                // Send sidecar replacements to Witch for computation-level handling
+                if !result.sidecar_replacements.is_empty() {
+                    let _ = message_tx.send(SchedulerMessage::SidecarReplacements(
+                        result.sidecar_replacements,
+                    ));
+                }
+
                 if let Some(ref mut cab) = caa_batch {
                     cab.progress.processed += 1;
                     cab.progress.images_written += result.images_written;
@@ -444,7 +450,6 @@ struct CoverArtBatch {
     client: CoverArtClient,
     progress: CoverArtProgress,
     corpus_root: std::path::PathBuf,
-    stash_root: std::path::PathBuf,
     wanted_types: Vec<String>,
 }
 
@@ -469,6 +474,8 @@ struct CoverArtResult {
     cache_status: &'static str,
     cache_json: Option<String>,
     image_count: i64,
+    /// Sidecar replacements that need computation-level stash+write+cleanup.
+    sidecar_replacements: Vec<mm_meta::computations::derivation::SidecarReplacement>,
 }
 
 /// Initialize a new batch from config + DB state.
@@ -573,14 +580,13 @@ fn extend_acoustid_queue(
 
 /// Initialize a cover art fetch batch from config + DB state.
 fn init_cover_art_batch(db: &Database, shared_config: &SharedConfig) -> CoverArtBatch {
-    let (wanted_types, corpus_root, stash_root) = {
+    let (wanted_types, corpus_root) = {
         let config = shared_config.read().expect("SharedConfig lock poisoned");
         let em = &config.opinions.external_matching;
         let resolver = PathResolver::from_config(&config);
         (
             em.cover_art_types.clone(),
             resolver.corpus_dir(),
-            resolver.stash_dir(),
         )
     };
 
@@ -597,7 +603,6 @@ fn init_cover_art_batch(db: &Database, shared_config: &SharedConfig) -> CoverArt
         client: CoverArtClient::new(),
         progress,
         corpus_root,
-        stash_root,
         wanted_types,
     }
 }
@@ -1102,15 +1107,18 @@ fn get_existing_art_dims(db: &Database, dir: &str, role: &str) -> Option<(u32, u
 
 /// Execute a cover art fetch for a single release.
 ///
-/// Fetches the CAA listing, downloads wanted image types, and writes sidecar
-/// files to the corpus directory. Sanctity controls existing-art behavior:
+/// Fetches the CAA listing, downloads wanted image types, and writes new sidecar
+/// files to the corpus directory. When existing art needs replacement, the actual
+/// stash+write+cleanup is deferred to a `StashAndReplaceSidecars` computation
+/// (returned in `CoverArtResult::sidecar_replacements`).
+///
+/// Sanctity controls existing-art behavior:
 /// DontTouch skips, ReplaceIfBetter uses perceptual hashing, ReplaceAlways overwrites.
 async fn execute_cover_art_fetch(
     client: &CoverArtClient,
     release_id: &str,
     target_dir: &str,
     corpus_root: &std::path::Path,
-    stash_root: &std::path::Path,
     sanctity: CoverArtSanctity,
     wanted_types: &[String],
     existing_front: Option<(u32, u32)>,
@@ -1123,6 +1131,7 @@ async fn execute_cover_art_fetch(
             return CoverArtResult {
                 images_written: 0, images_skipped: 0, images_upgraded: 0,
                 cache_status: "not_found", cache_json: None, image_count: 0,
+                sidecar_replacements: Vec::new(),
             };
         }
         Err(e) => {
@@ -1132,6 +1141,7 @@ async fn execute_cover_art_fetch(
             return CoverArtResult {
                 images_written: 0, images_skipped: 0, images_upgraded: 0,
                 cache_status: "error", cache_json: None, image_count: 0,
+                sidecar_replacements: Vec::new(),
             };
         }
     };
@@ -1142,6 +1152,7 @@ async fn execute_cover_art_fetch(
     let mut written = 0usize;
     let mut skipped = 0usize;
     let mut upgraded = 0usize;
+    let mut sidecar_replacements = Vec::new();
 
     for image in &listing.images {
         for wanted_type in wanted_types {
@@ -1224,24 +1235,30 @@ async fn execute_cover_art_fetch(
                             }
                         }
                     }
-                    // ReplaceAlways: skip comparison, just stash and replace
-                    // ReplaceIfBetter: comparison passed, stash and replace
-                    if let Err(e) = stash_file(ep, stash_root, corpus_root) {
-                        crate::logging::log_error(format!(
-                            "[FETCH] Failed to stash {}: {:#}", ep.display(), e
-                        ));
-                        skipped += 1;
-                        continue;
-                    }
+                    // ReplaceAlways: skip comparison, just stash and replace.
+                    // ReplaceIfBetter: comparison passed, stash and replace.
+                    // Defer to StashAndReplaceSidecars computation for proper
+                    // lifecycle: stash old → write new → clear signals → drop index.
+                    sidecar_replacements.push(
+                        mm_meta::computations::derivation::SidecarReplacement {
+                            existing_path: ep.clone(),
+                            new_path: abs_path.clone(),
+                            new_bytes: downloaded.bytes,
+                        },
+                    );
+                    upgraded += 1;
+                    continue;
                 }
+                // existing_dims indicated art exists but file wasn't found on disk —
+                // just write the new sidecar directly (no stash needed).
                 if let Err(e) = write_sidecar(&abs_path, &downloaded.bytes) {
                     crate::logging::log_error(format!(
-                        "[FETCH] Failed to write upgraded cover art: {:#}", e
+                        "[FETCH] Failed to write cover art to {}: {:#}", abs_path.display(), e
                     ));
                     skipped += 1;
                     continue;
                 }
-                upgraded += 1;
+                written += 1;
                 continue;
             }
 
@@ -1268,6 +1285,7 @@ async fn execute_cover_art_fetch(
         cache_status: "found",
         cache_json,
         image_count,
+        sidecar_replacements,
     }
 }
 
@@ -1277,26 +1295,6 @@ fn write_sidecar(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(path, bytes)?;
-    Ok(())
-}
-
-/// Move an existing file to the stash, preserving corpus-relative path structure.
-fn stash_file(
-    file_path: &std::path::Path,
-    stash_root: &std::path::Path,
-    corpus_root: &std::path::Path,
-) -> anyhow::Result<()> {
-    use anyhow::Context;
-    let rel = file_path.strip_prefix(corpus_root)
-        .context("file not under corpus root")?;
-    let stash_dest = stash_root.join("cover-art").join(rel);
-    if let Some(parent) = stash_dest.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::rename(file_path, &stash_dest)?;
-    crate::logging::log_general(format!(
-        "[FETCH] Stashed old cover art: {} -> {}", file_path.display(), stash_dest.display()
-    ));
     Ok(())
 }
 

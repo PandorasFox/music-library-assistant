@@ -60,6 +60,9 @@ impl DerivationExecute for Computation {
                 library_path,
                 ctx.witness,
             ),
+            Computation::StashAndReplaceSidecars { replacements } => {
+                execute_stash_and_replace_sidecars(ctx.snapshot, replacements, ctx.witness)
+            }
         }
     }
 }

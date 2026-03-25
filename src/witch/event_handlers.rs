@@ -280,6 +280,20 @@ impl super::Witch {
                     handle.mark_cover_art_done();
                 }
             }
+            external_fetch::SchedulerMessage::SidecarReplacements(replacements) => {
+                crate::logging::log_general(format!(
+                    "[WITCH] Queuing stash-and-replace for {} sidecar(s)",
+                    replacements.len(),
+                ));
+                self.queue_computation_with_label(
+                    Computation::Derivation(
+                        crate::meta::computations::derivation::Computation::StashAndReplaceSidecars {
+                            replacements,
+                        },
+                    ),
+                    Some("Stash and replace sidecars".to_string()),
+                );
+            }
         }
     }
 

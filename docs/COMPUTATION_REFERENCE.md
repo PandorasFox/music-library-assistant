@@ -60,6 +60,7 @@ This follows the same pattern as `pending_mutation_phases` (used for two-stage d
 | UpdateCorpusFileSignals | Lightweight per-file signal update (post-mutation) |
 | UpdateLibraryFileSignals | Library-side signal updates |
 | UpdateDeploySignals | Update deployment status signals |
+| StashAndReplaceSidecars | Stash inferior sidecar images, write CAA replacements, clean up DB/signals |
 | WalkLibrary | Enumerate library directories, spawn per-directory scans |
 | ScanLibraryDirectory | Scan library directory, return observed files to Witch |
 | ReconcileLibraryFiles | Reconcile observed library files against DB (set reconciliation) |
@@ -121,6 +122,7 @@ This follows the same pattern as `pending_mutation_phases` (used for two-stage d
 | UpdateCorpusFileSignals | — | FileInCorpus, UnindexedFile, MissingFile, HealthyFile | FileInCorpus, UnindexedFile, MissingFile, HealthyFile |
 | UpdateLibraryFileSignals | — | — | LibraryLeftover, LibraryStale |
 | UpdateDeploySignals | — | DeployedHealthy | DeployReady, LibraryLeftover, LibraryStale |
+| StashAndReplaceSidecars | — | — | All corpus signals for stashed inodes | Moves old sidecar to cover-art stash, writes new bytes, drops old inode from files index. Queued by Witch when CAA fetch scheduler reports sidecar replacements. |
 | WalkLibrary | ScanLibraryDirectory × N | — | — |
 | ScanLibraryDirectory | — | — | — | Returns observed library files to the Witch via Result (accumulated in tick()). No direct DB writes. |
 | ReconcileLibraryFiles | — | — | — | Set reconciliation: compares observed files against DB. Upserts new/changed files, deletes stale files, skips unchanged. Queued by the Witch after derivation stage 1 drains (two-stage derivation transition). |

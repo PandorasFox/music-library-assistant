@@ -999,13 +999,18 @@ fn populate_cover_art_queue(
 ) {
     use std::collections::HashMap;
 
-    // Get all optimal packing scores with their corpus paths
+    // Get directories for winning releases only (post-conflict-resolution).
+    // signal_packed_release contains the releases that actually won global
+    // assignment — release_packing_scores has ALL candidates including losers.
     let mut release_dirs: HashMap<String, String> = HashMap::new();
     let sql = r#"
         SELECT DISTINCT rps.release_id, f.path
         FROM release_packing_scores rps
         JOIN files f ON rps.inode = f.inode
         WHERE rps.is_optimal = 1 AND f.zone = 'corpus'
+          AND rps.release_id IN (
+            SELECT substr(key, instr(key, ':') + 1) FROM signal_packed_release
+          )
     "#;
     if let Ok(mut stmt) = db.conn().prepare(sql) {
         let _ = stmt.query_map([], |row| {

@@ -79,15 +79,23 @@ impl ImageFormat {
     }
 }
 
-/// Detect image format from a Content-Type header value.
-pub fn detect_format_from_content_type(content_type: Option<&str>) -> ImageFormat {
-    match content_type {
-        Some(ct) if ct.contains("image/jpeg") => ImageFormat::Jpeg,
-        Some(ct) if ct.contains("image/png") => ImageFormat::Png,
-        Some(ct) if ct.contains("image/webp") => ImageFormat::Webp,
-        Some(ct) if ct.contains("image/gif") => ImageFormat::Gif,
-        Some(ct) if ct.contains("image/bmp") => ImageFormat::Bmp,
-        _ => ImageFormat::Unknown,
+/// Detect image format from magic bytes (file signature).
+///
+/// This is the authoritative format check — Content-Type headers lie
+/// (especially when archive.org returns HTML error pages as 200 OK).
+pub fn detect_format_from_magic(bytes: &[u8]) -> ImageFormat {
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        ImageFormat::Jpeg
+    } else if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
+        ImageFormat::Png
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        ImageFormat::Webp
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        ImageFormat::Gif
+    } else if bytes.starts_with(b"BM") {
+        ImageFormat::Bmp
+    } else {
+        ImageFormat::Unknown
     }
 }
 
@@ -134,8 +142,9 @@ impl CoverArtClient {
 
     /// Download a cover art image from its full URL.
     ///
-    /// Follows redirects (CAA returns 307 to archive.org). Detects format
-    /// from the Content-Type response header.
+    /// Follows redirects (CAA returns 307 to archive.org). Validates the
+    /// response is actually an image via magic bytes — archive.org is known
+    /// to return HTML error pages as 200 OK during outages.
     pub async fn download_image(&self, url: &str) -> Result<DownloadedImage> {
         let resp = self
             .client
@@ -149,19 +158,19 @@ impl CoverArtClient {
             anyhow::bail!("CAA image download returned status {status} for {url}");
         }
 
-        let content_type = resp
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-
-        let format = detect_format_from_content_type(content_type.as_deref());
-
         let bytes = resp
             .bytes()
             .await
             .context("failed to read CAA image bytes")?
             .to_vec();
+
+        let format = detect_format_from_magic(&bytes);
+        if format == ImageFormat::Unknown {
+            anyhow::bail!(
+                "CAA returned non-image response for {url} (first bytes: {:02X?})",
+                &bytes[..bytes.len().min(16)]
+            );
+        }
 
         Ok(DownloadedImage { bytes, format })
     }

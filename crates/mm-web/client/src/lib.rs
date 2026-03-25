@@ -446,11 +446,12 @@ async fn load_view_for_route(route: &Route) -> Result<Node, JsValue> {
     match route {
         // -- Lateral views --
         Route::Health(_) => {
-            let insights = api::get_insights().await.ok();
-            if let Some(ref ins) = insights {
-                Ok(views::render_insights_content(ins))
-            } else {
-                Ok(html::span().class("mm-kv__val").text("Loading insights\u{2026}").into())
+            match api::get_insights().await {
+                Ok(ins) => Ok(views::render_insights_content(&ins)),
+                Err(_) => Ok(html::span()
+                    .class("mm-kv__val mm-kv__val--error")
+                    .text("Failed to load insights (server may be busy — will retry on next status push)")
+                    .into()),
             }
         }
         Route::Config(_) => {
@@ -984,9 +985,12 @@ async fn do_login() -> Result<(), JsValue> {
 
     match api::login(&user_el.value(), &pass_el.value()).await {
         Ok(_) => {
-            start_event_stream();
+            // Navigate first, then start the event stream. load_from_hash is
+            // independent of the WS — a slow/failing WS connection should not
+            // block or revert a successful login.
             navigate_to(&Route::Health(Default::default()));
             load_from_hash().await?;
+            start_event_stream();
             Ok(())
         }
         Err(e) => {

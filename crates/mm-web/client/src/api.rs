@@ -6,7 +6,8 @@
 //! Typed functions deserialize into mm-meta structs where possible, so the
 //! compiler catches field name mismatches rather than silently rendering nothing.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 use serde::de::DeserializeOwned;
 use wasm_bindgen::prelude::*;
@@ -347,19 +348,37 @@ pub async fn stage_action(binding: &serde_json::Value) -> Result<serde_json::Val
 }
 
 // ============================================================================
-// WebSocket event stream
+// WebSocket event stream (with reconnection)
 // ============================================================================
+
+/// Backoff delays in milliseconds for reconnection attempts.
+const RECONNECT_DELAYS: &[i32] = &[1_000, 2_000, 4_000, 8_000, 16_000];
 
 thread_local! {
     static EVENT_WS: RefCell<Option<web_sys::WebSocket>> = const { RefCell::new(None) };
+    /// Stored callback so reconnection can reuse it without re-capturing.
+    static WS_CALLBACK: RefCell<Option<Rc<dyn Fn(WitchStatus)>>> = const { RefCell::new(None) };
+    /// Consecutive failed reconnection attempts (reset on first successful message).
+    static RECONNECT_ATTEMPT: Cell<u32> = const { Cell::new(0) };
 }
 
 /// Open a WebSocket to `/ws?token=<token>` for server-pushed events.
 ///
 /// `on_status` is called with each pushed `WitchStatus` JSON string.
-/// On close or error, redirects to login and invalidates the session.
+/// On close, attempts reconnection with exponential backoff. Only redirects
+/// to login if the token has been invalidated (e.g. by a 401 on an HTTP request)
+/// or reconnection attempts are exhausted.
 pub fn start_event_stream(on_status: impl Fn(WitchStatus) + 'static) {
     stop_event_stream();
+    let callback = Rc::new(on_status);
+    WS_CALLBACK.with(|cell| *cell.borrow_mut() = Some(callback.clone()));
+    RECONNECT_ATTEMPT.with(|cell| cell.set(0));
+    connect_ws(callback);
+}
+
+/// Internal: establish a WebSocket connection using the stored token.
+fn connect_ws(on_status: Rc<dyn Fn(WitchStatus)>) {
+    disconnect_ws();
 
     let token = match get_token() {
         Some(t) => t,
@@ -375,53 +394,106 @@ pub fn start_event_stream(on_status: impl Fn(WitchStatus) + 'static) {
 
     let ws = match web_sys::WebSocket::new(&url) {
         Ok(ws) => ws,
-        Err(_) => return,
+        Err(_) => {
+            // Constructor failed — schedule reconnection if we still have a token.
+            schedule_reconnect();
+            return;
+        }
     };
 
-    // onmessage: parse WitchEvent JSON → extract WitchStatus → call callback
-    let on_message = Closure::wrap(Box::new(move |e: web_sys::MessageEvent| {
-        if let Some(text) = e.data().as_string() {
-            if let Ok(event) = serde_json::from_str::<mm_meta::witch_types::WitchEvent>(&text) {
-                match event {
-                    mm_meta::witch_types::WitchEvent::StatusChanged(status) => {
-                        on_status(status);
+    // onmessage: parse WitchEvent JSON → extract WitchStatus → call callback.
+    // A successful message means the connection is healthy — reset backoff.
+    let on_message = {
+        let cb = on_status.clone();
+        Closure::wrap(Box::new(move |e: web_sys::MessageEvent| {
+            RECONNECT_ATTEMPT.with(|cell| cell.set(0));
+            if let Some(text) = e.data().as_string() {
+                if let Ok(event) =
+                    serde_json::from_str::<mm_meta::witch_types::WitchEvent>(&text)
+                {
+                    match event {
+                        mm_meta::witch_types::WitchEvent::StatusChanged(status) => {
+                            cb(status);
+                        }
                     }
                 }
             }
-        }
-    }) as Box<dyn Fn(web_sys::MessageEvent)>);
+        }) as Box<dyn Fn(web_sys::MessageEvent)>)
+    };
     ws.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
     on_message.forget();
 
-    // onclose: session lost → redirect to login
+    // onclose: attempt reconnection instead of immediately killing the session.
     let on_close = Closure::wrap(Box::new(|_: web_sys::CloseEvent| {
-        clear_token();
-        crate::redirect_to_login();
+        // If the token was already cleared (e.g. by a 401 on an HTTP fetch),
+        // redirect_to_login() was already called — nothing to do here.
+        if has_token() {
+            schedule_reconnect();
+        }
     }) as Box<dyn Fn(web_sys::CloseEvent)>);
     ws.set_onclose(Some(on_close.as_ref().unchecked_ref()));
     on_close.forget();
 
-    // onerror: treat as connection lost
-    let on_error = Closure::wrap(Box::new(|_: web_sys::ErrorEvent| {
-        // onclose will fire after onerror, which handles the redirect.
-        // No action needed here — avoid double redirect.
-    }) as Box<dyn Fn(web_sys::ErrorEvent)>);
+    // onerror: onclose fires after onerror — reconnection handled there.
+    let on_error = Closure::wrap(Box::new(|_: web_sys::ErrorEvent| {}) as Box<dyn Fn(web_sys::ErrorEvent)>);
     ws.set_onerror(Some(on_error.as_ref().unchecked_ref()));
     on_error.forget();
 
     EVENT_WS.with(|cell| *cell.borrow_mut() = Some(ws));
 }
 
-/// Close the event stream WebSocket if open.
-pub fn stop_event_stream() {
+/// Schedule a reconnection attempt after an exponential backoff delay.
+/// Gives up and redirects to login after exhausting all retry slots.
+fn schedule_reconnect() {
+    let attempt = RECONNECT_ATTEMPT.with(|cell| cell.get());
+    if attempt as usize >= RECONNECT_DELAYS.len() {
+        // Exhausted retries — session is likely dead.
+        clear_token();
+        crate::redirect_to_login();
+        return;
+    }
+
+    let delay = RECONNECT_DELAYS[attempt as usize];
+    RECONNECT_ATTEMPT.with(|cell| cell.set(attempt + 1));
+
+    let closure = Closure::once(move || {
+        // Re-check token — an HTTP 401 may have cleared it while we were waiting.
+        if !has_token() {
+            return;
+        }
+        let callback = WS_CALLBACK.with(|cell| cell.borrow().clone());
+        if let Some(cb) = callback {
+            connect_ws(cb);
+        }
+    });
+    web_sys::window()
+        .unwrap()
+        .set_timeout_with_callback_and_timeout_and_arguments_0(
+            closure.as_ref().unchecked_ref(),
+            delay,
+        )
+        .ok();
+    closure.forget();
+}
+
+/// Close the current WebSocket without clearing the stored callback.
+/// Used internally before reconnection.
+fn disconnect_ws() {
     EVENT_WS.with(|cell| {
         if let Some(ws) = cell.borrow_mut().take() {
-            // Clear handlers before closing to avoid redirect_to_login on intentional close
             ws.set_onclose(None);
             ws.set_onerror(None);
             ws.set_onmessage(None);
             let _ = ws.close();
         }
     });
+}
+
+/// Stop the event stream entirely — closes the WebSocket and clears
+/// reconnection state. Used on intentional logout / redirect_to_login.
+pub fn stop_event_stream() {
+    disconnect_ws();
+    WS_CALLBACK.with(|cell| cell.borrow_mut().take());
+    RECONNECT_ATTEMPT.with(|cell| cell.set(0));
 }
 

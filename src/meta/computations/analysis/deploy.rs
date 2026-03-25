@@ -615,11 +615,14 @@ fn classify_audio_stale(
         return DeployLifecyclePhase::Healthy;
     }
 
-    // Path mismatch — check for stale-conflict
+    // Path mismatch — check for stale-conflict or duplicate hardlink
     let expected_with_prefix = Path::new(library_name).join(&expected_relative);
     if let Some(&occupant_inode) = library_path_to_inode.get(&expected_with_prefix) {
         if occupant_inode != library_inode {
             return DeployLifecyclePhase::Healthy; // Stale-conflict: mask as healthy
+        } else {
+            // Same inode already exists at the correct path — this old path is cruft
+            return DeployLifecyclePhase::Leftover;
         }
     }
 
@@ -681,11 +684,14 @@ fn check_sidecar_stale(
         return DeployLifecyclePhase::Healthy;
     }
 
-    // Path mismatch — check for stale-conflict
+    // Path mismatch — check for stale-conflict or duplicate hardlink
     let expected_with_prefix = Path::new(library_name).join(&expected_relative);
     if let Some(&occupant_inode) = library_path_to_inode.get(&expected_with_prefix) {
         if occupant_inode != library_inode {
             return DeployLifecyclePhase::Healthy; // Stale-conflict: mask as healthy
+        } else {
+            // Same inode already exists at the correct path — this old path is cruft
+            return DeployLifecyclePhase::Leftover;
         }
     }
 

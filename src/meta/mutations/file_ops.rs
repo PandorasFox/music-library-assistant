@@ -312,10 +312,22 @@ pub fn execute_hard_link(source: &Path, destination: &Path) -> Result<()> {
             .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
     }
 
-    // Fail if destination already exists - MM never overwrites files
+    // If destination already exists, check if it's the same inode (already deployed).
+    // This handles ghost hardlinks: files on disk but missing from the DB index.
     if destination.exists() {
+        use std::os::unix::fs::MetadataExt;
+        let src_ino = fs::metadata(source)
+            .with_context(|| format!("Failed to stat source: {}", source.display()))?
+            .ino();
+        let dst_ino = fs::metadata(destination)
+            .with_context(|| format!("Failed to stat destination: {}", destination.display()))?
+            .ino();
+        if src_ino == dst_ino {
+            // Same inode — already correctly deployed, just not indexed.
+            return Ok(());
+        }
         return Err(anyhow::anyhow!(
-            "Destination already exists: {}",
+            "Destination already exists (different inode): {}",
             destination.display()
         ));
     }

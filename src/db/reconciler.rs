@@ -541,6 +541,9 @@ mod tests {
             }
         }
 
+        // Store blob schema versions (initialize_schema does this too)
+        t!(store_blob_versions(&conn));
+
         let plan = t!(ReconciliationPlan::compute(&conn));
         assert!(plan.is_empty(), "Fresh DB should need no reconciliation");
     }

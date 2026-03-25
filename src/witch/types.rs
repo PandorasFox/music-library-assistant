@@ -19,6 +19,71 @@ use crate::meta::recomputation::RecomputationScope;
 // Re-export protocol-visible types from mm-meta.
 pub use mm_meta::witch_types::*;
 
+// Re-export from mm-meta
+pub use mm_meta::computations::types::ObservedInodeMeta;
+
+// ============================================================================
+// Zone-Keyed Observation State
+// ============================================================================
+
+/// Authoritative inode→metadata maps for all watched zones.
+///
+/// The watcher thread populates these maps during initial scan and updates
+/// them incrementally via steady-state events. Derivation computations
+/// receive cloned snapshots.
+pub(super) struct ObservedInodes {
+    pub(super) corpus: HashMap<i64, ObservedInodeMeta>,
+    pub(super) library: HashMap<i64, ObservedInodeMeta>,
+}
+
+impl ObservedInodes {
+    pub(super) fn new() -> Self {
+        Self {
+            corpus: HashMap::new(),
+            library: HashMap::new(),
+        }
+    }
+
+    /// Runtime zone dispatch — returns the inode map for the given zone.
+    pub(super) fn for_zone_mut(&mut self, zone: crate::db::types::Zone) -> Option<&mut HashMap<i64, ObservedInodeMeta>> {
+        match zone {
+            crate::db::types::Zone::Corpus => Some(&mut self.corpus),
+            crate::db::types::Zone::Library => Some(&mut self.library),
+        }
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.corpus.clear();
+        self.library.clear();
+    }
+}
+
+/// Build the zone→root list for watcher start commands.
+///
+/// Always includes corpus. Includes library if its directory exists on disk,
+/// filtered to only configured deployment directories.
+pub(super) fn watched_zones(config: Option<&crate::config::Config>) -> Vec<super::fs_thread::WatchedZone> {
+    let resolver = crate::corpus::paths::get_resolver();
+    let mut zones = vec![super::fs_thread::WatchedZone {
+        zone: crate::db::types::Zone::Corpus,
+        root: resolver.corpus_dir(),
+        allowed_subdirs: None,
+    }];
+
+    let libraries_dir = resolver.libraries_dir();
+    if libraries_dir.is_dir() {
+        let allowed_subdirs = config
+            .map(crate::meta::computations::helpers::get_configured_library_names);
+        zones.push(super::fs_thread::WatchedZone {
+            zone: crate::db::types::Zone::Library,
+            root: libraries_dir,
+            allowed_subdirs,
+        });
+    }
+
+    zones
+}
+
 // ============================================================================
 // HadesSnapshot — Phase-Level Read-Only Data Envelope
 // ============================================================================

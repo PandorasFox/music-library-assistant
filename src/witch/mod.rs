@@ -29,6 +29,7 @@ mod execution;
 pub(crate) mod external_fetch;
 pub(crate) mod fs_thread;
 mod hades;
+mod pipeline_triggers;
 mod handle;
 pub(crate) mod socket;
 mod transaction;
@@ -1342,16 +1343,17 @@ impl Witch {
                     }
                 }
 
-                // If external data arrived, queue content analysis to derive
-                // ExternalMatch signals, and mark packing as needed for when
-                // the system next goes idle.
-                if self.session_recomputation_scope.contains(
-                    crate::meta::recomputation::RecomputationScope::EXTERNAL,
-                ) {
-                    let scope = std::mem::replace(
-                        &mut self.session_recomputation_scope,
-                        crate::meta::recomputation::RecomputationScope::EMPTY,
-                    );
+                // Check if external data arrived and decide what to do.
+                let post_fetch = pipeline_triggers::decide_post_fetch_actions(
+                    self.session_recomputation_scope,
+                );
+
+                if let Some(scope) = post_fetch.scope_for_content_analysis {
+                    // Consume the scope so it doesn't double-fire through
+                    // transition_to_completed's had_mutations check.
+                    self.session_recomputation_scope =
+                        crate::meta::recomputation::RecomputationScope::EMPTY;
+
                     crate::logging::log_general(
                         "[WITCH] External data arrived — queuing post-fetch content analysis",
                     );
@@ -1363,6 +1365,8 @@ impl Witch {
                         ),
                         Some("Post-fetch content analysis".to_string()),
                     );
+                }
+                if post_fetch.set_packing_needed {
                     self.packing_needed = true;
                 }
             }
@@ -1918,41 +1922,40 @@ impl Witch {
     }
 
     fn transition_to_idle(&mut self) {
-        // Auto-trigger AcoustID fetch after new files were indexed.
-        // The fetch scheduler handles "nothing to do" gracefully (sends AllDone immediately),
-        // so we don't pre-check — just let it figure out if there's work.
-        if self.files_indexed_this_cycle {
-            self.files_indexed_this_cycle = false;
+        let has_api_key = self
+            .read_config(|c| !c.opinions.external_matching.acoustid_api_key.is_empty())
+            .unwrap_or(false);
 
-            let has_api_key = self
-                .read_config(|c| !c.opinions.external_matching.acoustid_api_key.is_empty())
-                .unwrap_or(false);
+        let action = pipeline_triggers::decide_idle_action(
+            self.files_indexed_this_cycle,
+            self.packing_needed,
+            has_api_key,
+            self.is_external_fetch_active(),
+        );
 
-            if has_api_key && !self.is_external_fetch_active() {
+        // Always clear files_indexed flag — don't retry every 30s if fetch can't start
+        self.files_indexed_this_cycle = false;
+
+        match action {
+            pipeline_triggers::IdleAction::TriggerFetch => {
                 crate::logging::log_general(
                     "[WITCH] Auto-triggering AcoustID fetch after indexing",
                 );
                 let _ = self.request_external_fetch();
-                // Stay in Done — fetch will produce scheduler messages,
-                // and if new data arrives, more work will be queued.
-                return;
+                // Stay in Done — fetch will produce scheduler messages
+            }
+            pipeline_triggers::IdleAction::TriggerPacking => {
+                self.packing_needed = false;
+                crate::logging::log_general(
+                    "[WITCH] Auto-triggering release packing after external fetch",
+                );
+                self.request_release_packing();
+                // Stay in Done — packing work transitions to Working
+            }
+            pipeline_triggers::IdleAction::GoIdle => {
+                self.work_state = WorkState::Idle;
             }
         }
-
-        // Auto-trigger release packing after external fetch brought new data.
-        // The 30s LINGER_DURATION debounces this naturally — packing only runs
-        // after the system has been quiet for 30 seconds.
-        if self.packing_needed {
-            self.packing_needed = false;
-            crate::logging::log_general(
-                "[WITCH] Auto-triggering release packing after external fetch",
-            );
-            self.request_release_packing();
-            // Stay in Done — packing work transitions to Working.
-            return;
-        }
-
-        self.work_state = WorkState::Idle;
     }
 
     fn transition_to_working(&mut self) {

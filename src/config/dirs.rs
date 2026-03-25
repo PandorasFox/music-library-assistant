@@ -208,6 +208,7 @@ dir "web/releases/indie" {
                 path_schema: None,
                 enable_acoustid: None,
                 pinned_release: None,
+                cover_art_sanctity: None,
             },
             SourceDir {
                 path: PathBuf::from("web/releases/indie"),
@@ -217,6 +218,7 @@ dir "web/releases/indie" {
                 path_schema: None,
                 enable_acoustid: None,
                 pinned_release: None,
+                cover_art_sanctity: None,
             },
         ];
 
@@ -236,6 +238,7 @@ dir "web/releases/indie" {
             path_schema: None,
             enable_acoustid: Some(true),
             pinned_release: None,
+            cover_art_sanctity: None,
         }];
 
         let serialized = serialize_dirs_kdl(&dirs);
@@ -256,6 +259,7 @@ dir "web/releases/indie" {
             path_schema: Some(t!(parse_path_schema("$LABEL/$CATALOGNUMBER/$ARTIST - $TITLE"))),
             enable_acoustid: None,
             pinned_release: None,
+            cover_art_sanctity: None,
         }];
 
         let serialized = serialize_dirs_kdl(&dirs);
@@ -276,6 +280,7 @@ dir "web/releases/indie" {
                 path_schema: None,
                 enable_acoustid: None,
                 pinned_release: None,
+                cover_art_sanctity: None,
             },
             // Default: all None, carries no information
             SourceDir {
@@ -286,6 +291,7 @@ dir "web/releases/indie" {
                 path_schema: None,
                 enable_acoustid: None,
                 pinned_release: None,
+                cover_art_sanctity: None,
             },
             // Non-default: has an explicit bool
             SourceDir {
@@ -296,6 +302,7 @@ dir "web/releases/indie" {
                 path_schema: None,
                 enable_acoustid: None,
                 pinned_release: None,
+                cover_art_sanctity: None,
             },
         ];
 
@@ -340,6 +347,7 @@ dir "web/releases/indie" {
                 path_schema: None,
                 enable_acoustid: None,
                 pinned_release: None,
+                cover_art_sanctity: None,
             },
             SourceDir {
                 path: PathBuf::from("incoming/subdir"),
@@ -349,6 +357,7 @@ dir "web/releases/indie" {
                 path_schema: None,
                 enable_acoustid: None,
                 pinned_release: None,
+                cover_art_sanctity: None,
             },
         ]);
 
@@ -382,6 +391,7 @@ dir "web/releases/indie" {
                 path_schema: None,
                 enable_acoustid: None,
                 pinned_release: None,
+                cover_art_sanctity: None,
             },
             SourceDir {
                 path: PathBuf::from("incoming/override"),
@@ -391,6 +401,7 @@ dir "web/releases/indie" {
                 path_schema: None,
                 enable_acoustid: None,
                 pinned_release: None,
+                cover_art_sanctity: None,
             },
         ]);
 
@@ -414,6 +425,7 @@ dir "web/releases/indie" {
             path_schema: None,
             enable_acoustid: None,
             pinned_release: None,
+            cover_art_sanctity: None,
         }]);
 
         let resolved = t!(config
@@ -433,6 +445,7 @@ dir "web/releases/indie" {
             path_schema: None,
             enable_acoustid: None,
             pinned_release: None,
+            cover_art_sanctity: None,
         }]);
 
         assert!(config
@@ -450,6 +463,7 @@ dir "web/releases/indie" {
             path_schema: None,
             enable_acoustid: None,
             pinned_release: None,
+            cover_art_sanctity: None,
         }]);
 
         // DB paths are now zone-relative (no "corpus/" prefix)

@@ -612,13 +612,15 @@ pub fn execute_pack_releases(
     // row for the pinned release. This guarantees Stage 2 considers the pinned dir.
     let mut pinned_injected = 0usize;
     for (dir_path, release_id) in &pinned_dir_releases {
-        // Find all corpus inodes in this directory
+        // Find all corpus inodes in this directory (including subdirectories,
+        // since the config source dir may be a parent of the actual audio dirs).
+        let dir_prefix = format!("{}/", dir_path);
         for (inode, info) in &corpus_info {
-            if info.parent_dir == *dir_path {
+            if info.parent_dir == *dir_path || info.parent_dir.starts_with(&dir_prefix) {
                 let key = (release_id.as_str(), *inode);
                 if let std::collections::hash_map::Entry::Vacant(entry) = deduped.entry(key) {
                     let inode_path = corpus_inode_paths.get(inode).map(|s| s.as_str()).unwrap_or_default();
-                    let dir_file_count = dir_total_files.get(dir_path.as_str()).copied().unwrap_or(1);
+                    let dir_file_count = dir_total_files.get(info.parent_dir.as_str()).copied().unwrap_or(1);
                     entry.insert(
                         write_thread::PackingCandidateRow {
                             release_id: release_id.clone(),
@@ -889,12 +891,16 @@ fn run_directory_constrained_packing(
         }
     }
 
-    // Pinned release constraint: restrict to pinned dirs only
+    // Pinned release constraint: restrict to pinned dirs and their subdirectories.
+    // Source dirs in config may be parents of the actual audio file directories
+    // (e.g., config has "releases/steam/Portal 2 Soundtrack" but files live in
+    // "releases/steam/Portal 2 Soundtrack/FLAC").
     if !pinned_dirs_for_release.is_empty() {
-        dir_candidate_inodes.retain(|dir, _| pinned_dirs_for_release.contains(dir));
-        for pinned_dir in pinned_dirs_for_release {
-            dir_candidate_inodes.entry(pinned_dir.clone()).or_default();
-        }
+        dir_candidate_inodes.retain(|dir, _| {
+            pinned_dirs_for_release
+                .iter()
+                .any(|pinned| dir == pinned || dir.starts_with(&format!("{}/", pinned)))
+        });
     }
 
     let (target_dirs, optimal_pairs) = score_all_directories(

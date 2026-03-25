@@ -351,8 +351,10 @@ pub async fn stage_action(binding: &serde_json::Value) -> Result<serde_json::Val
 // WebSocket event stream (with reconnection)
 // ============================================================================
 
-/// Backoff delays in milliseconds for reconnection attempts.
-const RECONNECT_DELAYS: &[i32] = &[1_000, 2_000, 4_000, 8_000, 16_000];
+/// Backoff delays for reconnection attempts. After exhausting this table,
+/// retries continue at the last delay indefinitely — the WS event stream is
+/// a convenience push channel and its failure must never destroy the session.
+const RECONNECT_DELAYS: &[i32] = &[1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
 
 thread_local! {
     static EVENT_WS: RefCell<Option<web_sys::WebSocket>> = const { RefCell::new(None) };
@@ -365,9 +367,9 @@ thread_local! {
 /// Open a WebSocket to `/ws?token=<token>` for server-pushed events.
 ///
 /// `on_status` is called with each pushed `WitchStatus` JSON string.
-/// On close, attempts reconnection with exponential backoff. Only redirects
-/// to login if the token has been invalidated (e.g. by a 401 on an HTTP request)
-/// or reconnection attempts are exhausted.
+/// On close, attempts reconnection with exponential backoff indefinitely.
+/// The WS is a push convenience channel — its failure never touches the
+/// session token or redirects to login.
 pub fn start_event_stream(on_status: impl Fn(WitchStatus) + 'static) {
     stop_event_stream();
     let callback = Rc::new(on_status);
@@ -407,6 +409,7 @@ fn connect_ws(on_status: Rc<dyn Fn(WitchStatus)>) {
         let cb = on_status.clone();
         Closure::wrap(Box::new(move |e: web_sys::MessageEvent| {
             RECONNECT_ATTEMPT.with(|cell| cell.set(0));
+
             if let Some(text) = e.data().as_string() {
                 if let Ok(event) =
                     serde_json::from_str::<mm_meta::witch_types::WitchEvent>(&text)
@@ -423,8 +426,23 @@ fn connect_ws(on_status: Rc<dyn Fn(WitchStatus)>) {
     ws.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
     on_message.forget();
 
-    // onclose: attempt reconnection instead of immediately killing the session.
+    // onclose: attempt reconnection instead of killing the session.
+    // The WS is a push convenience channel — its failure never touches the
+    // session token or redirects to login. Append a visual "reconnecting"
+    // hint to the status bar so the operator can see push events are stale.
     let on_close = Closure::wrap(Box::new(|_: web_sys::CloseEvent| {
+        if let Some(el) = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.get_element_by_id("mm-status-bar"))
+        {
+            // Prepend a reconnecting notice; the next successful WS push
+            // re-renders the entire bar, clearing this automatically.
+            let current = el.inner_html();
+            el.set_inner_html(&format!(
+                "<div class=\"mm-status__line mm-status__line--warn\">\
+                 event stream disconnected — reconnecting\u{2026}</div>{current}"
+            ));
+        }
         // If the token was already cleared (e.g. by a 401 on an HTTP fetch),
         // redirect_to_login() was already called — nothing to do here.
         if has_token() {
@@ -443,17 +461,13 @@ fn connect_ws(on_status: Rc<dyn Fn(WitchStatus)>) {
 }
 
 /// Schedule a reconnection attempt after an exponential backoff delay.
-/// Gives up and redirects to login after exhausting all retry slots.
+/// Retries indefinitely — the WS is a push channel, not an auth mechanism.
+/// After exhausting the delay table, continues at the last (max) delay.
 fn schedule_reconnect() {
     let attempt = RECONNECT_ATTEMPT.with(|cell| cell.get());
-    if attempt as usize >= RECONNECT_DELAYS.len() {
-        // Exhausted retries — session is likely dead.
-        clear_token();
-        crate::redirect_to_login();
-        return;
-    }
 
-    let delay = RECONNECT_DELAYS[attempt as usize];
+    let delay_idx = (attempt as usize).min(RECONNECT_DELAYS.len() - 1);
+    let delay = RECONNECT_DELAYS[delay_idx];
     RECONNECT_ATTEMPT.with(|cell| cell.set(attempt + 1));
 
     let closure = Closure::once(move || {

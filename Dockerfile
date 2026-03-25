@@ -1,7 +1,8 @@
-# Multi-stage build for mm (Witch server) + mm-web
+# Multi-stage build for mm (Witch server) + mm-web + mm-tui
 #
 # Build:  docker build -t mm .
 # Run:    docker run -v /path/to/music:/music -v mm_data:/data -v mm_config:/config mm
+# TUI:    docker exec -it <container> mm-tui
 
 # ── Builder ──────────────────────────────────────────────────────────────────
 FROM rust:1-bookworm AS builder
@@ -41,7 +42,7 @@ RUN mkdir -p src && echo 'fn main() {}' > src/main.rs \
     && mkdir -p crates/mm-web/client/src && echo '' > crates/mm-web/client/src/lib.rs
 
 # Build deps for both native and wasm targets
-RUN cargo build --release -p mm -p mm-web 2>/dev/null || true \
+RUN cargo build --release -p mm -p mm-web -p mm-tui 2>/dev/null || true \
     && cargo build --release --target wasm32-unknown-unknown -p mm-web-client 2>/dev/null || true
 
 # Remove dummy source and workspace crate fingerprints (but keep compiled
@@ -58,8 +59,8 @@ COPY . .
 # Build WASM client first (outputs to crates/mm-web/static/pkg/)
 RUN wasm-pack build crates/mm-web/client --target web --out-dir ../static/pkg --release
 
-# Build mm (witch server) and mm-web (http api)
-RUN cargo build --release -p mm -p mm-web
+# Build mm (witch server), mm-web (http api), and mm-tui (terminal client)
+RUN cargo build --release -p mm -p mm-web -p mm-tui
 
 # ── Runtime ──────────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
@@ -69,6 +70,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /src/target/release/mm /usr/local/bin/mm
+COPY --from=builder /src/target/release/mm-tui /usr/local/bin/mm-tui
 COPY --from=builder /src/target/release/mm-web /usr/local/bin/mm-web
 COPY --from=builder /src/crates/mm-web/static /srv/mm-web/static
 

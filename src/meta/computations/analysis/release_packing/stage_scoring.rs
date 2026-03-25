@@ -1350,6 +1350,7 @@ mod tests {
             position: 1,
             format: Some("CD".to_string()),
             tracks: vec![track.clone()],
+            data_tracks: Vec::new(),
         }];
         let breakdown = PackingScoreBreakdown {
             acoustid_confidence: 0.0,

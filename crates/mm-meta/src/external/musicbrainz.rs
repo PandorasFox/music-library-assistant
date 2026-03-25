@@ -126,6 +126,10 @@ pub struct MbMedium {
     /// Track list for this medium.
     #[serde(default)]
     pub tracks: Vec<MbTrack>,
+    /// Data tracks (MB API uses this instead of `tracks` for CD-R, enhanced CD,
+    /// and other data-bearing media). Same schema as `tracks`.
+    #[serde(default, rename = "data-tracks")]
+    pub data_tracks: Vec<MbTrack>,
 }
 
 /// A track within a medium (position + recording reference).
@@ -278,6 +282,17 @@ pub fn parse_artist(raw_json: &[u8]) -> Result<MbArtist> {
 }
 
 /// Parse cached release JSON into typed struct.
+///
+/// Merges `data-tracks` into `tracks` for each medium — the MB API separates
+/// them for CD-R / enhanced CD / data media, but we treat all tracks uniformly.
 pub fn parse_release(raw_json: &[u8]) -> Result<MbRelease> {
-    serde_json::from_slice(raw_json).context("Failed to parse cached MusicBrainz release JSON")
+    let mut release: MbRelease =
+        serde_json::from_slice(raw_json).context("Failed to parse cached MusicBrainz release JSON")?;
+    for medium in &mut release.media {
+        if !medium.data_tracks.is_empty() {
+            medium.tracks.append(&mut medium.data_tracks);
+            medium.tracks.sort_by_key(|t| t.position);
+        }
+    }
+    Ok(release)
 }

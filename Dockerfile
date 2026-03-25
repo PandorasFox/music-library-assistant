@@ -44,8 +44,13 @@ RUN mkdir -p src && echo 'fn main() {}' > src/main.rs \
 RUN cargo build --release -p mm -p mm-web 2>/dev/null || true \
     && cargo build --release --target wasm32-unknown-unknown -p mm-web-client 2>/dev/null || true
 
-# Remove dummy source (but keep compiled deps in target/)
-RUN rm -rf src crates
+# Remove dummy source and workspace crate fingerprints (but keep compiled
+# deps in target/). Fingerprints must go because COPY preserves host mtimes
+# which predate the dep-cache artifacts — cargo would skip recompilation.
+RUN rm -rf src crates \
+    && rm -rf target/release/.fingerprint/mm-* \
+    && rm -rf target/release/.fingerprint/mm_* \
+    && rm -rf target/wasm32-unknown-unknown/release/.fingerprint/mm-*
 
 # ── Real build ──────────────────────────────────────────────────────────────
 COPY . .

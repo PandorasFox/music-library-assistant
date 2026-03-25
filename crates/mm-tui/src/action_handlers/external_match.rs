@@ -68,6 +68,18 @@ impl HandleAction for external_match_view::ExternalMatchesAction {
                     }
                 }
             }
+            external_match_view::ExternalMatchesAction::RequestFullReleasePacking => {
+                match app.queue_task(mm_meta::protocol::BackgroundTask::ReleasePackingFull) {
+                    Ok(Some(reason)) => {
+                        app.error_popup = Some(reason);
+                    }
+                    _ => {
+                        app.transition_to_progress_after_mutations(
+                            super::super::progress_screen::ProgressPhase::ContentAnalysis,
+                        );
+                    }
+                }
+            }
             external_match_view::ExternalMatchesAction::LaunchPackingCategory(cat) => {
                 use crate::release_packing_browser::types::PackingCategory;
                 match cat {

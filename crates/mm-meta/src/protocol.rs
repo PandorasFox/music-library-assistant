@@ -297,8 +297,10 @@ pub enum BackgroundTask {
     ExternalFetch,
     /// Cover Art Archive sidecar image fetch.
     CoverArtFetch,
-    /// Release bin-packing computation.
+    /// Release bin-packing computation (incremental — skips solved releases).
     ReleasePacking,
+    /// Release bin-packing computation (full — rescores everything from scratch).
+    ReleasePackingFull,
     /// Schema reconciliation pass.
     SchemaReconciliation,
     /// SQLite VACUUM.

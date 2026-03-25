@@ -187,7 +187,9 @@ pub enum Computation {
     /// (Stage 3) and EmitUnmatchedSignals (Stage 4) as barrier-separated phases.
     ///
     /// Manual trigger only (expensive), not part of ScheduleContentAnalysis.
-    PackReleases,
+    /// When `incremental` is true, solved releases (all candidate inodes MB-tagged)
+    /// are skipped — only unsolved and pinned releases enter the pipeline.
+    PackReleases { incremental: bool },
 
     /// Score candidates for a single MusicBrainz release (Stage 2).
     ///
@@ -204,7 +206,7 @@ pub enum Computation {
     /// Loads optimal scores and manifest, classifies proposals into tiers
     /// (Perfect, FullMatch, Incomplete, Single), packages state, and defers
     /// MIS rounds as separate computations for visibility.
-    ComputeReleaseMappings,
+    ComputeReleaseMappings { incremental: bool },
 
     /// MIS on Perfect proposals (Stage 3b).
     ///
@@ -252,7 +254,7 @@ pub enum Computation {
     /// Identifies unmatched corpus tracks and unfilled release slots.
     /// PackedRelease, ReleasePacking, and PackingKnot signals are emitted
     /// per-component within each tier's MIS computation.
-    EmitUnmatchedSignals,
+    EmitUnmatchedSignals { incremental: bool },
 
     /// Gateway for incremental pinned release packing.
     ///
@@ -341,15 +343,15 @@ impl Computation {
             Computation::DetectMusicBrainzTagged => "Detecting MusicBrainz-tagged files",
             Computation::DetectDiscExtractions => "Detecting disc extractions",
             Computation::DetectPathTagMismatches => "Detecting path-tag mismatches",
-            Computation::PackReleases => "Packing releases",
+            Computation::PackReleases { .. } => "Packing releases",
             Computation::ScoreReleaseCandidates { .. } => "Scoring release candidates",
-            Computation::ComputeReleaseMappings => "Classifying release proposals",
+            Computation::ComputeReleaseMappings { .. } => "Classifying release proposals",
             Computation::MapPerfectReleases { .. } => "Mapping perfect releases",
             Computation::MapFullMatchReleases { .. } => "Mapping full-match releases",
             Computation::MapIncompleteReleases { .. } => "Mapping incomplete releases",
             Computation::MapSingleReleases { .. } => "Mapping single-track releases",
             Computation::ResolvePackingComponent { .. } => "Resolving packing component",
-            Computation::EmitUnmatchedSignals => "Emitting unmatched signals",
+            Computation::EmitUnmatchedSignals { .. } => "Emitting unmatched signals",
             Computation::ResolvePinForDir { .. } => "Resolving pinned release",
             Computation::CommitPinnedRelease { .. } => "Committing pinned release",
             Computation::InvalidatePinnedRelease { .. } => "Invalidating unpinned release",
@@ -427,12 +429,14 @@ impl Computation {
             Computation::DetectPathTagMismatches => {
                 execute_detect_path_tag_mismatches(ctx)
             }
-            Computation::PackReleases => execute_pack_releases(ctx),
+            Computation::PackReleases { incremental } => {
+                execute_pack_releases(ctx, *incremental)
+            }
             Computation::ScoreReleaseCandidates { ref release_id } => {
                 execute_score_release_candidates(ctx, release_id)
             }
-            Computation::ComputeReleaseMappings => {
-                execute_compute_release_mappings(ctx)
+            Computation::ComputeReleaseMappings { incremental } => {
+                execute_compute_release_mappings(ctx, *incremental)
             }
             Computation::MapPerfectReleases { ref state } => {
                 execute_map_perfect_releases(ctx, state)
@@ -449,8 +453,8 @@ impl Computation {
             Computation::ResolvePackingComponent { ref data } => {
                 execute_resolve_packing_component(ctx, data)
             }
-            Computation::EmitUnmatchedSignals => {
-                execute_emit_unmatched_signals(ctx)
+            Computation::EmitUnmatchedSignals { incremental } => {
+                execute_emit_unmatched_signals(ctx, *incremental)
             }
             Computation::ResolvePinForDir { ref release_id, ref dir_path } => {
                 release_packing::pinned::execute_resolve_pin_for_dir(ctx, release_id, dir_path)

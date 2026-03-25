@@ -28,8 +28,9 @@ use super::{Computation, Result};
 
 /// Load the set of MB-tagged inodes (files with both configured track + release tags).
 ///
-/// Used by tag-based health computations to elide externally-authoritative files.
-fn load_mb_tagged_inodes(
+/// Used by tag-based health computations to elide externally-authoritative files,
+/// and by incremental release packing to skip solved releases.
+pub(crate) fn load_mb_tagged_inodes(
     read_only_db: &ReadOnlyDb<'_>,
     config: &crate::config::Config,
 ) -> std::collections::HashSet<i64> {

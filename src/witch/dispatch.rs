@@ -211,9 +211,17 @@ impl super::Witch {
                                             }
                                         }
                                         BackgroundTask::ReleasePacking => {
-                                            w.request_release_packing();
+                                            w.request_release_packing(true);
                                             crate::logging::log_general(format!(
-                                                "[COMMAND] After request_release_packing, work_state: {:?}",
+                                                "[COMMAND] After request_release_packing (incremental), work_state: {:?}",
+                                                w.work_state
+                                            ));
+                                            CommandResponse::Ok
+                                        }
+                                        BackgroundTask::ReleasePackingFull => {
+                                            w.request_release_packing(false);
+                                            crate::logging::log_general(format!(
+                                                "[COMMAND] After request_release_packing (full), work_state: {:?}",
                                                 w.work_state
                                             ));
                                             CommandResponse::Ok

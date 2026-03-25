@@ -10,11 +10,11 @@ Source: `src/meta/computations/analysis/release_packing.rs`
 
 | Stage | Computation | Purpose |
 |-------|------------|---------|
-| 1 | PackReleases | Identify candidates, write manifest, spawn per-release scorers |
+| 1 | PackReleases { incremental } | Identify candidates, write manifest, spawn per-release scorers. Incremental mode skips solved releases |
 | 2 | ScoreReleaseCandidates (×N) | Directory selection, AcoustID scoring, elimination matching |
 | 3a | ComputeReleaseMappings | Classify proposals into quality tiers |
 | 3b–3e | Map{Perfect,FullMatch,Incomplete,Single}Releases → N×ResolvePackingComponent | Tiered orchestrators: find connected components, spawn parallel per-component MIS solvers. Knots extracted and resolved greedily by orchestrators. Isolated nodes emitted directly. (Incomplete/Single order configurable) |
-| 4 | EmitUnmatchedSignals | Emit signals for unmatched corpus tracks and unfilled release slots |
+| 4 | EmitUnmatchedSignals { incremental } | Emit signals for unmatched corpus tracks and unfilled release slots. Incremental mode excludes MB-tagged inodes |
 
 Stages are barrier-separated: each defers the next via `SharedMappingState`, ensuring serial execution managed by the Witch's computation scheduler.
 
@@ -22,7 +22,9 @@ Stages are barrier-separated: each defers the next via `SharedMappingState`, ens
 
 ## Stage 1: PackReleases (Orchestrator)
 
-**Trigger:** Manual only (operator requests release packing).
+**Trigger:** Manual only (operator requests release packing). Auto-triggered after external fetch (incremental mode).
+
+**Parameter:** `incremental: bool` — when true, solved releases are skipped.
 
 1. Load all AcoustID external matches for corpus files
 2. Filter recordings by `min_confidence` (from config). Duration is not filtered — it is a scoring dimension in Stage 2.
@@ -31,8 +33,9 @@ Stages are barrier-separated: each defers the next via `SharedMappingState`, ens
 5. Deduplicate candidates per `(release_id, inode)` — keep highest-confidence recording
 6. Write candidate rows to `release_packing_candidates` intermediate table
 7. **Pinned release injection**: For each source dir with a `pinned_release` configured, add the pinned release ID to `all_release_ids` to ensure its tracklist is fetched. For inodes in that dir that have no AcoustID candidate for the pinned release, inject a synthetic candidate row (`confidence = 1.0`, empty `recording_id`). This guarantees every file in a pinned dir participates in scoring for the pinned release regardless of fingerprint match quality.
-8. Spawn N `ScoreReleaseCandidates` computations (one per release with candidates)
-9. Defer `ComputeReleaseMappings` via barrier
+8. **Incremental filtering** (when `incremental=true`): Load all MB-tagged inodes (files with both configured MB track + release tags). Group candidates by release_id. A release is "solved" if ALL its candidate inodes are MB-tagged AND the release is NOT pinned. Remove all candidates for solved releases. This skips rescoring already-applied matches, typically cutting the pipeline to ~1/3 of releases.
+9. Spawn N `ScoreReleaseCandidates` computations (one per release with candidates)
+10. Defer `ComputeReleaseMappings` via barrier (threads `incremental` through)
 
 **Key data:**
 - `CorpusFileInfo`: `parent_dir`, tags (`TITLE`/`ARTIST`/`ALBUM`/`TRACKNUMBER`), `duration_ms`
@@ -209,10 +212,14 @@ After tier classification, FullMatch and Incomplete proposals are checked for lo
 
 ## Stage 4: EmitUnmatchedSignals
 
+**Parameter:** `incremental: bool` — threaded from Stage 1.
+
 Post-resolution analysis producing 2 signal types:
 
 ### UnmatchedCorpusTrack
 Emitted for inodes with AcoustID recording matches but no release assignment. Also covers fingerprinted files with no AcoustID match at all.
+
+**Incremental mode:** MB-tagged inodes are excluded from unmatched detection. In incremental mode, solved releases were skipped in Stage 1 and their inodes have no `ReleasePacking` signals — without this filter they would be falsely flagged as unmatched. This exclusion is harmless in full mode (those inodes would have assignments anyway).
 
 ### UnfilledReleaseSlot
 Empty track slots in partially-assigned releases. Only emitted for releases with `filled_count > 0`.

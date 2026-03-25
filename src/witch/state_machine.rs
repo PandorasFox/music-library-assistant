@@ -443,7 +443,7 @@ impl super::Witch {
                 crate::logging::log_general(
                     "[WITCH] Auto-triggering release packing after external fetch",
                 );
-                self.request_release_packing();
+                self.request_release_packing(true);
                 // Stay in Done — packing work transitions to Working
             }
             pipeline_triggers::IdleAction::GoIdle => {

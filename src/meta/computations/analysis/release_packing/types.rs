@@ -227,6 +227,9 @@ pub(crate) struct ReleaseMappingState {
     pub low_confidence_max_acoustid_ratio: f64,
     /// Low-confidence downgrade: max average album_match threshold.
     pub low_confidence_max_album_match: f64,
+    /// Whether this pipeline run is incremental (skipping solved releases).
+    /// Threaded through to Stage 4 so EmitUnmatchedSignals can exclude MB-tagged inodes.
+    pub incremental: bool,
 }
 
 

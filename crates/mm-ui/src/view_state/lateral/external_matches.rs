@@ -35,8 +35,10 @@ use crate::wizard::{WizardItem, WizardOffer};
 pub enum ExternalMatchesAction {
     /// Enter on "Cache external metadata matches" entry
     RequestFetch,
-    /// Enter on "Analyze release matches" entry
+    /// Enter on "Analyze release matches" entry (incremental — skips solved releases)
     RequestReleasePacking,
+    /// Enter on "Full release repack" entry (rescores everything from scratch)
+    RequestFullReleasePacking,
     /// Enter on "Download cover art" entry
     RequestCoverArt,
     /// Enter on "Untagged matches" → launch review for untagged entries
@@ -56,8 +58,10 @@ pub enum ExternalMatchesAction {
 pub enum NavigableEntry {
     /// "Cache external metadata matches" action entry (always present)
     FetchAction,
-    /// "Analyze release matches" action entry (always present)
+    /// "Analyze release matches" action entry (incremental, always present)
     PackReleasesAction,
+    /// "Full release repack" action entry (always present)
+    FullRepackAction,
     /// "Download cover art" action entry (always present)
     CoverArtAction,
     /// "Untagged matches" — files with fingerprint hits but no existing tags
@@ -189,6 +193,11 @@ impl ExternalMatchesViewData {
         items.push(ExternalMatchListItem::Entry {
             nav: NavigableEntry::PackReleasesAction,
             detail_lines: self.pack_releases_detail_lines(),
+        });
+
+        items.push(ExternalMatchListItem::Entry {
+            nav: NavigableEntry::FullRepackAction,
+            detail_lines: self.full_repack_detail_lines(),
         });
 
         items.push(ExternalMatchListItem::Entry {
@@ -586,6 +595,59 @@ impl ExternalMatchesViewData {
         lines
     }
 
+    fn full_repack_detail_lines(&self) -> Vec<Line<'static>> {
+        let mut lines = vec![
+            Line::from(Span::styled(
+                "Full release repack",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+        ];
+
+        let has_data = self
+            .cached_data
+            .as_ref()
+            .is_some_and(|d| !d.confidence_buckets.is_empty());
+
+        if self.fetch_active {
+            lines.push(Line::from(Span::styled(
+                "Wait for the external fetch to",
+                Style::default().fg(Color::DarkGray),
+            )));
+            lines.push(Line::from(Span::styled(
+                "complete before running analysis.",
+                Style::default().fg(Color::DarkGray),
+            )));
+        } else if !has_data {
+            lines.push(Line::from(Span::styled(
+                "No external match data available.",
+                Style::default().fg(Color::DarkGray),
+            )));
+        } else {
+            lines.push(Line::from(Span::styled(
+                "Re-score and re-pack ALL releases",
+                Style::default().fg(Color::White),
+            )));
+            lines.push(Line::from(Span::styled(
+                "from scratch, including those with",
+                Style::default().fg(Color::White),
+            )));
+            lines.push(Line::from(Span::styled(
+                "MusicBrainz tags already applied.",
+                Style::default().fg(Color::White),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Press Enter to start full repack.",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+
+        lines
+    }
+
     fn cover_art_detail_lines(&self) -> Vec<Line<'static>> {
         let mut lines = vec![
             Line::from(Span::styled(
@@ -787,6 +849,16 @@ impl ExternalMatchesViewData {
                 });
                 if !self.fetch_active && has_data {
                     Some(ExternalMatchesAction::RequestReleasePacking)
+                } else {
+                    None
+                }
+            }
+            NavigableEntry::FullRepackAction => {
+                let has_data = self.cached_data.as_ref().is_some_and(|d| {
+                    !d.untagged_entries.is_empty() || !d.confidence_buckets.is_empty()
+                });
+                if !self.fetch_active && has_data {
+                    Some(ExternalMatchesAction::RequestFullReleasePacking)
                 } else {
                     None
                 }

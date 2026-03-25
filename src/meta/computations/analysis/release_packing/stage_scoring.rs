@@ -230,10 +230,11 @@ fn build_elimination_score_row(
 /// and defers Resolve + Analyze as barrier-separated phases.
 pub fn execute_pack_releases(
     ctx: &ComputationContext<'_>,
+    incremental: bool,
 ) -> Result {
     let read_only_db = ctx.read_db;
     let witness = ctx.witness;
-    let computation = AnalysisComputation::PackReleases;
+    let computation = AnalysisComputation::PackReleases { incremental };
 
     let sender = require_sender!(computation);
 
@@ -661,6 +662,49 @@ pub fn execute_pack_releases(
         ));
     }
 
+    // === Incremental mode: skip solved releases ===
+    if incremental {
+        let mb_tagged_inodes =
+            super::super::tags::load_mb_tagged_inodes(read_only_db, &config);
+
+        // Group candidates by release → collect inode sets
+        let mut release_inodes: HashMap<&str, HashSet<i64>> = HashMap::new();
+        for (release_id, inode) in deduped.keys() {
+            release_inodes
+                .entry(release_id)
+                .or_default()
+                .insert(*inode);
+        }
+
+        // Pinned release IDs (always bypass the solved check)
+        let pinned_ids: HashSet<&str> = pinned_dir_releases
+            .values()
+            .map(|s| s.as_str())
+            .collect();
+
+        // A release is solved if ALL its candidate inodes are MB-tagged
+        let solved: HashSet<&str> = release_inodes
+            .iter()
+            .filter(|(rid, inodes)| {
+                !pinned_ids.contains(*rid)
+                    && inodes.iter().all(|i| mb_tagged_inodes.contains(i))
+            })
+            .map(|(rid, _)| *rid)
+            .collect();
+
+        if !solved.is_empty() {
+            let before = deduped.len();
+            deduped.retain(|(release_id, _), _| !solved.contains(release_id));
+            log_general(format!(
+                "[COMPUTE] PackReleases (incremental): skipped {} solved releases \
+                 ({} candidates removed, {} remain)",
+                solved.len(),
+                before - deduped.len(),
+                deduped.len(),
+            ));
+        }
+    }
+
     let mut releases_with_candidates: HashSet<&str> = HashSet::new();
     for (release_id, _) in deduped.keys() {
         releases_with_candidates.insert(release_id);
@@ -695,7 +739,7 @@ pub fn execute_pack_releases(
     let deferred_phases = vec![(
         PipelineStage::Resolve,
         vec![Computation::Analysis(
-            AnalysisComputation::ComputeReleaseMappings,
+            AnalysisComputation::ComputeReleaseMappings { incremental },
         )],
     )];
 

@@ -747,10 +747,16 @@ impl Witch {
     ///
     /// Analyzes cached MusicBrainz data and assigns corpus files to releases
     /// using greedy bin-packing. Does not require a ConfirmationGesture.
-    pub fn request_release_packing(&mut self) {
-        crate::logging::log_general("[WITCH] Release packing analysis requested");
+    ///
+    /// When `incremental` is true, solved releases (all candidate inodes already
+    /// MB-tagged) are skipped — only unsolved and pinned releases enter the pipeline.
+    pub fn request_release_packing(&mut self, incremental: bool) {
+        let mode = if incremental { "incremental" } else { "full" };
+        crate::logging::log_general(format!(
+            "[WITCH] Release packing analysis requested ({})", mode
+        ));
         self.queue_computation_with_label(
-            Computation::Analysis(analysis::Computation::PackReleases),
+            Computation::Analysis(analysis::Computation::PackReleases { incremental }),
             Some("Release packing".to_string()),
         );
     }

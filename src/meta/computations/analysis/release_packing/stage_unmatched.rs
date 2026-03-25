@@ -23,10 +23,11 @@ use crate::meta::computations::analysis::{Computation as AnalysisComputation, Re
 /// Execute EmitUnmatchedSignals — emit unmatched corpus track and unfilled slot signals.
 pub fn execute_emit_unmatched_signals(
     ctx: &ComputationContext<'_>,
+    incremental: bool,
 ) -> Result {
     let read_only_db = ctx.read_db;
     let witness = ctx.witness;
-    let computation = AnalysisComputation::EmitUnmatchedSignals;
+    let computation = AnalysisComputation::EmitUnmatchedSignals { incremental };
 
     let sender = require_sender!(computation);
 
@@ -80,6 +81,16 @@ pub fn execute_emit_unmatched_signals(
             .push(row.release_id.clone());
     }
 
+    // In incremental mode, MB-tagged inodes were excluded from the pipeline
+    // and won't have ReleasePacking signals — exclude them from gap analysis
+    // to avoid false UnmatchedCorpusTrack signals.
+    let mb_tagged_inodes: HashSet<i64> = if incremental {
+        let config = require_config!(ctx, computation);
+        super::super::tags::load_mb_tagged_inodes(read_only_db, &config)
+    } else {
+        HashSet::new()
+    };
+
     // Primary loop: all fingerprinted corpus inodes, minus assigned
     let fingerprinted = match read_only_db.get_fingerprinted_corpus_inodes() {
         Ok(rows) => rows,
@@ -93,7 +104,7 @@ pub fn execute_emit_unmatched_signals(
 
     let mut unmatched_signals: Vec<ComputedCorpusSignal> = Vec::new();
     for (inode, path) in fingerprinted {
-        if assigned_inodes.contains(&inode) {
+        if assigned_inodes.contains(&inode) || mb_tagged_inodes.contains(&inode) {
             continue;
         }
 

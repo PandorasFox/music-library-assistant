@@ -85,7 +85,7 @@ Witch ──► UI: mpsc::Receiver<WitchNotice> (status, mutations completed, er
 - `is_external_fetch_active() -> bool`
 - `external_fetch_progress() -> Option<&FetchProgress>`
 - `has_acoustid_api_key() -> bool`
-- `request_release_packing()`
+- `request_release_packing(incremental: bool)`
 
 **Maintenance:**
 - `queue_schema_reconciliation(gesture)`

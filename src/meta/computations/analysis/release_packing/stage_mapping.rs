@@ -35,10 +35,11 @@ use crate::meta::computations::analysis::{Computation as AnalysisComputation, Re
 /// state, and defers MIS rounds as separate computations for visibility.
 pub fn execute_compute_release_mappings(
     ctx: &ComputationContext<'_>,
+    incremental: bool,
 ) -> Result {
     let read_only_db = ctx.read_db;
     let witness = ctx.witness;
-    let computation = AnalysisComputation::ComputeReleaseMappings;
+    let computation = AnalysisComputation::ComputeReleaseMappings { incremental };
 
     let sender = require_sender!(computation);
 
@@ -356,6 +357,7 @@ pub fn execute_compute_release_mappings(
         allow_resolve_knots_with_discographies: rp.allow_resolve_knots_with_discographies,
         low_confidence_max_acoustid_ratio: rp.low_confidence_max_acoustid_ratio,
         low_confidence_max_album_match: rp.low_confidence_max_album_match,
+        incremental,
     });
 
     let deferred = vec![(
@@ -600,8 +602,9 @@ pub(crate) fn execute_map_incomplete_releases(
 
     // Dynamic chain: if singles already ran, go to gap analysis;
     // otherwise, singles run next.
+    let incremental = state.incremental;
     let next_computation = if state.singles_before_incompletes {
-        AnalysisComputation::EmitUnmatchedSignals
+        AnalysisComputation::EmitUnmatchedSignals { incremental }
     } else {
         AnalysisComputation::MapSingleReleases {
             state: SharedMappingState::new(state),
@@ -660,8 +663,9 @@ pub(crate) fn execute_map_single_releases(
 
     // Dynamic chain: if incompletes already ran, go to gap analysis;
     // otherwise, incompletes run next.
+    let incremental = state.incremental;
     let next_computation = if !state.singles_before_incompletes {
-        AnalysisComputation::EmitUnmatchedSignals
+        AnalysisComputation::EmitUnmatchedSignals { incremental }
     } else {
         AnalysisComputation::MapIncompleteReleases {
             state: SharedMappingState::new(state),

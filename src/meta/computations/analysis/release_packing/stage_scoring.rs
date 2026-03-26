@@ -662,8 +662,23 @@ pub fn execute_pack_releases(
         ));
     }
 
+    // === Check for packing-relevant dirty inodes ===
+    // When tag mutations occur, affected inodes are marked dirty for "release_packing".
+    // If any exist, disable incremental solved-release skipping to force full re-scoring.
+    let packing_dirty = read_only_db
+        .get_dirty_inodes("release_packing")
+        .unwrap_or_default();
+    let force_full_scoring = !packing_dirty.is_empty();
+    if force_full_scoring {
+        log_general(format!(
+            "[COMPUTE] PackReleases: {} packing-dirty inodes — disabling incremental skip",
+            packing_dirty.len()
+        ));
+        sender.clear_all_dirty_inodes("release_packing", witness);
+    }
+
     // === Incremental mode: skip solved releases ===
-    if incremental {
+    if incremental && !force_full_scoring {
         let mb_tagged_inodes =
             super::super::tags::load_mb_tagged_inodes(read_only_db, &config);
 

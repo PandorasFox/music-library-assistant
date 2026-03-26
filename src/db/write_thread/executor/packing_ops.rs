@@ -93,6 +93,23 @@ pub(super) fn execute_write_packing_candidates(
     Ok(())
 }
 
+/// Execute DeletePackingDataForRelease: remove candidates and scores for one release.
+/// Used by the pinned warm path to clean stale data before writing fresh candidates.
+pub(super) fn execute_delete_packing_data_for_release(
+    db: &Database,
+    release_id: &str,
+) -> anyhow::Result<()> {
+    db.conn().execute(
+        "DELETE FROM release_packing_candidates WHERE release_id = ?1",
+        params![release_id],
+    )?;
+    db.conn().execute(
+        "DELETE FROM release_packing_scores WHERE release_id = ?1",
+        params![release_id],
+    )?;
+    Ok(())
+}
+
 /// Execute WritePendingAcoustIdSubmissions: write pending submissions.
 pub(super) fn execute_write_pending_acoustid_submissions(
     db: &Database,

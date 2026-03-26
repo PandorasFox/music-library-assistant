@@ -538,6 +538,21 @@ impl SignalWriteSender {
         });
     }
 
+    /// Clear all dirty flags for a specific computation type.
+    ///
+    /// Used by bulk computations (e.g., release packing) that consume all
+    /// dirty inodes for their type at once, rather than per-inode.
+    pub fn clear_all_dirty_inodes(
+        &self,
+        computation_type: &str,
+        _witness: &impl SignalWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::ClearAllDirtyInodes {
+            computation_type: computation_type.to_string(),
+        });
+    }
+
     // =========================================================================
     // External Matching Operations (fetch thread results — no witness needed)
     // =========================================================================
@@ -758,5 +773,19 @@ impl SignalWriteSender {
         let _ = self
             .tx
             .send(DbWriteOp::WritePendingAcoustIdSubmissions { rows });
+    }
+
+    /// Delete packing candidates and scores for a specific release.
+    ///
+    /// Used by the pinned warm path to clean stale data before writing fresh candidates.
+    pub fn delete_packing_data_for_release(
+        &self,
+        release_id: &str,
+        _witness: &impl SignalWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::DeletePackingDataForRelease {
+            release_id: release_id.to_string(),
+        });
     }
 }

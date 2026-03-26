@@ -115,6 +115,19 @@ fn execute_clear_dirty_inode(
     Ok(())
 }
 
+/// Execute ClearAllDirtyInodes: remove all dirty flags for a computation type.
+/// Used by bulk computations that consume all dirty flags at once.
+fn execute_clear_all_dirty_inodes(
+    db: &Database,
+    computation_type: &str,
+) -> anyhow::Result<()> {
+    db.conn().execute(
+        "DELETE FROM dirty_inodes WHERE computation_type = ?1",
+        params![computation_type],
+    )?;
+    Ok(())
+}
+
 /// Execute MarkDirtyInodes: mark a batch of inodes dirty for a computation type.
 fn execute_mark_dirty_inodes(
     db: &Database,
@@ -480,6 +493,12 @@ pub(super) fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             });
         }
 
+        DbWriteOp::ClearAllDirtyInodes { computation_type } => {
+            with_retry("clear_all_dirty_inodes", &computation_type, || {
+                execute_clear_all_dirty_inodes(db, &computation_type)
+            });
+        }
+
         DbWriteOp::InsertExternalMatch {
             inode,
             fingerprint,
@@ -639,6 +658,12 @@ pub(super) fn execute_signal_op(db: &Database, op: &DbWriteOp) {
         DbWriteOp::WritePendingAcoustIdSubmissions { rows } => {
             with_retry("write_pending_acoustid_submissions", "batch", || {
                 packing_ops::execute_write_pending_acoustid_submissions(db, rows)
+            });
+        }
+
+        DbWriteOp::DeletePackingDataForRelease { release_id } => {
+            with_retry("delete_packing_data_for_release", &release_id, || {
+                packing_ops::execute_delete_packing_data_for_release(db, &release_id)
             });
         }
 

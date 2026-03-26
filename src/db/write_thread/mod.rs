@@ -354,6 +354,12 @@ enum DbWriteOp {
         computation_type: String,
     },
 
+    /// Clear all dirty flags for a specific computation type.
+    /// Used by bulk computations that consume all dirty flags at once.
+    ClearAllDirtyInodes {
+        computation_type: String,
+    },
+
     // =========================================================================
     // External Matching Operations (AcoustID fetch thread results)
     // =========================================================================
@@ -473,6 +479,12 @@ enum DbWriteOp {
     /// Write pending AcoustID submissions (elimination matching results).
     WritePendingAcoustIdSubmissions {
         rows: Vec<PendingAcoustIdSubmission>,
+    },
+
+    /// Delete packing candidates and scores for a specific release.
+    /// Used by the pinned warm path to clean stale data before writing fresh candidates.
+    DeletePackingDataForRelease {
+        release_id: String,
     },
 
     // =========================================================================

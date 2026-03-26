@@ -117,6 +117,11 @@ fn warm_path_build_candidates_and_score(
         })
         .collect::<String>();
 
+    // Clean stale candidates and scores from prior runs before writing fresh data.
+    // Without this, INSERT OR REPLACE would merge stale candidates (referencing ghost
+    // inodes from previous indexing) with fresh synthetic candidates.
+    sender.delete_packing_data_for_release(release_id, ctx.witness);
+
     // Write manifest entry
     let manifest_row = (
         release_id.to_string(),

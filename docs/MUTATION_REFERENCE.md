@@ -96,7 +96,7 @@ Recovery process: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue
 |----------|---------------------|-----------------|-----------------|-------|
 | IndexTrack | UpdateCorpusFileSignals | CorruptFile (if no fingerprint), LosslessRemux | (per-file signals wiped) | Add track to index |
 | IndexFileFromPath | UpdateCorpusFileSignals | CorruptFile (on success if no fingerprint, **on failure**), LosslessRemux | (per-file signals wiped) | Index by path |
-| DropFromIndex | UpdateCorpusFileSignals | — | All scope signals for inode (when inode known) | Remove from index |
+| DropFromIndex | UpdateCorpusFileSignals | — | All scope signals for inode (when inode known) | Remove from index. When inode is fully orphaned (no file entries remain), cascades to: external_matches, external_retry, release_packing_candidates, release_packing_scores, dirty_inodes. |
 | DropDirectoryFromIndex | — | — | MissingFile × N, MissingDirectory | Drop directory and all contained files from index |
 
 ### File Entry Operations

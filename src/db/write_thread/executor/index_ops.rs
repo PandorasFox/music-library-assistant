@@ -283,6 +283,19 @@ pub(super) fn execute_drop_from_index(db: &Database, inode: i64, zone: &str) -> 
     if count == 0 {
         db.conn()
             .execute("DELETE FROM audio_info WHERE inode = ?1", params![inode])?;
+        // Cascade to external matching data (ghost AcoustID matches, retries)
+        db.conn()
+            .execute("DELETE FROM external_matches WHERE inode = ?1", params![inode])?;
+        db.conn()
+            .execute("DELETE FROM external_retry WHERE inode = ?1", params![inode])?;
+        // Cascade to packing intermediate data (stale candidates, scores)
+        db.conn()
+            .execute("DELETE FROM release_packing_candidates WHERE inode = ?1", params![inode])?;
+        db.conn()
+            .execute("DELETE FROM release_packing_scores WHERE inode = ?1", params![inode])?;
+        // Cascade to dirty inode markers (orphaned entries)
+        db.conn()
+            .execute("DELETE FROM dirty_inodes WHERE inode = ?1", params![inode])?;
     }
 
     // Clear all corpus signals for this inode from typed tables
@@ -481,6 +494,29 @@ pub(super) fn execute_update_track_path_with_metadata(
             )?;
             tx.execute(
                 "DELETE FROM corpus_tags WHERE inode = ?1",
+                params![old_inode],
+            )?;
+            // Cascade to external matching data (ghost AcoustID matches, retries)
+            tx.execute(
+                "DELETE FROM external_matches WHERE inode = ?1",
+                params![old_inode],
+            )?;
+            tx.execute(
+                "DELETE FROM external_retry WHERE inode = ?1",
+                params![old_inode],
+            )?;
+            // Cascade to packing intermediate data (stale candidates, scores)
+            tx.execute(
+                "DELETE FROM release_packing_candidates WHERE inode = ?1",
+                params![old_inode],
+            )?;
+            tx.execute(
+                "DELETE FROM release_packing_scores WHERE inode = ?1",
+                params![old_inode],
+            )?;
+            // Cascade to dirty inode markers (orphaned entries)
+            tx.execute(
+                "DELETE FROM dirty_inodes WHERE inode = ?1",
                 params![old_inode],
             )?;
         }

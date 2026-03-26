@@ -147,6 +147,11 @@ pub(crate) struct App {
 
     /// Set when the server returns InvalidSession — main loop breaks and re-enters login.
     session_expired: bool,
+
+    /// Throttle for `refresh_active_view_data`: earliest time the next refresh is allowed.
+    /// Prevents a tight blocking-query loop when the Witch is broadcasting rapid status events
+    /// (each query blocks while events accumulate → immediate re-query → hang).
+    next_refresh_allowed_at: std::time::Instant,
 }
 
 impl App {
@@ -228,6 +233,7 @@ impl App {
             tab_click_rects: Vec::new(),
             current_route: None,
             session_expired: false,
+            next_refresh_allowed_at: std::time::Instant::now(),
         }
     }
 
@@ -1288,8 +1294,14 @@ fn run_app<B: ratatui::backend::Backend>(
                 app.resolver = PathResolver::from_config(&new_config);
             }
 
-            if view_data_stale {
+            if view_data_stale && std::time::Instant::now() >= app.next_refresh_allowed_at {
                 app.refresh_active_view_data();
+                // Throttle: ensure at least 500ms between refreshes so the TUI can
+                // render frames and process input between blocking queries. Without
+                // this, rapid generation-counter bumps cause an infinite query loop
+                // (each blocking query gives the Witch time to bump again → re-query).
+                app.next_refresh_allowed_at = std::time::Instant::now()
+                    + std::time::Duration::from_millis(500);
             }
         }
 

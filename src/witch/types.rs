@@ -460,6 +460,66 @@ pub use crate::meta::decisions::PendingTransaction;
 // Internal Task Result
 // ============================================================================
 
+// ============================================================================
+// Offload Types (spawn_blocking results back to main loop)
+// ============================================================================
+
+/// Results from `spawn_blocking` tasks offloaded from the main loop.
+///
+/// Every blocking operation in the Witch's `select!` loop is replaced by a
+/// `spawn_blocking` call that sends its result back through this enum via
+/// the unified offload channel.
+pub(super) enum OffloadResult {
+    /// Watcher DB cache built (for start_watching / poll re-walk).
+    WatcherDbCache {
+        cache: HashMap<i64, super::fs_thread::CachedInodeState>,
+    },
+    /// Auto-index query result: mutations to queue (empty = no unindexed files).
+    AutoIndexResult {
+        mutations: Vec<Mutation>,
+        source: AutoIndexSource,
+    },
+    /// Vacuum check result from PRAGMA queries.
+    VacuumCheck {
+        needed: bool,
+    },
+    /// First-time setup completed (or failed).
+    SetupComplete {
+        result: Result<SetupOutput, String>,
+        reply: tokio::sync::oneshot::Sender<
+            Result<
+                crate::meta::protocol::UnauthenticatedResponse,
+                crate::meta::protocol::ProtocolError,
+            >,
+        >,
+    },
+}
+
+/// Distinguishes auto-index check call sites for correct follow-up routing.
+pub(super) enum AutoIndexSource {
+    /// Called at Inodes→Full transition. If no mutations, queue content analysis.
+    InodesTransition,
+    /// Called during steady-state Full. Informational only.
+    SteadyState,
+}
+
+/// Output from the blocking first-time setup task.
+pub(super) struct SetupOutput {
+    pub config: crate::config::Config,
+    pub force_check: bool,
+    pub vacuum_threshold: f64,
+}
+
+/// Deferred watcher command waiting for DB cache to be built.
+pub(super) enum PendingWatcherCommand {
+    Start { zones: Vec<super::fs_thread::WatchedZone> },
+    Poll { interval_secs: u64 },
+}
+
+// ============================================================================
+// Internal Task Result
+// ============================================================================
+
 /// Result of executing a single task.
 #[derive(Debug)]
 pub(super) struct TaskResult {

@@ -36,8 +36,7 @@ impl super::Witch {
         if let Some(new_config) = result.config_update {
             if self.watcher_state == WatcherState::Polling {
                 let new_interval = new_config.opinions.watcher_poll_interval_secs;
-                let db_cache = self.build_watcher_db_cache();
-                self.fs_watcher.poll(db_cache, new_interval);
+                self.request_watcher_poll_with_cache(new_interval);
             }
             self.update_performance_impl(new_config.opinions.performance.clone());
             self.update_shared_config(new_config);

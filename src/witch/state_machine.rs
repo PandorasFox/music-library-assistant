@@ -9,7 +9,6 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use crate::db::write_thread;
 use crate::meta::computations::{analysis, derivation, Computation};
 
 use super::pipeline_triggers;
@@ -45,17 +44,15 @@ impl super::Witch {
     /// Check startup state transitions (Reconciling → Vacuuming → Ready).
     pub(super) fn check_startup_transitions(&mut self) {
         match self.startup_state {
-            super::types::WitchStartupState::Reconciling if !self.has_pending() => {
+            super::types::WitchStartupState::Reconciling
+                if !self.has_pending() && !self.vacuum_check_pending =>
+            {
                 crate::logging::log_general("[WITCH] Schema reconciliation complete");
                 self.cache_thread_handle.reconnect_db();
                 self.startup_schema_descriptions.clear();
-                if self.check_vacuum_needed() {
-                    crate::logging::log_general("[WITCH] Vacuum threshold exceeded — entering Vacuuming");
-                    self.startup_state = super::types::WitchStartupState::Vacuuming;
-                    self.queue_vacuum();
-                } else {
-                    self.startup_state = super::types::WitchStartupState::Ready;
-                }
+                // Vacuum check is async — offloaded to a blocking task.
+                // The offload handler will transition to Vacuuming or Ready.
+                self.request_vacuum_check();
             }
             super::types::WitchStartupState::Vacuuming if !self.has_pending() => {
                 crate::logging::log_general("[WITCH] Vacuum complete — entering Ready");
@@ -109,11 +106,16 @@ impl super::Witch {
                 {
                     let (stage, mutations) = self.pending_mutation_phases.pop_front().unwrap();
                     crate::logging::log_mutation(format!(
-                        "[TRANSACTION] Phase advancement: draining db_thread, then queueing {:?} ({} mutations). \
+                        "[TRANSACTION] Phase advancement: queueing {:?} ({} mutations). \
                          {} phase(s) remaining.",
                         stage, mutations.len(), self.pending_mutation_phases.len()
                     ));
-                    write_thread::wait_for_queue_drain();
+                    // Guard above already confirmed in_flight==0 && queue_empty.
+                    // No workers running ⇒ no new writes can arrive ⇒ queue stays empty.
+                    debug_assert!(
+                        self.db_thread_handle.queue_empty(),
+                        "Phase advancement: guard confirmed queue_empty but it changed"
+                    );
 
                     // Extract label from current WorkState (preserves session label)
                     let label = if let WorkState::Working { ref label, .. } = self.work_state {
@@ -132,11 +134,14 @@ impl super::Witch {
                     let (stage, computations) =
                         self.pending_computation_phases.pop_front().unwrap();
                     crate::logging::log_general(format!(
-                        "[PIPELINE] Phase advancement: draining db_thread, then queueing {} ({} computations). \
+                        "[PIPELINE] Phase advancement: queueing {} ({} computations). \
                          {} phase(s) remaining.",
                         stage.label(), computations.len(), self.pending_computation_phases.len()
                     ));
-                    write_thread::wait_for_queue_drain();
+                    debug_assert!(
+                        self.db_thread_handle.queue_empty(),
+                        "Phase advancement: guard confirmed queue_empty but it changed"
+                    );
 
                     for comp in computations {
                         self.queue_computation_with_label(comp, None);
@@ -200,14 +205,12 @@ impl super::Witch {
                     "[STATE] Mutations now enabled.",
                 );
 
-                // Auto-index any unindexed corpus files discovered by derivation.
-                // Signal writes are flushed (queue drained before this callback).
-                // If files need indexing, skip content analysis — the post-mutation
-                // re-derivation cycle will trigger it once all files are indexed.
-                if !self.auto_index_unindexed_files() {
-                    // No unindexed files — go straight to content analysis.
-                    work.content_analysis = true;
-                }
+                // Auto-index check is async — offloaded to a blocking task.
+                // The offload handler will either queue index mutations or
+                // trigger content analysis when the result arrives.
+                self.request_auto_index_check(
+                    super::types::AutoIndexSource::InodesTransition,
+                );
             }
 
             // Normal operation: work completed while Full
@@ -246,7 +249,9 @@ impl super::Witch {
                 // Steady-state: derivation completed (no prior mutations).
                 // Check for newly unindexed files to auto-index.
                 if !had_mutations && self.pending_recomputation_scope.is_none() {
-                    self.auto_index_unindexed_files();
+                    self.request_auto_index_check(
+                        super::types::AutoIndexSource::SteadyState,
+                    );
                 }
             }
 
@@ -299,13 +304,13 @@ impl super::Witch {
             return;
         }
 
-        // Flush all pending db_thread writes before queueing the next phase.
-        // Computation tasks fire writes asynchronously via db_thread (fire-and-forget).
-        // The task completes when the worker returns, NOT when db_thread commits the
-        // writes. Without this barrier, the next phase's computations could read stale
-        // data (e.g., DeriveDeployHealthSignals reading library files written by
-        // ScanLibraryDirectory, or Awake-phase computations reading Awakening signals).
-        write_thread::wait_for_queue_drain();
+        // transition_to_completed() is only reached via has_pending()==false, which
+        // includes db_thread_handle.queue_empty(). With in_flight==0, no workers can
+        // enqueue new writes, so the queue stays empty.
+        debug_assert!(
+            self.db_thread_handle.queue_empty(),
+            "dispatch_post_transition_work: has_pending() confirmed queue_empty but it changed"
+        );
 
         // Queue follow-up computations AFTER reset to fix off-by-one counting
         // (if queued before reset, the task's queue count gets wiped but it still completes)
@@ -400,7 +405,7 @@ impl super::Witch {
     ///
     /// Only callable from `transition_to_completed` when mutations drain while Awake.
     /// Sealed by requiring `ContentAnalysisWitness` which can only be created in that context.
-    fn queue_content_analysis(&mut self, _witness: ContentAnalysisWitness) {
+    pub(super) fn queue_content_analysis(&mut self, _witness: ContentAnalysisWitness) {
         let scope = self.pending_recomputation_scope.take();
 
         crate::logging::log_general(format!(

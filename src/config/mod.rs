@@ -22,7 +22,7 @@ pub use dirs::{parse_dirs_kdl, write_dirs_to_disk};
 pub use edit::write_config_to_disk;
 pub use performance::{get_db_cache_kb, get_worker_thread_count, init_performance_config, set_db_cache_kb};
 pub use types::{
-    read_shared_config, Config,
+    Config,
     ExternalMatchingConfig, PackingWeights, PerformanceOpinions, ReleasePackingOpinions, SharedConfig, SidecarDeployMode,
     SourceDir, TagSplittingOpinions,
 };

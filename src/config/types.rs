@@ -5,7 +5,7 @@
 
 // Re-export all config types from mm-meta
 pub use mm_meta::config::{
-    read_shared_config, AlbumArtOpinions, CanonicalizationOpinions, Config, CoverArtSanctity,
+    AlbumArtOpinions, CanonicalizationOpinions, Config, CoverArtSanctity,
     CreditRoutingConfig, DiscExtractionOpinions, DuplicateAnalysisOpinions,
     ExternalMatchingConfig, HealthDetectionOpinions, MbTagNameConfig, Opinions, PackingWeights,
     PerformanceOpinions, QualityResolutionOpinions, RelationRouting, ReleasePackingOpinions,

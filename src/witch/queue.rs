@@ -18,12 +18,12 @@ impl super::Witch {
     // Config Access Helper
     // -------------------------------------------------------------------------
 
-    /// Read from shared config, returning None if config isn't set yet.
+    /// Read from config snapshot (lock-free via ArcSwap).
+    ///
+    /// Returns None if config isn't set yet (AwaitingSetup).
     pub(super) fn read_config<T>(&self, f: impl FnOnce(&Config) -> T) -> Option<T> {
-        self.shared_config.as_ref().map(|sc| {
-            let config = sc.read().expect("SharedConfig lock poisoned");
-            f(&config)
-        })
+        let guard = self.config_snapshot.load();
+        guard.as_deref().map(|cfg| f(cfg))
     }
 
     // -------------------------------------------------------------------------

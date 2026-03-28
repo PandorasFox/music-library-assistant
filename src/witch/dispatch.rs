@@ -83,6 +83,30 @@ impl super::Witch {
                         AuthenticatedBody::Command(_) => "Command",
                     }
                 ));
+                // ConfigKdl queries bypass synchronous dispatch — the file read
+                // is offloaded to a blocking task that replies directly.
+                if let AuthenticatedBody::Query(QueryPayload::ConfigKdl) = &body {
+                    match self.resolve_auth(Some(&token)) {
+                        Ok(AuthorizationLevel::Authenticated) => {
+                            tokio::task::spawn_blocking(move || {
+                                let kdl = mm_utils::get_config_dir()
+                                    .ok()
+                                    .map(|d| d.join("config.kdl"))
+                                    .and_then(|p| std::fs::read_to_string(p).ok())
+                                    .unwrap_or_default();
+                                let response = Ok(AuthenticatedResponse::Query(Box::new(
+                                    QueryResponse::ConfigKdl(kdl),
+                                )));
+                                let _ = reply.send(response);
+                            });
+                        }
+                        Ok(_) | Err(_) => {
+                            let _ = reply.send(Err(ProtocolError::Unauthorized));
+                        }
+                    }
+                    return false;
+                }
+
                 // Domain queries bypass synchronous dispatch — they forward
                 // the reply channel to the read thread so it replies directly.
                 if let AuthenticatedBody::Query(QueryPayload::Domain(domain_payload)) = body {
@@ -113,11 +137,7 @@ impl super::Witch {
                                     QueryResponse::Config(Box::new(config))
                                 }
                                 QueryPayload::ConfigKdl => {
-                                    let config_dir = mm_utils::get_config_dir()
-                                        .map_err(|e| ProtocolError::Internal(e.to_string()))?;
-                                    let kdl = std::fs::read_to_string(config_dir.join("config.kdl"))
-                                        .unwrap_or_default();
-                                    QueryResponse::ConfigKdl(kdl)
+                                    unreachable!("ConfigKdl queries handled above")
                                 }
                                 QueryPayload::GetDirConfig(path) => {
                                     let sd = w.read_config(|c| c.get_raw_source_dir(&path).cloned())
@@ -292,14 +312,24 @@ impl super::Witch {
                         // Gate on startup state, not auth level — the auth
                         // thread may already exist (prior DB with users) while
                         // the Witch still needs an archive root.
-                        if self.startup_state != super::types::WitchStartupState::AwaitingSetup {
-                            Err(ProtocolError::Unauthorized)
-                        } else {
-                            match self.complete_setup_impl(root, first_user) {
-                                Ok(()) => Ok(UnauthenticatedResponse::SetupComplete),
-                                Err(e) => Err(ProtocolError::Internal(e)),
-                            }
+                        if self.startup_state != super::types::WitchStartupState::AwaitingSetup
+                            || self.setup_in_progress
+                        {
+                            let _ = reply.send(Err(ProtocolError::Unauthorized));
+                            return false;
                         }
+                        // Offload the heavy setup work (FS, DB, bcrypt) to a blocking task.
+                        // The reply channel is forwarded — the offload handler sends the response.
+                        self.setup_in_progress = true;
+                        let tx = self.offload_tx.clone();
+                        tokio::task::spawn_blocking(move || {
+                            let result = complete_setup_blocking(root, first_user);
+                            let _ = tx.send(super::types::OffloadResult::SetupComplete {
+                                result,
+                                reply,
+                            });
+                        });
+                        return false;
                     }
                 };
                 let _ = reply.send(result);
@@ -319,88 +349,66 @@ impl super::Witch {
         false
     }
 
-    // -------------------------------------------------------------------------
-    // First-Time Setup
-    // -------------------------------------------------------------------------
+}
 
-    /// Complete first-time setup: write config, create dirs + DB, create first user, transition to Ready.
-    ///
-    /// Called when a client sends CompleteSetup after the operator picks an archive root
-    /// and provides first-user credentials. `first_user` is `(username, password_hash)`.
-    fn complete_setup_impl(
-        &mut self,
-        root: std::path::PathBuf,
-        first_user: Option<(String, String)>,
-    ) -> Result<(), String> {
-        use mm_meta::auth::FirstTimeSetupToken;
+// ============================================================================
+// Free Functions (blocking, run off main thread)
+// ============================================================================
 
-        if !config::config_exists() {
-            // Fresh install — write initial config.kdl with root
-            config::write_initial_config(&root).map_err(|e| format!("Failed to write config: {}", e))?;
-        }
+/// Complete first-time setup: write config, create dirs + DB, create first user.
+///
+/// Pure blocking work — no Witch state access. Returns a `SetupOutput` with
+/// the data the Witch needs to update its own state.
+fn complete_setup_blocking(
+    root: std::path::PathBuf,
+    first_user: Option<(String, String)>,
+) -> Result<super::types::SetupOutput, String> {
+    use mm_meta::auth::FirstTimeSetupToken;
 
-        // Load the config we just wrote
-        let cfg = config::load_config().map_err(|e| format!("Failed to load config: {}", e))?;
-
-        // Init performance globals
-        config::init_performance_config(cfg.opinions.performance.clone());
-
-        // Create zone directories (storage_root IS corpus, no subdirectory needed)
-        std::fs::create_dir_all(&cfg.storage_root)
-            .map_err(|e| format!("Failed to create storage-root {}: {}", cfg.storage_root.display(), e))?;
-        std::fs::create_dir_all(cfg.libraries_dir())
-            .map_err(|e| format!("Failed to create libraries dir: {}", e))?;
-        std::fs::create_dir_all(cfg.stash_dir())
-            .map_err(|e| format!("Failed to create stash dir: {}", e))?;
-
-        // Validate path root nesting invariants (no I/O needed)
-        cfg.validate_path_nesting()
-            .map_err(|e| format!("Path nesting validation failed: {}", e))?;
-
-        // Validate all roots are on the same filesystem (hard links require it)
-        crate::corpus::paths::validate_same_filesystem(&cfg)
-            .map_err(|e| format!("Filesystem validation failed: {}", e))?;
-
-        // Create database
-        let db_path = config::get_db_path().map_err(|e| format!("Failed to get DB path: {}", e))?;
-        if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create DB parent dir: {}", e))?;
-        }
-        let token = FirstTimeSetupToken::new();
-        let db = crate::db::create_database(&db_path, &token)
-            .map_err(|e| format!("Failed to create database: {}", e))?;
-
-        // Create the first user if credentials were provided
-        if let Some((username, plaintext_password)) = first_user {
-            let password_hash = crate::auth::hash_password(&plaintext_password)
-                .map_err(|e| format!("Failed to hash password: {}", e))?;
-            db.create_user(&username, &password_hash)
-                .map_err(|e| format!("Failed to create first user: {}", e))?;
-            crate::logging::log_general(format!(
-                "[WITCH] First user '{}' created",
-                username
-            ));
-        }
-
-        drop(db);
-
-        // Tell cache thread to reconnect to the new DB
-        self.cache_thread_handle.reconnect_db();
-
-        // Notify auth thread that DB is now available
-        if let Some(ref auth_handle) = self.auth_thread_handle {
-            auth_handle.notify_db_ready();
-        }
-
-        // Apply opinions from the loaded config
-        self.force_check_all_files_at_startup =
-            cfg.opinions.startup.force_check_all_files_at_startup;
-
-        // Transition to Ready
-        self.startup_state = super::types::WitchStartupState::Ready;
-        crate::logging::log_general("[WITCH] Setup complete — transitioning to Ready");
-
-        Ok(())
+    if !config::config_exists() {
+        config::write_initial_config(&root)
+            .map_err(|e| format!("Failed to write config: {}", e))?;
     }
+
+    let cfg = config::load_config().map_err(|e| format!("Failed to load config: {}", e))?;
+
+    std::fs::create_dir_all(&cfg.storage_root)
+        .map_err(|e| format!("Failed to create storage-root {}: {}", cfg.storage_root.display(), e))?;
+    std::fs::create_dir_all(cfg.libraries_dir())
+        .map_err(|e| format!("Failed to create libraries dir: {}", e))?;
+    std::fs::create_dir_all(cfg.stash_dir())
+        .map_err(|e| format!("Failed to create stash dir: {}", e))?;
+
+    cfg.validate_path_nesting()
+        .map_err(|e| format!("Path nesting validation failed: {}", e))?;
+    crate::corpus::paths::validate_same_filesystem(&cfg)
+        .map_err(|e| format!("Filesystem validation failed: {}", e))?;
+
+    let db_path = config::get_db_path().map_err(|e| format!("Failed to get DB path: {}", e))?;
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create DB parent dir: {}", e))?;
+    }
+    let token = FirstTimeSetupToken::new();
+    let db = crate::db::create_database(&db_path, &token)
+        .map_err(|e| format!("Failed to create database: {}", e))?;
+
+    if let Some((username, plaintext_password)) = first_user {
+        let password_hash = crate::auth::hash_password(&plaintext_password)
+            .map_err(|e| format!("Failed to hash password: {}", e))?;
+        db.create_user(&username, &password_hash)
+            .map_err(|e| format!("Failed to create first user: {}", e))?;
+        crate::logging::log_general(format!("[WITCH] First user '{}' created", username));
+    }
+
+    drop(db);
+
+    let force_check = cfg.opinions.startup.force_check_all_files_at_startup;
+    let vacuum_threshold = cfg.opinions.startup.vacuum_threshold;
+
+    Ok(super::types::SetupOutput {
+        config: cfg,
+        force_check,
+        vacuum_threshold,
+    })
 }

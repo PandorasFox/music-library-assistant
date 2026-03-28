@@ -37,6 +37,7 @@ pub(crate) mod cache_thread;
 mod dispatch;
 mod event_handlers;
 mod execution;
+mod offload_handlers;
 pub(crate) mod external_fetch;
 pub(crate) mod fs_thread;
 mod hades;
@@ -61,6 +62,58 @@ pub use types::{
 
 // Internal imports
 use types::ObservedInodes;
+
+/// Build a DB cache for the watcher's initial scan (blocking, off main thread).
+///
+/// Opens its own read-only connection and queries all corpus file mtimes + tags.
+/// The watcher compares disk mtime → if match, uses cached tags (skips disk read).
+fn build_watcher_db_cache_blocking() -> HashMap<i64, fs_thread::CachedInodeState> {
+    let db_path = match config::get_db_path() {
+        Ok(p) => p,
+        Err(_) => return HashMap::new(),
+    };
+    let db = match Database::open_read_only(&db_path) {
+        Ok(d) => d,
+        Err(_) => return HashMap::new(),
+    };
+
+    let corpus_mtimes = db
+        .get_all_file_mtimes(crate::db::types::Zone::Corpus)
+        .unwrap_or_default();
+
+    let all_tags = db.get_all_tags_ordered().unwrap_or_default();
+    let mut tags_by_inode: HashMap<i64, Vec<(String, String)>> = HashMap::new();
+    for (inode, tag_name, tag_value) in all_tags {
+        tags_by_inode
+            .entry(inode)
+            .or_default()
+            .push((tag_name, tag_value));
+    }
+
+    let mut cache = HashMap::new();
+    for (inode, (mtime_secs, mtime_nanos)) in &corpus_mtimes {
+        let tags = tags_by_inode
+            .remove(inode)
+            .map(crate::corpus::tags::TagSet::new)
+            .unwrap_or_else(crate::corpus::tags::TagSet::empty);
+        cache.insert(
+            *inode,
+            fs_thread::CachedInodeState {
+                mtime_secs: *mtime_secs,
+                mtime_nanos: *mtime_nanos,
+                tags,
+            },
+        );
+    }
+
+    crate::logging::log_general(format!(
+        "[WITCH] DB cache seeded: {} entries ({} corpus)",
+        cache.len(),
+        corpus_mtimes.len()
+    ));
+
+    cache
+}
 
 /// Async recv on an `Option<UnboundedReceiver>`. Returns `None` (pending forever)
 /// if the option is `None`, avoiding borrow-checker issues in `select!`.
@@ -197,6 +250,10 @@ pub struct Witch {
     /// Set after construction via `set_shared_config()`.
     shared_config: Option<SharedConfig>,
 
+    /// Lock-free config snapshot for hot-path reads (publish_status, etc.).
+    /// Updated alongside shared_config. Reads use arc_swap::Guard — no locks.
+    config_snapshot: arc_swap::ArcSwap<Option<std::sync::Arc<Config>>>,
+
     /// Set by watcher events (FileCreated/FileRemoved) during steady state.
     /// When true and Witch is idle, queues a derivation pass to reconcile
     /// observed inodes against the index.
@@ -237,6 +294,26 @@ pub struct Witch {
 
     /// Latest progress snapshot from the cover art fetch.
     cover_art_progress: Option<external_fetch::CoverArtProgress>,
+
+    // -------------------------------------------------------------------------
+    // Offload Infrastructure (async spawn_blocking results)
+    // -------------------------------------------------------------------------
+
+    /// Sender for spawn_blocking tasks to return results to the main loop.
+    offload_tx: tokio::sync::mpsc::UnboundedSender<types::OffloadResult>,
+    /// Receiver polled in the select! loop for offloaded results.
+    offload_rx: tokio::sync::mpsc::UnboundedReceiver<types::OffloadResult>,
+
+    /// True when watcher DB cache is being built asynchronously.
+    watcher_cache_loading: bool,
+    /// Deferred watcher command waiting for the cache build to complete.
+    pending_watcher_command: Option<types::PendingWatcherCommand>,
+
+    /// True while first-time setup is running in a blocking task.
+    setup_in_progress: bool,
+
+    /// True while vacuum check is running in a blocking task.
+    vacuum_check_pending: bool,
 }
 
 impl Witch {
@@ -266,6 +343,8 @@ impl Witch {
 
         // Spawn the filesystem watcher thread
         let fs_watcher_handle = fs_thread::FsThreadHandle::spawn();
+
+        let (offload_tx, offload_rx) = tokio::sync::mpsc::unbounded_channel();
 
         Self {
             startup_state,
@@ -298,6 +377,7 @@ impl Witch {
             observed_inodes: ObservedInodes::new(),
             log_thread_handle,
             shared_config: None,
+            config_snapshot: arc_swap::ArcSwap::from_pointee(None),
             watcher_derivation_needed: false,
             pending_observed_images: Vec::new(),
             fs_watcher: fs_watcher_handle,
@@ -308,6 +388,12 @@ impl Witch {
             external_fetch: None,
             fetch_progress: None,
             cover_art_progress: None,
+            offload_tx,
+            offload_rx,
+            watcher_cache_loading: false,
+            pending_watcher_command: None,
+            setup_in_progress: false,
+            vacuum_check_pending: false,
         }
     }
 
@@ -368,14 +454,23 @@ impl Witch {
             Self::new(types::WitchStartupState::AwaitingSetup, None, log_rx)
         };
 
-        // Auto-detect and queue startup maintenance (schema reconciliation, vacuum)
+        // Auto-detect and queue startup maintenance (schema reconciliation, vacuum).
+        // Runs before the socket listener is spawned, so no clients are connected —
+        // spawn_blocking().await is fine here (doesn't block the select loop).
         if she.startup_state == types::WitchStartupState::Ready {
-            if she.needs_schema_update() {
+            let vacuum_threshold = she.vacuum_threshold;
+            let startup_check = tokio::task::spawn_blocking(move || {
+                startup::startup_maintenance_check(vacuum_threshold)
+            })
+            .await
+            .unwrap_or_default();
+
+            if startup_check.needs_schema_update {
                 crate::logging::log_general("[WITCH] Schema update needed — entering Reconciling");
-                she.startup_schema_descriptions = she.pending_schema_descriptions();
+                she.startup_schema_descriptions = startup_check.schema_descriptions;
                 she.startup_state = types::WitchStartupState::Reconciling;
                 she.queue_schema_reconciliation();
-            } else if she.check_vacuum_needed() {
+            } else if startup_check.needs_vacuum {
                 crate::logging::log_general("[WITCH] Vacuum threshold exceeded — entering Vacuuming");
                 she.startup_state = types::WitchStartupState::Vacuuming;
                 she.queue_vacuum();
@@ -466,6 +561,13 @@ impl Witch {
                         self.process_scheduler_message(msg);
                     }
                 }
+                Some(result) = self.offload_rx.recv() => {
+                    broadcast_status = true;
+                    self.handle_offload_result(result);
+                    while let Ok(r) = self.offload_rx.try_recv() {
+                        self.handle_offload_result(r);
+                    }
+                }
                 _ = housekeeping.tick() => {}
             }
 
@@ -492,6 +594,10 @@ impl Witch {
     ///
     /// Called from `run_tui()` after both App and Witch are created.
     pub fn set_shared_config(&mut self, shared: SharedConfig) {
+        // Update lock-free snapshot for hot-path reads
+        let snapshot = shared.read().expect("SharedConfig lock poisoned").clone();
+        self.config_snapshot
+            .store(std::sync::Arc::new(Some(std::sync::Arc::new(snapshot))));
         self.cache_thread_handle.set_config(shared.clone());
         self.shared_config = Some(shared);
     }
@@ -501,9 +607,9 @@ impl Witch {
     pub(super) fn update_performance_impl(&mut self, opinions: crate::config::PerformanceOpinions) {
         let new_cache_kb = -(opinions.db_cache_mb as i64 * 1024);
 
-        // Read current config for Hades snapshot update
-        let current_config = self.shared_config.as_ref()
-            .map(|sc| sc.read().expect("SharedConfig lock poisoned").clone());
+        // Read current config for Hades snapshot update (lock-free via ArcSwap)
+        let guard = self.config_snapshot.load();
+        let current_config = guard.as_deref().cloned();
 
         // Hades handles rayon pool rebuild + thread-local cache_size (lazy propagation)
         if let Some(ref cfg) = current_config {
@@ -522,8 +628,12 @@ impl Witch {
 
     /// Replace the in-memory config with a new version (after config edit mutation).
     ///
-    /// Write-locks briefly; safe because tick() and render() are sequential on main thread.
+    /// Updates both the SharedConfig (for threads that hold it) and the lock-free
+    /// ArcSwap snapshot (for hot-path reads on the main loop).
     pub fn update_shared_config(&self, new_config: Config) {
+        // Update lock-free snapshot first (hot-path reads see it immediately)
+        self.config_snapshot
+            .store(std::sync::Arc::new(Some(std::sync::Arc::new(new_config.clone()))));
         if let Some(ref shared) = self.shared_config {
             let mut guard = shared.write().expect("SharedConfig lock poisoned");
             *guard = new_config;
@@ -554,99 +664,70 @@ impl Witch {
         self.reasoning_level == ReasoningLevel::Full
     }
 
-    /// Start watching. Returns false if already scanning.
+    /// Start watching. Returns false if already scanning or cache loading.
     ///
-    /// Seeds the watcher with DB-cached mtime+tags so the initial scan
-    /// can skip tag reads for files with matching mtimes.
+    /// Offloads the DB cache build to a blocking task. When the cache arrives
+    /// via the offload channel, the watcher is actually started/polled.
     ///
     /// In polling mode, sends a Poll command (immediate re-walk with fresh
     /// cache) instead of Start (which would retry inotify).
     pub fn start_watching(&mut self) -> bool {
-        if self.is_initial_scanning() {
+        if self.is_initial_scanning() || self.watcher_cache_loading {
             return false;
         }
 
         // Clear accumulated observation state before fresh scan
         self.observed_inodes.clear();
 
-        // Seed DB cache for watcher: mtime + tags per inode.
-        // Watcher compares disk mtime → if match, uses cached tags (skips disk read).
-        let db_cache = self.build_watcher_db_cache();
-
-        if self.watcher_state == WatcherState::Polling {
-            // In polling mode: send Poll for immediate re-walk without
-            // retrying inotify. Poll interval comes from config.
+        // Determine the watcher command synchronously (cheap config reads).
+        let cmd = if self.watcher_state == WatcherState::Polling {
             let interval = self.poll_interval_secs();
-            self.fs_watcher.poll(db_cache, interval);
-            crate::logging::log_general("[WITCH] Watcher poll triggered — re-walking zones");
+            types::PendingWatcherCommand::Poll { interval_secs: interval }
         } else {
             self.watcher_state = WatcherState::InitialScan;
-            let config = self.shared_config.as_ref()
-                .map(|sc| config::read_shared_config(sc));
-            self.fs_watcher.start(types::watched_zones(config.as_deref()), db_cache);
-            crate::logging::log_general("[WITCH] Watcher started — initial scan in progress");
-        }
+            let guard = self.config_snapshot.load();
+            let config_ref = guard.as_deref();
+            types::PendingWatcherCommand::Start {
+                zones: types::watched_zones(config_ref),
+            }
+        };
+
+        self.watcher_cache_loading = true;
+        self.pending_watcher_command = Some(cmd);
+
+        // Offload the bulk DB queries to a blocking task.
+        let tx = self.offload_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let cache = build_watcher_db_cache_blocking();
+            let _ = tx.send(types::OffloadResult::WatcherDbCache { cache });
+        });
 
         true
     }
 
-    /// Get the configured poll interval (seconds) from shared config.
+    /// Get the configured poll interval (seconds) from config snapshot.
     fn poll_interval_secs(&self) -> u64 {
-        self.shared_config
-            .as_ref()
-            .map(|sc| {
-                config::read_shared_config(sc)
-                    .opinions
-                    .watcher_poll_interval_secs
-            })
+        self.read_config(|c| c.opinions.watcher_poll_interval_secs)
             .unwrap_or(900)
     }
 
-    /// Build a DB cache for the watcher's initial scan.
+    /// Trigger an async watcher cache rebuild (for config update → poll re-walk).
     ///
-    /// Queries all corpus file mtimes and tags, producing a map
-    /// the watcher can use to skip tag reads for files with matching mtimes.
-    pub(super) fn build_watcher_db_cache(&self) -> HashMap<i64, fs_thread::CachedInodeState> {
-        let db_path = match config::get_db_path() {
-            Ok(p) => p,
-            Err(_) => return HashMap::new(),
-        };
-        let db = match Database::open_read_only(&db_path) {
-            Ok(d) => d,
-            Err(_) => return HashMap::new(),
-        };
-
-        // Get mtimes for corpus files
-        let corpus_mtimes = db.get_all_file_mtimes(crate::db::types::Zone::Corpus)
-            .unwrap_or_default();
-
-        // Get all corpus tags, grouped by inode
-        let all_tags = db.get_all_tags_ordered().unwrap_or_default();
-        let mut tags_by_inode: HashMap<i64, Vec<(String, String)>> = HashMap::new();
-        for (inode, tag_name, tag_value) in all_tags {
-            tags_by_inode.entry(inode).or_default().push((tag_name, tag_value));
+    /// If a cache build is already in progress, this is a no-op — the pending
+    /// command will be updated when the result arrives.
+    pub(super) fn request_watcher_poll_with_cache(&mut self, interval_secs: u64) {
+        if self.watcher_cache_loading {
+            // Already loading — update the pending command to use the new interval
+            self.pending_watcher_command = Some(types::PendingWatcherCommand::Poll { interval_secs });
+            return;
         }
-
-        let mut cache = HashMap::new();
-
-        // Build cache entries for corpus files
-        for (inode, (mtime_secs, mtime_nanos)) in &corpus_mtimes {
-            let tags = tags_by_inode.remove(inode)
-                .map(crate::corpus::tags::TagSet::new)
-                .unwrap_or_else(crate::corpus::tags::TagSet::empty);
-            cache.insert(*inode, fs_thread::CachedInodeState {
-                mtime_secs: *mtime_secs,
-                mtime_nanos: *mtime_nanos,
-                tags,
-            });
-        }
-
-        crate::logging::log_general(format!(
-            "[WITCH] DB cache seeded: {} entries ({} corpus)",
-            cache.len(), corpus_mtimes.len()
-        ));
-
-        cache
+        self.watcher_cache_loading = true;
+        self.pending_watcher_command = Some(types::PendingWatcherCommand::Poll { interval_secs });
+        let tx = self.offload_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let cache = build_watcher_db_cache_blocking();
+            let _ = tx.send(types::OffloadResult::WatcherDbCache { cache });
+        });
     }
 
 

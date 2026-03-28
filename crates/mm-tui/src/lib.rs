@@ -357,7 +357,12 @@ impl App {
             ActiveView::CorruptFileResolution(s) => dispatch_input!(CorruptFileResolution, s),
             ActiveView::LosslessRemuxResolution(s) => dispatch_input_raw!(LosslessRemuxResolution, s),
             ActiveView::SubparDuplicateResolution(s) => dispatch_input!(SubparDuplicateResolution, s),
-            ActiveView::DirectoryClusterResolution(ref mut s) => dispatch_input!(DirectoryClusterResolution, s),
+            ActiveView::DirectoryClusterResolution(ref mut s) => {
+                match s.handle_input_with_items(&action) {
+                    Some(a) => ViewAction::DirectoryClusterResolution(a),
+                    None => ViewAction::None,
+                }
+            }
             ActiveView::MovedFileAcknowledge(s) => dispatch_input!(MovedFileAcknowledge, s),
             ActiveView::OobResolution(s) => dispatch_input_raw!(OobResolution, s),
             ActiveView::ReleasePackingBrowser(s) => dispatch_input_raw!(ReleasePackingBrowser, s),

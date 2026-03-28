@@ -84,6 +84,15 @@ where
         }
     }
 
+    /// Create a new resolution state with custom list configuration.
+    pub fn with_list_config(data: D, config: StandardListConfig) -> Self {
+        Self {
+            data,
+            list: StandardListState::new(config),
+            frame: FrameState::new(),
+        }
+    }
+
     /// Path of the currently selected item (for status bar).
     pub fn selected_path(&self) -> Option<&str> {
         self.data.selected_path(self.list.cursor)

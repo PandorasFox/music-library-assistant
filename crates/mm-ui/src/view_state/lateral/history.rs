@@ -435,6 +435,7 @@ impl HistoryViewData {
         let mut detail_list = StandardListState::new(StandardListConfig {
             multi_select: true,
             pane_min_width: 70,
+            ..Default::default()
         });
         // Select all selectable entries by default
         for (i, entry) in entries.iter().enumerate() {

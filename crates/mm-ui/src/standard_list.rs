@@ -37,6 +37,14 @@ pub trait ListEntry {
     fn is_selectable(&self) -> bool {
         true
     }
+
+    /// Whether this item can be toggle/radio-selected with Space.
+    /// Return `false` for items that should appear in the list but cannot
+    /// be selected as a choice (e.g., non-stashable directories).
+    /// Default: `true`.
+    fn is_toggleable(&self) -> bool {
+        true
+    }
 }
 
 /// Which widget has focus within the StandardList.
@@ -66,6 +74,10 @@ pub enum ListInputResult<A> {
 pub struct StandardListConfig {
     /// Whether items can be toggle-selected with Space.
     pub multi_select: bool,
+    /// Whether Space performs radio selection (at most one item selected).
+    /// Mutually exclusive with `multi_select`. Only items where
+    /// `ListEntry::is_toggleable()` returns `true` can be radio-selected.
+    pub radio_select: bool,
     /// Minimum width for the wizard pane. When the normal 60/40 split gives
     /// the pane less than this, the pane renders as a right-aligned overlay
     /// on top of the list instead. Default: 0 (always use normal split).
@@ -270,7 +282,23 @@ impl StandardListState {
                 }
             }
             InputAction::Toggle => {
-                if self.config.multi_select {
+                if self.config.radio_select {
+                    if let Some(item) = items.get(self.cursor) {
+                        if item.is_toggleable() {
+                            if self.selected.contains(&self.cursor) {
+                                self.selected.clear();
+                            } else {
+                                self.selected.clear();
+                                self.selected.insert(self.cursor);
+                            }
+                            ListInputResult::Toggled
+                        } else {
+                            ListInputResult::Consumed
+                        }
+                    } else {
+                        ListInputResult::Consumed
+                    }
+                } else if self.config.multi_select {
                     if self.selected.contains(&self.cursor) {
                         self.selected.remove(&self.cursor);
                     } else {
@@ -568,6 +596,58 @@ mod tests {
         let result = s.handle_input(&InputAction::Toggle, &items);
         assert!(matches!(result, ListInputResult::Toggled));
         assert!(!s.selected.contains(&0));
+    }
+
+    // === Toggle (radio-select) ===
+
+    /// Item that is not toggleable (e.g., non-stashable directory).
+    struct NonToggleableItem;
+
+    impl WizardItem for NonToggleableItem {
+        fn wizard(&self, _: u16) -> Option<WizardOffer> { None }
+    }
+
+    impl ListEntry for NonToggleableItem {
+        type Action = String;
+        fn on_confirm(&self, _: &BTreeSet<usize>) -> Option<String> { None }
+        fn is_toggleable(&self) -> bool { false }
+    }
+
+    #[test]
+    fn radio_select_single_item() {
+        let mut s = StandardListState::new(StandardListConfig { radio_select: true, ..Default::default() });
+        s.visible_height = 10;
+        let items = make_items(3);
+
+        // Select item 0
+        let result = s.handle_input(&InputAction::Toggle, &items);
+        assert!(matches!(result, ListInputResult::Toggled));
+        assert!(s.selected.contains(&0));
+        assert_eq!(s.selected.len(), 1);
+
+        // Move to item 1, select it → item 0 deselected
+        s.handle_input(&InputAction::NavDown, &items);
+        let result = s.handle_input(&InputAction::Toggle, &items);
+        assert!(matches!(result, ListInputResult::Toggled));
+        assert!(s.selected.contains(&1));
+        assert!(!s.selected.contains(&0));
+        assert_eq!(s.selected.len(), 1);
+
+        // Toggle again → deselect
+        let result = s.handle_input(&InputAction::Toggle, &items);
+        assert!(matches!(result, ListInputResult::Toggled));
+        assert!(s.selected.is_empty());
+    }
+
+    #[test]
+    fn radio_select_non_toggleable_consumed() {
+        let mut s = StandardListState::new(StandardListConfig { radio_select: true, ..Default::default() });
+        s.visible_height = 10;
+        let items: Vec<NonToggleableItem> = vec![NonToggleableItem];
+
+        let result = s.handle_input(&InputAction::Toggle, &items);
+        assert!(matches!(result, ListInputResult::Consumed));
+        assert!(s.selected.is_empty());
     }
 
     // === Wizard state ===

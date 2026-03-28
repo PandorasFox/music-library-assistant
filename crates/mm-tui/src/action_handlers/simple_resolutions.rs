@@ -258,8 +258,12 @@ impl App {
             return;
         }
         let _ = self.start_transaction("Release overlap resolution");
-        let state = mm_ui::resolutions::directory_cluster::DirectoryClusterState::new(
+        let state = mm_ui::resolutions::directory_cluster::DirectoryClusterState::with_list_config(
             mm_ui::resolutions::directory_cluster::DirectoryClusterData::new(data),
+            mm_ui::standard_list::StandardListConfig {
+                radio_select: true,
+                ..Default::default()
+            },
         );
         self.view = ActiveView::DirectoryClusterResolution(state);
     }
@@ -272,8 +276,12 @@ impl App {
             return;
         }
         let _ = self.start_transaction("Directory overlap resolution");
-        let state = mm_ui::resolutions::directory_cluster::DirectoryClusterState::new(
+        let state = mm_ui::resolutions::directory_cluster::DirectoryClusterState::with_list_config(
             mm_ui::resolutions::directory_cluster::DirectoryClusterData::new(data),
+            mm_ui::standard_list::StandardListConfig {
+                radio_select: true,
+                ..Default::default()
+            },
         );
         self.view = ActiveView::DirectoryClusterResolution(state);
     }

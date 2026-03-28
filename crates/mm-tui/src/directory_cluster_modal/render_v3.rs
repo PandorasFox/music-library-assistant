@@ -2,8 +2,7 @@
 //!
 //! Simpler V3 pattern (no DecisionField): directories in a StandardList,
 //! wizard pane shows files in the selected directory, buttons at the bottom.
-
-use std::collections::BTreeSet;
+//! Directories are radio-selectable (Space) to choose which one to stash.
 
 use ratatui::{
     layout::{Alignment, Rect},
@@ -14,69 +13,11 @@ use ratatui::{
 };
 
 use mm_ui::resolution_state::ResolutionData;
-use mm_ui::resolutions::directory_cluster::DirectoryClusterState;
-use mm_ui::rich_text::{RichBlock, RichSpan};
-use mm_ui::standard_list::ListEntry;
-use mm_ui::wizard::{WizardItem, WizardOffer};
+use mm_ui::resolutions::directory_cluster::{
+    build_dir_items, ClusterDirItem, DirectoryClusterState,
+};
 
 use crate::helpers::truncate_right;
-
-// ============================================================================
-// WizardItem wrapper
-// ============================================================================
-
-/// Display wrapper for a directory within a cluster (V3 StandardList).
-pub struct ClusterDirItem {
-    pub path_suffix: String,
-    pub format_summary: String,
-    pub file_count: usize,
-    pub paths: Vec<String>,
-    pub can_stash: bool,
-}
-
-impl WizardItem for ClusterDirItem {
-    fn wizard(&self, _width: u16) -> Option<WizardOffer> {
-        let mut content = vec![
-            RichBlock::Paragraph(vec![
-                RichSpan::new(
-                    &format!("{} \u{2014} {}", self.format_summary, self.file_count),
-                    Style::default().fg(Color::Cyan),
-                ),
-            ]),
-        ];
-
-        // Show file paths
-        for path in &self.paths {
-            content.push(RichBlock::Paragraph(vec![RichSpan::new(
-                path,
-                Style::default().fg(Color::White),
-            )]));
-        }
-
-        Some(WizardOffer::Pane {
-            title: self.path_suffix.clone(),
-            content,
-        })
-    }
-}
-
-impl ListEntry for ClusterDirItem {
-    type Action = ();
-    fn on_confirm(&self, _selected: &BTreeSet<usize>) -> Option<()> {
-        None
-    }
-}
-
-/// Build items from a cluster's directories.
-pub fn build_dir_items(cluster: &mm_meta::views::cluster_deploy::DirectoryClusterEntry) -> Vec<ClusterDirItem> {
-    cluster.directories.iter().map(|d| ClusterDirItem {
-        path_suffix: d.path_suffix.clone(),
-        format_summary: d.format_summary.clone(),
-        file_count: d.paths.len(),
-        paths: d.paths.clone(),
-        can_stash: d.can_stash_dupes,
-    }).collect()
-}
 
 // ============================================================================
 // Render
@@ -85,11 +26,7 @@ pub fn build_dir_items(cluster: &mm_meta::views::cluster_deploy::DirectoryCluste
 /// Render the Directory Cluster V3 resolution view.
 ///
 /// Layout: Title (3) + StandardList with wizard (min) + Buttons (3)
-pub fn render_v3(
-    f: &mut Frame,
-    area: Rect,
-    state: &mut DirectoryClusterState,
-) {
+pub fn render_v3(f: &mut Frame, area: Rect, state: &mut DirectoryClusterState) {
     let data = &state.data.inner;
     let current_cluster = state.data.current_cluster;
 
@@ -101,7 +38,7 @@ pub fn render_v3(
         .constraints([
             ratatui::layout::Constraint::Length(3), // Title bar
             ratatui::layout::Constraint::Min(5),    // StandardList
-            ratatui::layout::Constraint::Length(3),  // Buttons
+            ratatui::layout::Constraint::Length(3), // Buttons
         ])
         .split(padded);
 
@@ -110,9 +47,7 @@ pub fn render_v3(
 
     // --- StandardList ---
     let cluster = data.clusters.get(current_cluster);
-    let items: Vec<ClusterDirItem> = cluster
-        .map(build_dir_items)
-        .unwrap_or_default();
+    let items: Vec<ClusterDirItem> = cluster.map(build_dir_items).unwrap_or_default();
 
     let list_focused = state.frame.focus_pane == mm_ui::geometry::FocusPane::List;
 
@@ -124,7 +59,7 @@ pub fn render_v3(
         let dir_count = items.len();
         let plural = if overlap_count == 1 { "" } else { "s" };
         format!(
-            "{} ({} dirs, {} overlap{}) [cluster {}/{}] \u{2014} [Z] details",
+            "{} ({} dirs, {} overlap{}) [cluster {}/{}] \u{2014} [Space] select [Z] details",
             key, dir_count, overlap_count, plural, current, total
         )
     };
@@ -134,7 +69,9 @@ pub fn render_v3(
         f,
         vertical[1],
         &items,
-        |idx, is_cursor, _is_selected, width| render_dir_item(&items, idx, is_cursor, width),
+        |idx, is_cursor, is_selected, width| {
+            render_dir_item(&items, idx, is_cursor, is_selected, width)
+        },
         &list_title,
         list_focused,
     );
@@ -142,7 +79,13 @@ pub fn render_v3(
     // --- Buttons ---
     let ctx = state.data.button_ctx();
     let button_focused = state.frame.focus_pane == mm_ui::geometry::FocusPane::Buttons;
-    crate::widgets::modal_buttons::render_buttons(&mut state.frame.buttons, f, vertical[2], &ctx, button_focused);
+    crate::widgets::modal_buttons::render_buttons(
+        &mut state.frame.buttons,
+        f,
+        vertical[2],
+        &ctx,
+        button_focused,
+    );
 }
 
 fn render_cluster_title(
@@ -157,9 +100,11 @@ fn render_cluster_title(
     let overlap_count = cluster.map_or(0, |c| c.overlap_count);
     let dir_count = cluster.map_or(0, |c| c.directories.len());
 
+    let nav_hint = if total > 1 { " [Tab] next" } else { "" };
+
     let title = format!(
-        " Directory Overlap ({}/{}) \u{2014} {} dirs, {} overlaps ",
-        current, total, dir_count, overlap_count,
+        " Directory Overlap ({}/{}) \u{2014} {} dirs, {} overlaps{} ",
+        current, total, dir_count, overlap_count, nav_hint,
     );
 
     let block = Block::default()
@@ -175,13 +120,24 @@ fn render_dir_item(
     items: &[ClusterDirItem],
     idx: usize,
     is_cursor: bool,
+    is_selected: bool,
     width: u16,
 ) -> Line<'static> {
     let Some(item) = items.get(idx) else {
         return Line::raw("");
     };
 
-    let marker = if is_cursor { "\u{25b8} " } else { "  " };
+    // Checkbox indicator: [x] selected, [ ] unselected, blank for non-stashable
+    let checkbox = if !item.can_stash {
+        "    "
+    } else if is_selected {
+        "[x] "
+    } else {
+        "[ ] "
+    };
+
+    let cursor_marker = if is_cursor { "\u{25b8} " } else { "  " };
+
     let label_style = if is_cursor {
         Style::default()
             .fg(Color::Yellow)
@@ -190,22 +146,31 @@ fn render_dir_item(
         Style::default().fg(Color::White)
     };
 
+    let checkbox_style = if is_selected {
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
     let max_width = width.saturating_sub(2) as usize;
-    // Show: path_suffix — format (N files)
     let suffix_info = format!(" \u{2014} {} ({} files)", item.format_summary, item.file_count);
-    let path_max = max_width.saturating_sub(suffix_info.len() + 2);
+    // cursor(2) + checkbox(4) = 6 prefix chars
+    let path_max = max_width.saturating_sub(suffix_info.len() + 6);
     let path_display = truncate_right(&item.path_suffix, path_max);
 
-    let stash_indicator = if !item.can_stash {
-        Span::styled(" [no stash]", Style::default().fg(Color::DarkGray))
+    let not_stashable = if !item.can_stash {
+        Span::styled(" [not stashable]", Style::default().fg(Color::DarkGray))
     } else {
         Span::raw("")
     };
 
     Line::from(vec![
-        Span::styled(marker.to_string(), label_style),
+        Span::styled(cursor_marker.to_string(), label_style),
+        Span::styled(checkbox.to_string(), checkbox_style),
         Span::styled(path_display.to_string(), label_style),
         Span::styled(suffix_info, Style::default().fg(Color::Cyan)),
-        stash_indicator,
+        not_stashable,
     ])
 }

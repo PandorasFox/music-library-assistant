@@ -35,10 +35,8 @@ use crate::wizard::{WizardItem, WizardOffer};
 pub enum ExternalMatchesAction {
     /// Enter on "Cache external metadata matches" entry
     RequestFetch,
-    /// Enter on "Analyze release matches" entry (incremental — skips solved releases)
+    /// Enter on "Run release packing" entry (full scoring + MIS solving)
     RequestReleasePacking,
-    /// Enter on "Full release repack" entry (rescores everything from scratch)
-    RequestFullReleasePacking,
     /// Enter on "Download cover art" entry
     RequestCoverArt,
     /// Enter on "Untagged matches" → launch review for untagged entries
@@ -58,10 +56,8 @@ pub enum ExternalMatchesAction {
 pub enum NavigableEntry {
     /// "Cache external metadata matches" action entry (always present)
     FetchAction,
-    /// "Analyze release matches" action entry (incremental, always present)
+    /// "Run release packing" action entry (always present)
     PackReleasesAction,
-    /// "Full release repack" action entry (always present)
-    FullRepackAction,
     /// "Download cover art" action entry (always present)
     CoverArtAction,
     /// "Untagged matches" — files with fingerprint hits but no existing tags
@@ -193,11 +189,6 @@ impl ExternalMatchesViewData {
         items.push(ExternalMatchListItem::Entry {
             nav: NavigableEntry::PackReleasesAction,
             detail_lines: self.pack_releases_detail_lines(),
-        });
-
-        items.push(ExternalMatchListItem::Entry {
-            nav: NavigableEntry::FullRepackAction,
-            detail_lines: self.full_repack_detail_lines(),
         });
 
         items.push(ExternalMatchListItem::Entry {
@@ -514,7 +505,7 @@ impl ExternalMatchesViewData {
     fn pack_releases_detail_lines(&self) -> Vec<Line<'static>> {
         let mut lines = vec![
             Line::from(Span::styled(
-                "Analyze release matches",
+                "Run release packing",
                 Style::default()
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
@@ -522,10 +513,7 @@ impl ExternalMatchesViewData {
             Line::from(""),
         ];
 
-        let has_data = self
-            .cached_data
-            .as_ref()
-            .is_some_and(|d| !d.confidence_buckets.is_empty());
+        let has_data = self.cached_data.is_some();
 
         let stale = self
             .cached_data
@@ -561,88 +549,22 @@ impl ExternalMatchesViewData {
                     Style::default().fg(Color::Yellow),
                 )));
                 lines.push(Line::from(Span::styled(
-                    "analysis to update packing results.",
+                    "to update packing results.",
                     Style::default().fg(Color::Yellow),
                 )));
                 lines.push(Line::from(""));
             }
             lines.push(Line::from(Span::styled(
-                "Bin-pack recordings into releases",
+                "Re-score and re-pack all releases",
                 Style::default().fg(Color::White),
             )));
             lines.push(Line::from(Span::styled(
-                "using cached MusicBrainz data.",
-                Style::default().fg(Color::White),
-            )));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "Scores each file by AcoustID",
-                Style::default().fg(Color::DarkGray),
-            )));
-            lines.push(Line::from(Span::styled(
-                "confidence, duration match, tag",
-                Style::default().fg(Color::DarkGray),
-            )));
-            lines.push(Line::from(Span::styled(
-                "similarity, and directory cohesion.",
-                Style::default().fg(Color::DarkGray),
-            )));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "Press Enter to start analysis.",
-                Style::default().fg(Color::DarkGray),
-            )));
-        }
-
-        lines
-    }
-
-    fn full_repack_detail_lines(&self) -> Vec<Line<'static>> {
-        let mut lines = vec![
-            Line::from(Span::styled(
-                "Full release repack",
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::from(""),
-        ];
-
-        let has_data = self
-            .cached_data
-            .as_ref()
-            .is_some_and(|d| !d.confidence_buckets.is_empty());
-
-        if self.fetch_active {
-            lines.push(Line::from(Span::styled(
-                "Wait for the external fetch to",
-                Style::default().fg(Color::DarkGray),
-            )));
-            lines.push(Line::from(Span::styled(
-                "complete before running analysis.",
-                Style::default().fg(Color::DarkGray),
-            )));
-        } else if !has_data {
-            lines.push(Line::from(Span::styled(
-                "No external match data available.",
-                Style::default().fg(Color::DarkGray),
-            )));
-        } else {
-            lines.push(Line::from(Span::styled(
-                "Re-score and re-pack ALL releases",
-                Style::default().fg(Color::White),
-            )));
-            lines.push(Line::from(Span::styled(
-                "from scratch, including those with",
-                Style::default().fg(Color::White),
-            )));
-            lines.push(Line::from(Span::styled(
-                "MusicBrainz tags already applied.",
+                "from scratch using cached MB data.",
                 Style::default().fg(Color::White),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "Press Enter to start full repack.",
+                "Press Enter to start packing.",
                 Style::default().fg(Color::DarkGray),
             )));
         }
@@ -846,21 +768,8 @@ impl ExternalMatchesViewData {
                 }
             }
             NavigableEntry::PackReleasesAction => {
-                let has_data = self.cached_data.as_ref().is_some_and(|d| {
-                    !d.untagged_entries.is_empty() || !d.confidence_buckets.is_empty()
-                });
-                if !self.fetch_active && has_data {
+                if !self.fetch_active && self.cached_data.is_some() {
                     Some(ExternalMatchesAction::RequestReleasePacking)
-                } else {
-                    None
-                }
-            }
-            NavigableEntry::FullRepackAction => {
-                let has_data = self.cached_data.as_ref().is_some_and(|d| {
-                    !d.untagged_entries.is_empty() || !d.confidence_buckets.is_empty()
-                });
-                if !self.fetch_active && has_data {
-                    Some(ExternalMatchesAction::RequestFullReleasePacking)
                 } else {
                     None
                 }

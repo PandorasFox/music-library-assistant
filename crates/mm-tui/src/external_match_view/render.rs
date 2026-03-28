@@ -72,7 +72,6 @@ fn render_item(
         ExternalMatchListItem::Entry { nav, .. } => match nav {
             NavigableEntry::FetchAction => render_fetch_line(is_cursor, snap),
             NavigableEntry::PackReleasesAction => render_pack_releases_line(is_cursor, snap),
-            NavigableEntry::FullRepackAction => render_full_repack_line(is_cursor, snap),
             NavigableEntry::CoverArtAction => render_cover_art_line(is_cursor, snap),
             NavigableEntry::UntaggedMatches => {
                 let count = snap
@@ -152,9 +151,7 @@ fn render_fetch_line(is_cursor: bool, snap: &RenderSnapshot) -> Line<'static> {
 }
 
 fn render_pack_releases_line(is_cursor: bool, snap: &RenderSnapshot) -> Line<'static> {
-    let has_data = snap
-        .cached_data
-        .is_some_and(|d| !d.untagged_entries.is_empty() || !d.confidence_buckets.is_empty());
+    let has_data = snap.cached_data.is_some();
     let stale = snap
         .cached_data
         .is_some_and(|d| d.pinned_releases_stale);
@@ -172,31 +169,7 @@ fn render_pack_releases_line(is_cursor: bool, snap: &RenderSnapshot) -> Line<'st
 
     Line::from(vec![
         Span::styled(marker, label_style),
-        Span::styled("Analyze release matches   ", label_style),
-        Span::styled(
-            format!("{:<12}", status_label),
-            Style::default().fg(status_color),
-        ),
-    ])
-}
-
-fn render_full_repack_line(is_cursor: bool, snap: &RenderSnapshot) -> Line<'static> {
-    let has_data = snap
-        .cached_data
-        .is_some_and(|d| !d.untagged_entries.is_empty() || !d.confidence_buckets.is_empty());
-    let (status_label, status_color) = if snap.fetch_active {
-        ("Fetch active", Color::DarkGray)
-    } else if !has_data {
-        ("No data", Color::DarkGray)
-    } else {
-        ("Ready", Color::Green)
-    };
-
-    let (marker, label_style) = cursor_marker_style(is_cursor, snap.fetch_active || !has_data);
-
-    Line::from(vec![
-        Span::styled(marker, label_style),
-        Span::styled("Full release repack        ", label_style),
+        Span::styled("Run release packing        ", label_style),
         Span::styled(
             format!("{:<12}", status_label),
             Style::default().fg(status_color),

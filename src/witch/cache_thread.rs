@@ -1,20 +1,23 @@
-//! DB read thread — executes domain queries on behalf of protocol clients.
+//! Domain query dispatcher — spawns a thread per query with its own DB connection.
 //!
-//! Owns a read-only DB connection. Receives `(DomainQueryPayload, reply_tx)`
-//! pairs forwarded by the Witch after auth validation. Executes the query
-//! via `dispatch_domain_query` and sends the result directly back to the
-//! client through the forwarded reply channel — the Witch never touches
-//! the response path for domain queries.
+//! Each domain query gets its own `spawn_blocking` task that opens a fresh
+//! read-only SQLite connection, executes the query, replies directly to the
+//! client, and exits. No shared state, no queue, no head-of-line blocking.
+//!
+//! SQLite WAL mode supports unlimited concurrent readers — each thread's
+//! connection is independent.
+
+use std::sync::Arc;
+use std::sync::RwLock;
 
 use tokio::sync::oneshot;
 
 use crate::config;
 use crate::db::domain::{dispatch_domain_query, DomainQueryPayload};
 use crate::db::{Database, ReadOnlyDb};
-use crate::meta::recomputation::RecomputationScope;
 
 // ============================================================================
-// Read Thread Protocol
+// Types
 // ============================================================================
 
 /// The reply type that clients expect from authenticated protocol requests.
@@ -23,205 +26,101 @@ pub(super) type AuthReply = oneshot::Sender<Result<
     crate::meta::protocol::ProtocolError,
 >>;
 
-/// Requests from Witch → read thread.
-pub(super) enum CacheRequest {
-    /// Domain query with the client's original reply channel.
-    /// The read thread executes the query, wraps in AuthenticatedResponse, and
-    /// replies directly — the Witch never touches the response path.
-    DomainQuery {
-        payload: Box<DomainQueryPayload>,
-        reply: AuthReply,
-    },
-    /// Invalidate cached results whose scope overlaps with the given scope.
-    InvalidateScope(RecomputationScope),
-    /// Close and reopen the read-only connection (after schema migrations).
-    ReconnectDb,
-    /// Update SQLite PRAGMA cache_size on the read thread's connection.
-    SetCacheSize(i64),
-    /// Provide or update the shared config handle.
-    SetConfig(crate::config::SharedConfig),
-    /// Shut down the read thread.
-    Shutdown,
-}
+/// Shared config handle (same Arc<RwLock<Config>> the Witch holds).
+type SharedConfigInner = Arc<RwLock<config::Config>>;
 
 // ============================================================================
 // CacheThreadHandle (kept by Witch)
 // ============================================================================
 
-/// Handle for the Witch to manage the read thread's lifecycle and forward queries.
+/// Handle for the Witch to dispatch domain queries.
+///
+/// Each query spawns its own blocking task with a fresh DB connection.
+/// No persistent background thread — just fire-and-forget spawns.
 pub(crate) struct CacheThreadHandle {
-    task: Option<tokio::task::JoinHandle<()>>,
-    request_tx: tokio::sync::mpsc::UnboundedSender<CacheRequest>,
+    shared_config: Option<SharedConfigInner>,
+    cache_size_kb: Option<i64>,
 }
 
 impl CacheThreadHandle {
-    /// Forward a domain query to the read thread with the client's reply channel.
-    ///
-    /// The read thread executes the query and replies directly to the client.
-    /// The Witch does not wait for or touch the response.
+    /// Spawn a blocking task for this query. Opens its own DB connection,
+    /// executes, replies, exits. No queue, no blocking other queries.
     pub(super) fn forward_domain_query(
         &self,
         payload: DomainQueryPayload,
         reply: AuthReply,
     ) {
-        let _ = self
-            .request_tx
-            .send(CacheRequest::DomainQuery { payload: Box::new(payload), reply });
+        let shared_config = self.shared_config.clone();
+        let cache_size_kb = self.cache_size_kb;
+
+        tokio::task::spawn_blocking(move || {
+            let db = match open_read_only_db(cache_size_kb) {
+                Some(db) => db,
+                None => {
+                    let _ = reply.send(Err(crate::meta::protocol::ProtocolError::Internal(
+                        "DB not available".to_string(),
+                    )));
+                    return;
+                }
+            };
+
+            let read_db = ReadOnlyDb::new(&db);
+            let config_guard = shared_config
+                .as_ref()
+                .map(|sc| sc.read().expect("config lock"));
+            let config_ref = config_guard.as_deref();
+
+            let result = dispatch_domain_query(payload, &read_db, config_ref);
+            let response = crate::meta::protocol::AuthenticatedResponse::Query(
+                Box::new(crate::meta::protocol::QueryResponse::Domain(result)),
+            );
+            let _ = reply.send(Ok(response));
+        });
     }
 
-    /// Tell the read thread to invalidate cached results whose scope overlaps.
-    pub(super) fn invalidate_scope(&self, scope: RecomputationScope) {
-        let _ = self.request_tx.send(CacheRequest::InvalidateScope(scope));
+    /// No-op — each query opens a fresh connection and sees latest committed state.
+    pub(super) fn invalidate_scope(&self, _scope: crate::meta::recomputation::RecomputationScope) {}
+
+    /// No-op — next spawned query opens a fresh connection automatically.
+    pub(super) fn reconnect_db(&self) {}
+
+    /// Update the cache size applied to new query connections.
+    pub(crate) fn set_cache_size(&mut self, kb: i64) {
+        self.cache_size_kb = Some(kb);
     }
 
-    /// Tell the read thread to close and reopen its DB connection.
-    /// Used after first-time setup creates the DB.
-    pub(super) fn reconnect_db(&self) {
-        let _ = self.request_tx.send(CacheRequest::ReconnectDb);
+    /// Store the shared config handle. Queries clone the Arc on spawn.
+    pub(super) fn set_config(&mut self, config: crate::config::SharedConfig) {
+        self.shared_config = Some(config);
     }
 
-    /// Update SQLite PRAGMA cache_size on the read thread's connection.
-    pub(crate) fn set_cache_size(&self, kb: i64) {
-        let _ = self.request_tx.send(CacheRequest::SetCacheSize(kb));
-    }
-
-    /// Provide or update the shared config for queries that need it.
-    pub(super) fn set_config(&self, config: crate::config::SharedConfig) {
-        let _ = self.request_tx.send(CacheRequest::SetConfig(config));
-    }
-}
-
-impl CacheThreadHandle {
-    /// Orderly shutdown: send shutdown signal and abort the task.
-    pub(super) fn shutdown(&mut self) {
-        let _ = self.request_tx.send(CacheRequest::Shutdown);
-        if let Some(task) = self.task.take() {
-            task.abort();
-        }
-    }
+    /// No persistent thread to shut down.
+    pub(super) fn shutdown(&mut self) {}
 }
 
 impl Drop for CacheThreadHandle {
-    fn drop(&mut self) {
-        self.shutdown();
-    }
+    fn drop(&mut self) {}
 }
 
 // ============================================================================
-// Read Thread Spawn
+// Construction
 // ============================================================================
 
-/// Spawn the read thread as a tokio blocking task. Returns the Witch-side handle.
+/// Create the query dispatch handle. No background thread is spawned.
 pub(super) fn spawn() -> CacheThreadHandle {
-    let (request_tx, request_rx) = tokio::sync::mpsc::unbounded_channel();
-
-    let task = tokio::task::spawn_blocking(move || {
-        read_thread_main(request_rx);
-    });
-
+    crate::logging::log_general("[QUERY_DISPATCH] Ready (per-query thread spawning)");
     CacheThreadHandle {
-        task: Some(task),
-        request_tx,
+        shared_config: None,
+        cache_size_kb: None,
     }
 }
 
-/// Open (or reopen) the read-only database connection for the read thread.
-fn open_read_only_db() -> Option<Database> {
+/// Open a read-only database connection for a single query.
+fn open_read_only_db(cache_size_kb: Option<i64>) -> Option<Database> {
     let db_path = config::get_db_path().ok()?;
-    Database::open_read_only(&db_path).ok()
-}
-
-/// Main loop for the read thread (runs inside spawn_blocking).
-fn read_thread_main(mut request_rx: tokio::sync::mpsc::UnboundedReceiver<CacheRequest>) {
-    crate::logging::log_general("[READ_THREAD] Started");
-
-    let mut db = open_read_only_db();
-    let mut shared_config: Option<crate::config::SharedConfig> = None;
-
-    let handle_one = |req: CacheRequest,
-                          db: &mut Option<Database>,
-                          sc: &mut Option<crate::config::SharedConfig>|
-                          -> bool {
-        if let CacheRequest::SetConfig(cfg) = req {
-            *sc = Some(cfg);
-            return false;
-        }
-        process_request(req, db, sc.as_ref())
-    };
-
-    loop {
-        match request_rx.blocking_recv() {
-            Some(request) => {
-                if handle_one(request, &mut db, &mut shared_config) {
-                    break;
-                }
-                while let Ok(request) = request_rx.try_recv() {
-                    if handle_one(request, &mut db, &mut shared_config) {
-                        crate::logging::log_general("[READ_THREAD] Shutdown complete");
-                        return;
-                    }
-                }
-            }
-            None => {
-                crate::logging::log_general(
-                    "[READ_THREAD] Channel disconnected, shutting down",
-                );
-                break;
-            }
-        }
+    let db = Database::open_read_only(&db_path).ok()?;
+    if let Some(kb) = cache_size_kb {
+        let _ = db.conn().execute_batch(&format!("PRAGMA cache_size = {};", kb));
     }
-
-    crate::logging::log_general("[READ_THREAD] Shutdown complete");
-}
-
-/// Process a single request. Returns true if shutdown was requested.
-fn process_request(
-    request: CacheRequest,
-    db: &mut Option<Database>,
-    shared_config: Option<&crate::config::SharedConfig>,
-) -> bool {
-    match request {
-        CacheRequest::DomainQuery { payload, reply } => {
-            if let Some(ref db_conn) = db {
-                let read_db = ReadOnlyDb::new(db_conn);
-                let config_guard = shared_config.map(|sc| sc.read().expect("config lock"));
-                let config_ref = config_guard.as_deref();
-                let result = dispatch_domain_query(*payload, &read_db, config_ref);
-                let response = crate::meta::protocol::AuthenticatedResponse::Query(
-                    Box::new(crate::meta::protocol::QueryResponse::Domain(result)),
-                );
-                let _ = reply.send(Ok(response));
-            } else {
-                let _ = reply.send(Err(crate::meta::protocol::ProtocolError::Internal(
-                    "DB not available".to_string(),
-                )));
-            }
-        }
-        CacheRequest::InvalidateScope(_scope) => {
-            // Scope-based invalidation reserved for future result caching.
-            // Currently a no-op — every query hits the DB fresh.
-        }
-        CacheRequest::ReconnectDb => {
-            crate::logging::log_general("[READ_THREAD] Reconnecting DB");
-            *db = open_read_only_db();
-        }
-        CacheRequest::SetCacheSize(kb) => {
-            if let Some(ref db_conn) = db {
-                let _ = db_conn
-                    .conn()
-                    .execute_batch(&format!("PRAGMA cache_size = {};", kb));
-                crate::logging::log_general(format!(
-                    "[READ_THREAD] Updated cache_size to {} KB",
-                    kb
-                ));
-            }
-        }
-        CacheRequest::SetConfig(_) => {
-            unreachable!("SetConfig handled in main loop")
-        }
-        CacheRequest::Shutdown => {
-            return true;
-        }
-    }
-    false
+    Some(db)
 }

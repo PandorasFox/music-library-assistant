@@ -5,6 +5,7 @@
 //! cross the client/server boundary.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::mutations::{Mutation, MutationKind};
 use crate::views::ConflictBucket;
@@ -17,7 +18,8 @@ use crate::views::ConflictBucket;
 ///
 /// Each variant carries its own typed keying data, ensuring decisions from
 /// different workflows can never collide.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub enum DecisionKey {
     TagCanonicity {
         tag_name: String,
@@ -176,7 +178,8 @@ impl std::fmt::Display for DecisionKey {
 }
 
 /// Fieldless mirror of DecisionKey for insight filtering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub enum DecisionKeyKind {
     OobResolution,
     MovedFile,

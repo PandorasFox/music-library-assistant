@@ -931,45 +931,22 @@ fn load_release_review(
     ReleaseReviewData { releases }
 }
 
-/// Read tags from disk for a batch of audio files.
+/// Load tags for a batch of audio files from the database (corpus_tags table).
+///
+/// The watcher + indexer keeps corpus_tags current — no disk I/O needed.
 fn load_file_tag_values(
     inodes: &[i64],
     zone: crate::db::types::Zone,
     db: &ReadOnlyDb,
 ) -> Vec<(i64, Vec<(String, String)>)> {
-    use crate::corpus::paths;
-    use crate::corpus::tags::{self as tags};
-
-    let resolver = paths::get_resolver();
-    let path_map = db
-        .get_file_paths_batch(zone, inodes)
-        .unwrap_or_default();
-
-    let mut results = Vec::with_capacity(inodes.len());
-    for &inode in inodes {
-        let Some(rel_path) = path_map.get(&inode) else {
-            results.push((inode, Vec::new()));
-            continue;
-        };
-        let abs_path = resolver.resolve_for_zone(zone, std::path::Path::new(rel_path));
-        let tags = match tags::from_file(&abs_path) {
-            Ok(ts) => ts.into_vec(),
-            Err(e) => {
-                crate::logging::log_error(format!(
-                    "Could not read tags from {}: {}", abs_path.display(), e
-                ));
-                Vec::new()
-            }
-        };
-        results.push((inode, tags));
-    }
-    results
+    db.get_tags_batch_for_zone(inodes, zone)
+        .unwrap_or_default()
 }
 
 /// Compute a bulk tag aggregate for a directory.
 ///
 /// 1. Find all audio files in the directory (corpus zone).
-/// 2. Read tags from disk for each file.
+/// 2. Load tags from DB (corpus_tags table — kept current by watcher + indexer).
 /// 3. Aggregate: for each unique tag name, check if all files share the same value.
 fn load_bulk_tag_aggregate(
     rel_path: &std::path::Path,

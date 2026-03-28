@@ -111,6 +111,9 @@ pub async fn login(
     match resp {
         WireResponse::Unauthenticated { result: Ok(UnauthenticatedResponse::Auth(auth)), .. } => match auth {
             AuthResponse::Token(token) => {
+                // Cache the token locally so WS connections can validate without
+                // a Witch round-trip.
+                state.register_session(token.as_bytes());
                 let b64 = STANDARD.encode(token.as_bytes());
                 Ok(Json(serde_json::json!({ "token": b64 })))
             }

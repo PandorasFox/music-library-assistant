@@ -603,6 +603,61 @@ impl Database {
         Ok(tags)
     }
 
+    /// Get all tags for a batch of inodes from the given zone's tag table.
+    ///
+    /// Returns a Vec of (inode, Vec<(tag_name, tag_value)>) in the order of input inodes.
+    /// Inodes with no tags get an empty Vec.
+    pub fn get_tags_batch_for_zone(
+        &self,
+        inodes: &[i64],
+        zone: Zone,
+    ) -> Result<Vec<(i64, Vec<(String, String)>)>> {
+        let table = zone
+            .tag_table()
+            .ok_or_else(|| anyhow::anyhow!("zone {:?} has no tag table", zone))?;
+
+        if inodes.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build IN clause with parameter placeholders.
+        let placeholders: String = (0..inodes.len())
+            .map(|i| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT inode, tag_name, tag_value FROM {table} \
+             WHERE inode IN ({placeholders}) \
+             ORDER BY inode, tag_name, tag_value"
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::ToSql> = inodes
+            .iter()
+            .map(|i| i as &dyn rusqlite::ToSql)
+            .collect();
+        let rows = stmt.query_map(&*params, |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+
+        // Collect into a HashMap, then reorder to match input.
+        let mut map: std::collections::HashMap<i64, Vec<(String, String)>> =
+            std::collections::HashMap::new();
+        for row in rows {
+            let (inode, name, value) = row?;
+            map.entry(inode).or_default().push((name, value));
+        }
+
+        Ok(inodes
+            .iter()
+            .map(|&inode| (inode, map.remove(&inode).unwrap_or_default()))
+            .collect())
+    }
+
     /// Get all audio files with their tags (for search functionality).
     /// Tags are keyed by uppercase tag name; values are collected into Vec
     /// since a single tag name can have multiple values (e.g. multiple genres).

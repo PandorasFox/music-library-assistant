@@ -16,13 +16,20 @@ impl Database {
         self.query_signal_paths("signal_missing_file")
     }
 
-    /// Get all corpus paths with CorruptFile signals.
+    /// Get all corrupt file signals with inode + path.
     ///
-    /// Returns the path column for each corrupt_file signal.
-    /// Used by the corrupt file resolution modal.
     /// CorruptFile signals are keyed by inode with path in metadata.
-    pub fn get_corrupt_file_paths(&self) -> Result<Vec<String>> {
-        self.query_signal_paths("signal_corrupt_file")
+    /// Returns (inode, path) pairs directly — no filesystem access needed.
+    pub fn get_corrupt_file_signals(&self) -> Result<Vec<(i64, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT inode, path FROM signal_corrupt_file ORDER BY path")?;
+        let results = stmt
+            .query_map(params![], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(results)
     }
 
     /// Get all LosslessRemux signals with their inodes.

@@ -8,11 +8,9 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::os::unix::fs::MetadataExt;
 
 use anyhow::Result;
 
-use crate::corpus::paths;
 use crate::db::types::Zone;
 use crate::db::ReadOnlyDb;
 
@@ -22,32 +20,18 @@ use crate::db::ReadOnlyDb;
 
 /// Load corrupt files from the database.
 ///
-/// Corrupt files exist on disk but failed indexing (tag parse error or audio decode failure).
-/// We get the inode from the filesystem directly since the file exists on disk.
+/// Inode + path come directly from the signal table — no filesystem access.
 pub fn load_corrupt_file_data(
     read_db: &ReadOnlyDb<'_>,
 ) -> Result<mm_meta::views::health_modals::CorruptFileModalData> {
     use mm_meta::views::health_modals::{CorruptFileEntry, CorruptFileModalData};
 
-    let corrupt_paths = read_db.get_corrupt_file_paths()?;
+    let signals = read_db.get_corrupt_file_signals()?;
 
-    if corrupt_paths.is_empty() {
-        return Ok(CorruptFileModalData::default());
-    }
-
-    let resolver = paths::get_resolver();
-    let mut files = Vec::new();
-
-    for corpus_path in corrupt_paths {
-        let abs_path = resolver.resolve_for_zone(Zone::Corpus, std::path::Path::new(&corpus_path));
-        let inode = if let Ok(metadata) = std::fs::metadata(&abs_path) {
-            metadata.ino() as i64
-        } else {
-            continue;
-        };
-
-        files.push(CorruptFileEntry { corpus_path, inode });
-    }
+    let files = signals
+        .into_iter()
+        .map(|(inode, corpus_path)| CorruptFileEntry { corpus_path, inode })
+        .collect();
 
     Ok(CorruptFileModalData { files })
 }
@@ -132,6 +116,8 @@ pub fn load_missing_directory_data(
 // ============================================================================
 
 /// Load subpar duplicate files from the database.
+///
+/// Inode resolution uses DB lookups only — no filesystem fallback.
 pub fn load_subpar_duplicate_data(
     read_db: &ReadOnlyDb<'_>,
 ) -> Result<mm_meta::views::health_modals::SubparDuplicateModalData> {
@@ -143,7 +129,6 @@ pub fn load_subpar_duplicate_data(
         return Ok(SubparDuplicateModalData::default());
     }
 
-    let resolver = paths::get_resolver();
     let mut files = Vec::new();
 
     for entry in subpar_entries {
@@ -152,12 +137,8 @@ pub fn load_subpar_duplicate_data(
         } else if let Some(fe) = read_db.get_file_entry_by_path(&entry.corpus_path, "corpus")? {
             fe.inode
         } else {
-            let abs_path = resolver.resolve_for_zone(Zone::Corpus, std::path::Path::new(&entry.corpus_path));
-            if let Ok(metadata) = std::fs::metadata(&abs_path) {
-                metadata.ino() as i64
-            } else {
-                continue;
-            }
+            // File not in DB at all — signal is stale, skip.
+            continue;
         };
 
         let reason = match entry.reason.as_str() {

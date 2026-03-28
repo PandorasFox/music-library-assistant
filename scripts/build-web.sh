@@ -1,35 +1,20 @@
 #!/usr/bin/env bash
-# Build the WASM client and place the bundle where mm-web serves it.
-# Usage: ./scripts/build-web.sh [--release]
+# Build the React SPA frontend for mm-web.
+# Usage: ./scripts/build-web.sh
 #
-# Prerequisites: rustup target add wasm32-unknown-unknown && cargo install wasm-pack
+# Prerequisites: Node.js 18+
 
 set -euo pipefail
 
-cd "$(git rev-parse --show-toplevel)"
+cd "$(git rev-parse --show-toplevel)/crates/mm-web/frontend"
 
-PROFILE_FLAG=""
-if [[ "${1:-}" == "--release" ]]; then
-    PROFILE_FLAG="--release"
+if [ ! -d node_modules ]; then
+    echo "Installing dependencies..."
+    npm ci
 fi
 
-# Ensure wasm target is available
-if ! rustup target list --installed | grep -q wasm32-unknown-unknown; then
-    echo "Adding wasm32-unknown-unknown target..."
-    rustup target add wasm32-unknown-unknown
-fi
+echo "Building React frontend..."
+npm run build
 
-# Ensure wasm-pack is installed
-if ! command -v wasm-pack &>/dev/null; then
-    echo "Installing wasm-pack..."
-    cargo install wasm-pack
-fi
-
-echo "Building WASM client..."
-wasm-pack build crates/mm-web/client \
-    --target web \
-    --out-dir ../static/pkg \
-    $PROFILE_FLAG
-
-echo "Done. Bundle at crates/mm-web/static/pkg/"
+echo "Done. Output at crates/mm-web/frontend/dist/"
 echo "Start server: cargo run -p mm-web"

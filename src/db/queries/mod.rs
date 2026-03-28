@@ -364,6 +364,7 @@ impl<'a> ReadOnlyDb<'a> {
         fn get_audio_files_for_tag_editing(dir_path: &std::path::Path) -> Result<Vec<super::types::AudioFile>>;
         fn get_all_audio_files_with_tags(source: super::types::Zone, with_fingerprints: bool) -> Result<Vec<files::AudioFileWithTags>>;
         fn get_tags_for_zone(inode: i64, zone: super::types::Zone) -> Result<Vec<super::types::AudioTag>>;
+        fn get_tags_batch_for_zone(inodes: &[i64], zone: super::types::Zone) -> Result<Vec<(i64, Vec<(String, String)>)>>;
         fn get_audio_info(inode: i64) -> Result<Option<super::types::AudioInfo>>;
         fn get_has_pictures(inode: i64) -> Result<bool>;
         fn get_directory_listing(zone: super::types::Zone, parent: Option<&str>) -> Result<Vec<mm_meta::domain_query_types::DirectoryListingEntry>>;
@@ -549,7 +550,7 @@ impl<'a> ReadOnlyDb<'a> {
         fn get_deploy_conflict_groups() -> Result<Vec<crate::meta::views::ConflictGroup>>;
         fn get_sidecar_conflict_groups() -> Result<Vec<crate::meta::views::SidecarConflictGroup>>;
         fn get_missing_file_paths() -> Result<Vec<String>>;
-        fn get_corrupt_file_paths() -> Result<Vec<String>>;
+        fn get_corrupt_file_signals() -> Result<Vec<(i64, String)>>;
         fn get_lossless_remux_files() -> Result<Vec<(i64, String, String)>>;
         fn get_lossless_remux_counts_by_type() -> Result<Vec<(String, i64)>>;
         fn get_subpar_duplicate_files() -> Result<Vec<crate::meta::views::SubparDuplicateEntry>>;

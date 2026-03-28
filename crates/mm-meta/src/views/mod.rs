@@ -12,6 +12,7 @@ pub mod inode_detail;
 pub mod review_match;
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::mutations;
 use crate::paths::PathResolver;
@@ -22,7 +23,8 @@ use crate::paths::PathResolver;
 
 /// Insights data for the bucketed Insights view.
 /// Computed at cache refresh time, never in render.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct InsightsData {
     pub bucket_corpus: CorpusFilesBucket,
     pub bucket_placeholder: PlaceholderBucket,
@@ -30,7 +32,8 @@ pub struct InsightsData {
 }
 
 /// Bucket 1: Corpus Files - file state overview
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct CorpusFilesBucket {
     // OOB signals at top - highest priority within bucket
     pub oob_tag_sync: usize,
@@ -56,7 +59,8 @@ pub struct CorpusFilesBucket {
 }
 
 /// Bucket 2: Tag Squash - duplicates, tag canonicity, album_artist, and compound tag issues
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct TagSquashBucket {
     /// Directory overlap clusters (grouped fingerprint overlaps for bulk resolution)
     pub cross_source_overlap_count: usize,
@@ -83,7 +87,8 @@ pub struct TagSquashBucket {
 }
 
 /// Entry for tag squash signals (grouped by tag name)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct TagSquashEntry {
     /// Tag name (e.g., "artist", "genre", "album")
     pub tag_name: String,
@@ -94,7 +99,8 @@ pub struct TagSquashEntry {
 }
 
 /// Entry for compound tag signals (grouped by tag name)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct CompoundTagEntry {
     /// Tag name (e.g., "artist", "genre")
     pub tag_name: String,
@@ -223,14 +229,16 @@ pub struct ExternalMatchesData {
 }
 
 /// Bucket 3: Other signals (sorted by magnitude)
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct OtherSignalsBucket {
     /// Sorted descending by count
     pub entries: Vec<OtherSignalEntry>,
 }
 
 /// Entry for other signals bucket
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct OtherSignalEntry {
     pub signal_type: String,
     pub display_label: String,
@@ -240,14 +248,16 @@ pub struct OtherSignalEntry {
 }
 
 /// Directory breakdown for detail pane
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct DirectoryBreakdown {
     /// Sorted by count descending
     pub _entries: Vec<DirectoryBreakdownEntry>,
 }
 
 /// Single entry in directory breakdown
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct DirectoryBreakdownEntry {
     pub _directory: String,
     pub _count: usize,
@@ -392,7 +402,8 @@ pub struct TagMismatchEntry {
 /// - DbOnly: all mismatches have `disk_value IS NULL`
 /// - DiskOnly: all mismatches have `db_value IS NULL`
 /// - Conflict: both values present, or mixed null directions
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub enum ConflictBucket {
     MtimeOnly,
     DbOnly,

@@ -4,16 +4,12 @@
 # Run:    docker run -v /path/to/music:/music -v mm_data:/data -v mm_config:/config mm
 # TUI:    docker exec -it <container> mm-tui
 
-# ── Builder ──────────────────────────────────────────────────────────────────
+# ── Builder (Rust) ──────────────────────────────────────────────────────────
 FROM rust:1-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake pkg-config \
     && rm -rf /var/lib/apt/lists/*
-
-# wasm-pack + target for web client build
-RUN rustup target add wasm32-unknown-unknown \
-    && cargo install wasm-pack
 
 WORKDIR /src
 
@@ -27,7 +23,6 @@ COPY crates/mm-meta/Cargo.toml     crates/mm-meta/Cargo.toml
 COPY crates/mm-ui/Cargo.toml       crates/mm-ui/Cargo.toml
 COPY crates/mm-tui/Cargo.toml      crates/mm-tui/Cargo.toml
 COPY crates/mm-web/Cargo.toml      crates/mm-web/Cargo.toml
-COPY crates/mm-web/client/Cargo.toml crates/mm-web/client/Cargo.toml
 
 # Dummy source files so cargo can resolve the workspace and compile deps
 RUN mkdir -p src && echo 'fn main() {}' > src/main.rs \
@@ -38,41 +33,44 @@ RUN mkdir -p src && echo 'fn main() {}' > src/main.rs \
     && mkdir -p crates/mm-tui/src     && echo '' > crates/mm-tui/src/lib.rs \
     && echo 'fn main() {}' > crates/mm-tui/src/main.rs \
     && mkdir -p crates/mm-web/src     && echo '' > crates/mm-web/src/lib.rs \
-    && echo 'fn main() {}' > crates/mm-web/src/main.rs \
-    && mkdir -p crates/mm-web/client/src && echo '' > crates/mm-web/client/src/lib.rs
+    && echo 'fn main() {}' > crates/mm-web/src/main.rs
 
-# Build deps for both native and wasm targets
-RUN cargo build --release -p mm -p mm-web -p mm-tui 2>/dev/null || true \
-    && cargo build --release --target wasm32-unknown-unknown -p mm-web-client 2>/dev/null || true
+# Build deps
+RUN cargo build --release -p mm -p mm-web -p mm-tui 2>/dev/null || true
 
 # Remove dummy source and workspace crate fingerprints (but keep compiled
 # deps in target/). Fingerprints must go because COPY preserves host mtimes
 # which predate the dep-cache artifacts — cargo would skip recompilation.
 RUN rm -rf src crates \
     && rm -rf target/release/.fingerprint/mm-* \
-    && rm -rf target/release/.fingerprint/mm_* \
-    && rm -rf target/wasm32-unknown-unknown/release/.fingerprint/mm-*
+    && rm -rf target/release/.fingerprint/mm_*
 
-# ── Real build ──────────────────────────────────────────────────────────────
+# ── Frontend build ──────────────────────────────────────────────────────────
+FROM node:22-bookworm-slim AS frontend
+
+WORKDIR /src/crates/mm-web/frontend
+COPY crates/mm-web/frontend/package.json crates/mm-web/frontend/package-lock.json* ./
+RUN npm ci
+COPY crates/mm-web/frontend/ .
+RUN npm run build
+
+# ── Rust build ──────────────────────────────────────────────────────────────
+FROM builder AS rust-build
+
 COPY . .
-
-# Build WASM client first (outputs to crates/mm-web/static/pkg/)
-RUN wasm-pack build crates/mm-web/client --target web --out-dir ../static/pkg --release
-
-# Build mm (witch server), mm-web (http api), and mm-tui (terminal client)
 RUN cargo build --release -p mm -p mm-web -p mm-tui
 
-# ── Runtime ──────────────────────────────────────────────────────────────────
+# ── Runtime ─────────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash ca-certificates tini sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /src/target/release/mm /usr/local/bin/mm
-COPY --from=builder /src/target/release/mm-tui /usr/local/bin/mm-tui
-COPY --from=builder /src/target/release/mm-web /usr/local/bin/mm-web
-COPY --from=builder /src/crates/mm-web/static /srv/mm-web/static
+COPY --from=rust-build /src/target/release/mm /usr/local/bin/mm
+COPY --from=rust-build /src/target/release/mm-tui /usr/local/bin/mm-tui
+COPY --from=rust-build /src/target/release/mm-web /usr/local/bin/mm-web
+COPY --from=frontend /src/crates/mm-web/frontend/dist /srv/mm-web/static
 
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

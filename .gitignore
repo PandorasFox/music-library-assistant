@@ -21,8 +21,12 @@ mm
 # Local test scripts
 test_instance.sh
 
-# WASM build output (built by wasm-pack during Docker build)
-crates/mm-web/static/pkg/
+# Dev scripts
+dev-vite.sh
+
+# Frontend
+crates/mm-web/frontend/node_modules/
+crates/mm-web/frontend/dist/
 
 # claude lol
 .claude/

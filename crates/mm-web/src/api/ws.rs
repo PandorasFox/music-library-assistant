@@ -1,8 +1,12 @@
 //! WebSocket endpoint for pushing server events to browser clients.
 //!
-//! The browser opens a WebSocket at `/ws?token=<base64>`. The server validates
-//! the token, then subscribes to `WitchClient::subscribe_events()` and forwards
-//! `WitchEvent` frames as JSON text messages.
+//! The browser opens a WebSocket at `/ws?token=<base64>`. The token is
+//! validated against mm-web's local session cache (populated at login) —
+//! no round-trip to the Witch.
+//!
+//! The WS connection MUST NOT block on the Witch. It is a push channel
+//! between mm-web and the browser — the Witch's availability must never
+//! prevent the browser from connecting or receiving status updates.
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
@@ -10,9 +14,6 @@ use axum::response::IntoResponse;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use serde::Deserialize;
-
-use mm_meta::auth::SessionToken;
-use mm_meta::protocol::QueryPayload;
 
 use crate::error::ApiError;
 use crate::AppState;
@@ -27,14 +28,14 @@ pub async fn ws_handler(
     State(state): State<AppState>,
     Query(params): Query<WsParams>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // Decode and validate token before upgrading the connection.
     let bytes = STANDARD
         .decode(&params.token)
         .map_err(|_| ApiError::Unauthorized("invalid base64 in token".into()))?;
-    let token = SessionToken::from_bytes(bytes);
 
-    // Verify the session is valid by sending a status query through the Witch.
-    super::queries::send_query(&state, token, QueryPayload::Status).await?;
+    // Validate against local session cache — no Witch round-trip.
+    if !state.is_valid_session(&bytes) {
+        return Err(ApiError::Unauthorized("unknown session token".into()));
+    }
 
     Ok(ws.on_upgrade(move |socket| handle_ws(socket, state)))
 }

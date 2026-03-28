@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
             }
             other => {
                 eprintln!("Unknown argument: {other}");
-                eprintln!("Usage: mm-web [--socket /path/to/mm.sock] [--listen 0.0.0.0:3313] [--static-dir ./static]");
+                eprintln!("Usage: mm-web [--socket /path/to/mm.sock] [--listen 0.0.0.0:3313] [--static-dir ./frontend/dist]");
                 std::process::exit(1);
             }
         }
@@ -52,14 +52,14 @@ async fn main() -> Result<()> {
         format!("{runtime_dir}/mm.sock")
     }));
 
-    // Default static dir: adjacent to the binary's crate source.
+    // Default static dir: React SPA build output adjacent to the crate source.
     let static_dir = PathBuf::from(static_dir.unwrap_or_else(|| {
-        "crates/mm-web/static".into()
+        "crates/mm-web/frontend/dist".into()
     }));
 
     if !static_dir.join("index.html").exists() {
         eprintln!(
-            "warning: {}/index.html not found — UI will not load",
+            "warning: {}/index.html not found — run: cd crates/mm-web/frontend && npm run build",
             static_dir.display()
         );
     }

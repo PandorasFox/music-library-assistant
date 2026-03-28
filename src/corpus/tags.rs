@@ -57,6 +57,15 @@ fn open_buffered(path: &Path) -> Result<std::io::BufReader<std::fs::File>> {
 
 /// Read tags from an audio file.
 ///
+/// Read tags directly from an audio file on disk.
+///
+/// **WRITE-PATH ONLY.** This function performs disk I/O and must NEVER be called
+/// from query/read paths (domain queries, modal loaders, UI cache refreshes).
+/// For read-path tag access, use `corpus_tags` via `ReadOnlyDb::get_tags_batch_for_zone()`
+/// or similar DB queries — the watcher + indexer keeps the DB current.
+///
+/// Legitimate callers: fs_thread (indexing), mutations (tag sync, transcode).
+///
 /// For Vorbis-format files (FLAC, Opus, OGG Vorbis), reads directly from
 /// VorbisComments — raw key=value pairs with exact key names, no ItemKey mapping.
 ///

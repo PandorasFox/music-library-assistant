@@ -3,7 +3,9 @@ mod auth;
 mod error;
 mod socket;
 
+use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 
 use axum::http::{header, HeaderValue};
 use axum::response::{Html, IntoResponse};
@@ -13,16 +15,34 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeader;
 
+use mm_meta::witch_types::WitchStatus;
 use socket::WitchConnection;
 
 pub use error::ApiError;
 
 const BUILD_TIMESTAMP: &str = env!("MM_BUILD_TIMESTAMP");
 
+// ============================================================================
+// Application State
+// ============================================================================
+
+/// Local caches that mm-web maintains independently of Witch round-trips.
+///
+/// - `cached_status`: Updated from WitchEvent broadcasts. Served at GET /status
+///   without ever querying the Witch.
+/// - `session_tokens`: Populated on successful login. Used to validate WebSocket
+///   connections locally — no Witch round-trip for WS auth.
+#[derive(Clone)]
+pub struct LocalCache {
+    pub cached_status: Arc<RwLock<Option<WitchStatus>>>,
+    pub session_tokens: Arc<RwLock<HashSet<Vec<u8>>>>,
+}
+
 #[derive(Clone)]
 pub struct AppState {
-    conn: WitchConnection,
+    pub(crate) conn: WitchConnection,
     static_dir: PathBuf,
+    pub(crate) local: LocalCache,
 }
 
 impl AppState {
@@ -32,9 +52,64 @@ impl AppState {
         // Verify the Witch is reachable before accepting HTTP traffic.
         conn.verify_connectivity().await?;
 
-        Ok(Self { conn, static_dir })
+        let local = LocalCache {
+            cached_status: Arc::new(RwLock::new(None)),
+            session_tokens: Arc::new(RwLock::new(HashSet::new())),
+        };
+
+        // Spawn background task: subscribe to WitchEvents, update cached status.
+        let event_rx = conn.subscribe_events();
+        let status_cache = local.cached_status.clone();
+        tokio::spawn(async move {
+            status_cache_loop(event_rx, status_cache).await;
+        });
+
+        Ok(Self { conn, static_dir, local })
+    }
+
+    /// Register a session token in the local cache (called on successful login).
+    pub(crate) fn register_session(&self, token_bytes: &[u8]) {
+        let mut tokens = self.local.session_tokens.write().expect("session lock");
+        tokens.insert(token_bytes.to_vec());
+    }
+
+    /// Check if a session token is in the local cache.
+    pub(crate) fn is_valid_session(&self, token_bytes: &[u8]) -> bool {
+        let tokens = self.local.session_tokens.read().expect("session lock");
+        tokens.contains(token_bytes)
+    }
+
+    /// Get the cached WitchStatus, if available.
+    pub(crate) fn cached_status(&self) -> Option<WitchStatus> {
+        let status = self.local.cached_status.read().expect("status lock");
+        status.clone()
     }
 }
+
+/// Background loop: receive WitchEvent broadcasts, update cached status.
+async fn status_cache_loop(
+    mut event_rx: tokio::sync::broadcast::Receiver<mm_meta::witch_types::WitchEvent>,
+    cache: Arc<RwLock<Option<WitchStatus>>>,
+) {
+    loop {
+        match event_rx.recv().await {
+            Ok(mm_meta::witch_types::WitchEvent::StatusChanged(status)) => {
+                let mut cached = cache.write().expect("status lock");
+                *cached = Some(status);
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                // Missed some — next recv will be fresh.
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                return; // Witch shut down.
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Router
+// ============================================================================
 
 pub fn router(state: AppState) -> Router {
     let cors = CorsLayer::new()
@@ -45,8 +120,6 @@ pub fn router(state: AppState) -> Router {
     let static_dir = state.static_dir.clone();
 
     Router::new()
-        // HTML shell
-        .route("/", get(serve_index))
         // Unauthenticated
         .route("/setup/check", post(api::unauth::setup_check))
         .route("/setup/complete", post(api::unauth::setup_complete))
@@ -65,7 +138,7 @@ pub fn router(state: AppState) -> Router {
         .route("/tx/confirm", post(api::transactions::confirm))
         .route("/tx/discard", post(api::transactions::discard))
         .route("/tx/approve-releases", post(api::transactions::approve_releases))
-        // WebSocket event stream (token validated via query param)
+        // WebSocket event stream (validated against local session cache)
         .route("/ws", get(api::ws::ws_handler))
         // Build info (unauthenticated — just a timestamp)
         .route("/build-info", get(serve_build_info))
@@ -74,17 +147,17 @@ pub fn router(state: AppState) -> Router {
         // Commands
         .route("/commands/queue-task", post(api::commands::queue_task))
         .route("/commands/shutdown", post(api::commands::shutdown))
-        // Static files (CSS, JS) — cached aggressively, busted by ?v= in index.html.
-        // WASM files get no-cache because wasm-bindgen's loader doesn't propagate
-        // query params from the JS URL to the .wasm URL.
+        // Serve React SPA assets from frontend/dist/
         .nest_service(
-            "/static",
+            "/assets",
             SetResponseHeader::overriding(
-                ServeDir::new(static_dir),
+                ServeDir::new(static_dir.join("assets")),
                 header::CACHE_CONTROL,
-                HeaderValue::from_static("no-cache"),
+                HeaderValue::from_static("max-age=31536000, immutable"),
             ),
         )
+        // SPA fallback: serve index.html for any unmatched path (React Router).
+        .fallback(serve_index)
         .layer(cors)
         .with_state(state)
 }
@@ -99,14 +172,7 @@ async fn serve_index(
     let index_path = state.static_dir.join("index.html");
     let contents = match tokio::fs::read_to_string(&index_path).await {
         Ok(c) => c,
-        Err(_) => "<h1>index.html not found</h1>".into(),
+        Err(_) => "<h1>index.html not found — run: cd crates/mm-web/frontend && npm run build</h1>".into(),
     };
-    // Inject build-version query params so asset URLs change on each rebuild.
-    let contents = contents
-        .replace("/static/mm.css", &format!("/static/mm.css?v={BUILD_TIMESTAMP}"))
-        .replace(
-            "/static/pkg/mm_web_client.js",
-            &format!("/static/pkg/mm_web_client.js?v={BUILD_TIMESTAMP}"),
-        );
     ([(header::CACHE_CONTROL, "no-cache")], Html(contents))
 }

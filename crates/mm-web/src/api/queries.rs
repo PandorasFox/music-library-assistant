@@ -53,12 +53,16 @@ fn to_json<T: serde::Serialize>(val: T) -> Result<Json<serde_json::Value>, ApiEr
 
 pub async fn status(
     State(state): State<AppState>,
-    BearerToken(token): BearerToken,
+    BearerToken(_token): BearerToken,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let qr = send_query(&state, token, QueryPayload::Status).await?;
-    match qr {
-        QueryResponse::Status(s) => to_json(s),
-        _ => Err(ApiError::Internal("expected Status response".into())),
+    // Serve from local cache — no Witch round-trip.
+    // Cache is updated by the background WitchEvent subscription.
+    match state.cached_status() {
+        Some(s) => to_json(s),
+        None => {
+            // No status received yet (Witch still starting up) — return empty default.
+            to_json(mm_meta::witch_types::WitchStatus::default())
+        }
     }
 }
 

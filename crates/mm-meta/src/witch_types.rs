@@ -6,6 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::decisions::{DecisionKey, DecisionKeyKind};
 
@@ -14,7 +15,8 @@ use crate::decisions::{DecisionKey, DecisionKeyKind};
 // ============================================================================
 
 /// Witch startup state — lifecycle from boot to fully operational.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub enum WitchStartupState {
     /// No database — waiting for client to provide setup payload.
     AwaitingSetup,
@@ -36,7 +38,8 @@ pub enum WitchStartupState {
 /// Gates the overall UI mode:
 /// - None/Inodes → Splash screen
 /// - Full → Normal UI with blinking eye
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub enum ReasoningLevel {
     /// Startup — no reasoning yet.
     #[default]
@@ -52,7 +55,8 @@ pub enum ReasoningLevel {
 // ============================================================================
 
 /// Watcher state — tracks filesystem watcher thread progress.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub enum WatcherState {
     /// Watcher spawned but not yet started.
     #[default]
@@ -70,7 +74,8 @@ pub enum WatcherState {
 // ============================================================================
 
 /// Status information returned from tick() and status().
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct WorkStatus {
     /// Current high-level state snapshot.
     pub state: WorkStateSnapshot,
@@ -85,7 +90,8 @@ pub struct WorkStatus {
 }
 
 /// Snapshot of Witch work state for status reporting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub enum WorkStateSnapshot {
     #[default]
     Idle,
@@ -98,7 +104,8 @@ pub enum WorkStateSnapshot {
 // ============================================================================
 
 /// Per-source progress snapshot.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct SourceProgress {
     pub total: usize,
     pub processed: usize,
@@ -108,7 +115,8 @@ pub struct SourceProgress {
 }
 
 /// Combined progress for both external sources.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct FetchProgress {
     pub acoustid: SourceProgress,
     pub mb: SourceProgress,
@@ -119,7 +127,8 @@ pub struct FetchProgress {
 }
 
 /// Progress snapshot for Cover Art Archive fetching.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct CoverArtProgress {
     /// Total releases queued for art fetching.
     pub total_releases: usize,
@@ -142,7 +151,8 @@ pub struct CoverArtProgress {
 /// Contains enough data for render code (titlebar, insights view) without
 /// the heavy mutation/diff data. For full decision details (transaction
 /// review view), use a dedicated command query.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct TransactionSnapshot {
     /// Human-readable label for the transaction.
     pub label: String,
@@ -170,7 +180,8 @@ pub struct TransactionSnapshot {
 /// - `computations_generation`: increments when a computation batch completes
 /// - `error_generation`: increments when a task error occurs
 /// - `config_generation`: increments when config is mutated
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct WitchStatus {
     // -- Startup state --
     /// Whether the Witch is operational or awaiting first-time setup.
@@ -231,7 +242,8 @@ pub struct WitchStatus {
 /// state change in its run loop. Clients diff generation counters in the
 /// contained `WitchStatus` to detect what changed — same logic as before,
 /// just push-driven instead of poll-driven.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub enum WitchEvent {
     /// Full status snapshot after a state change.
     StatusChanged(WitchStatus),

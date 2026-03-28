@@ -206,6 +206,7 @@ impl ExternalMatchesViewData {
         });
 
         if let Some(ref data) = self.cached_data {
+            // Matches section: untagged + confidence tiers (only when signals exist)
             let has_matches =
                 !data.untagged_entries.is_empty() || !data.confidence_buckets.is_empty();
             if has_matches {
@@ -227,94 +228,95 @@ impl ExternalMatchesViewData {
                         detail_lines: self.tier_detail_lines(bucket.tier),
                     });
                 }
+            }
 
-                // Release packing categories
-                let has_packing = data.packing_perfect_count > 0
-                    || data.packing_full_match_count > 0
-                    || data.packing_singles_count > 0
-                    || data.packing_incomplete_count > 0
-                    || data.packing_low_confidence_count > 0
-                    || data.packing_knots_count > 0
-                    || data.unsolved_conflict_count > 0
-                    || data.unsolved_no_release_count > 0
-                    || data.unsolved_no_match_count > 0;
+            // Release packing section: independent of match signals
+            // (packing data persists after matches are approved/cleared)
+            let has_packing = data.packing_perfect_count > 0
+                || data.packing_full_match_count > 0
+                || data.packing_singles_count > 0
+                || data.packing_incomplete_count > 0
+                || data.packing_low_confidence_count > 0
+                || data.packing_knots_count > 0
+                || data.unsolved_conflict_count > 0
+                || data.unsolved_no_release_count > 0
+                || data.unsolved_no_match_count > 0;
 
-                if has_packing {
-                    items.push(ExternalMatchListItem::Spacer);
-                    items.push(ExternalMatchListItem::Header(
-                        "Release Packing".to_string(),
-                    ));
+            if has_packing {
+                items.push(ExternalMatchListItem::Spacer);
+                items.push(ExternalMatchListItem::Header(
+                    "Release Packing".to_string(),
+                ));
 
-                    let incomplete = (PackingCategory::Incomplete, data.packing_incomplete_count);
-                    let singles = (PackingCategory::Singles, data.packing_singles_count);
+                let incomplete = (PackingCategory::Incomplete, data.packing_incomplete_count);
+                let singles = (PackingCategory::Singles, data.packing_singles_count);
 
-                    let mut packing_order: Vec<(PackingCategory, usize)> = vec![
-                        (PackingCategory::Perfect, data.packing_perfect_count),
-                        (PackingCategory::FullMatches, data.packing_full_match_count),
-                    ];
-                    if self.singles_before_incompletes {
-                        packing_order.push(singles);
-                        packing_order.push(incomplete);
-                    } else {
-                        packing_order.push(incomplete);
-                        packing_order.push(singles);
+                let mut packing_order: Vec<(PackingCategory, usize)> = vec![
+                    (PackingCategory::Perfect, data.packing_perfect_count),
+                    (PackingCategory::FullMatches, data.packing_full_match_count),
+                ];
+                if self.singles_before_incompletes {
+                    packing_order.push(singles);
+                    packing_order.push(incomplete);
+                } else {
+                    packing_order.push(incomplete);
+                    packing_order.push(singles);
+                }
+                packing_order.extend([
+                    (
+                        PackingCategory::LowConfidence,
+                        data.packing_low_confidence_count,
+                    ),
+                    (PackingCategory::Knots, data.packing_knots_count),
+                    (
+                        PackingCategory::UnsolvedConflict,
+                        data.unsolved_conflict_count,
+                    ),
+                    (
+                        PackingCategory::UnsolvedNoRelease,
+                        data.unsolved_no_release_count,
+                    ),
+                    (
+                        PackingCategory::UnsolvedNoMatch,
+                        data.unsolved_no_match_count,
+                    ),
+                ]);
+
+                for (cat, count) in packing_order {
+                    if count > 0 {
+                        items.push(ExternalMatchListItem::Entry {
+                            nav: NavigableEntry::PackingCategory(cat),
+                            detail_lines: packing_category_detail_lines(cat),
+                        });
                     }
-                    packing_order.extend([
-                        (
-                            PackingCategory::LowConfidence,
-                            data.packing_low_confidence_count,
-                        ),
-                        (PackingCategory::Knots, data.packing_knots_count),
-                        (
-                            PackingCategory::UnsolvedConflict,
-                            data.unsolved_conflict_count,
-                        ),
-                        (
-                            PackingCategory::UnsolvedNoRelease,
-                            data.unsolved_no_release_count,
-                        ),
-                        (
-                            PackingCategory::UnsolvedNoMatch,
-                            data.unsolved_no_match_count,
-                        ),
-                    ]);
+                }
 
-                    for (cat, count) in packing_order {
-                        if count > 0 {
-                            items.push(ExternalMatchListItem::Entry {
-                                nav: NavigableEntry::PackingCategory(cat),
-                                detail_lines: packing_category_detail_lines(cat),
-                            });
-                        }
-                    }
-
-                    // Pinned release conflict info (non-navigable, critical)
-                    if data.pinned_conflict_count > 0 {
-                        items.push(ExternalMatchListItem::InfoLine(Line::from(vec![
-                            Span::styled("  ", Style::default()),
-                            Span::styled("✗ ", Style::default().fg(Color::Red)),
-                            Span::styled(
-                                format!(
-                                    "{} pinned release conflict{}",
-                                    data.pinned_conflict_count,
-                                    if data.pinned_conflict_count == 1 { "" } else { "s" }
-                                ),
-                                Style::default().fg(Color::Red),
+                // Pinned release conflict info (non-navigable, critical)
+                if data.pinned_conflict_count > 0 {
+                    items.push(ExternalMatchListItem::InfoLine(Line::from(vec![
+                        Span::styled("  ", Style::default()),
+                        Span::styled("✗ ", Style::default().fg(Color::Red)),
+                        Span::styled(
+                            format!(
+                                "{} pinned release conflict{}",
+                                data.pinned_conflict_count,
+                                if data.pinned_conflict_count == 1 { "" } else { "s" }
                             ),
-                        ])));
-                    }
+                            Style::default().fg(Color::Red),
+                        ),
+                    ])));
+                }
 
-                    // VA override info (non-navigable)
-                    if data.va_override_count > 0 {
-                        items.push(ExternalMatchListItem::InfoLine(Line::from(vec![
-                            Span::styled("  ", Style::default()),
-                            Span::styled("⚠ ", Style::default().fg(Color::Yellow)),
-                            Span::styled(
-                                format!("{} VA overrides", data.va_override_count),
-                                Style::default().fg(Color::Yellow),
-                            ),
-                        ])));
-                    }
+                // VA override info (non-navigable)
+                if data.va_override_count > 0 {
+                    items.push(ExternalMatchListItem::InfoLine(Line::from(vec![
+                        Span::styled("  ", Style::default()),
+                        Span::styled("⚠ ", Style::default().fg(Color::Yellow)),
+                        Span::styled(
+                            format!("{} VA overrides", data.va_override_count),
+                            Style::default().fg(Color::Yellow),
+                        ),
+                    ])));
                 }
             }
         }

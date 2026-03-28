@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 /// - `Low` → Low tier
 /// - `All` → all tiers
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum AcoustidConfidence {
     High,
     Medium,
@@ -68,6 +69,7 @@ impl AcoustidConfidence {
 ///
 /// Maps to `PackingCategory` variants for releases (excludes Knots and Unsolved*).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ReleaseReviewFilter {
     Perfect,
     FullMatch,

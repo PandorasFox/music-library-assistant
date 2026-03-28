@@ -58,8 +58,9 @@ All packing is constrained to target directory(ies) selected by `score_all_direc
 3. **Multi-medium** (`media.len() > 1`): try `find_sibling_dir_mapping()` to detect sibling directories (same parent) with candidates for different media. If found, filter candidates to the sibling set and run Hungarian — record as a candidate result.
 4. **Per-directory**: for each individual directory, filter candidates to that directory, run Hungarian, compute total assignment score.
 5. Select the `(TargetDirs, optimal_pairs)` with:
-   - Most assigned slots (primary)
-   - Highest total assignment score (secondary)
+   - Most assigned slots (primary — coverage must not be sacrificed)
+   - Fewest leftover files (secondary — snug-fitting directories preferred at equal coverage)
+   - Highest total assignment score (tertiary)
    - Lexicographic smallest directory path (deterministic tiebreak)
 
 After selection, all candidates are filtered to the winning directory set:

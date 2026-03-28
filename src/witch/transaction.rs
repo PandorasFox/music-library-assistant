@@ -2,7 +2,7 @@
 //!
 //! This module is part of the Witch subsystem. See `witch/mod.rs` for overview.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::db::types::Zone;
 use crate::meta::decisions::{
@@ -44,19 +44,40 @@ fn coalesce_tag_ops(mutations: Vec<Mutation>) -> Vec<Mutation> {
     let mut result = Vec::new();
 
     for (zone, all_ops) in ops_by_zone {
-        // Deduplicate: (inode, tag_name, old_value) → last new_value wins
-        let mut deduped: HashMap<(i64, String, Option<String>), Option<String>> = HashMap::new();
+        // Deduplicate overlapping ops for the same inode+tag.
+        //
+        // Replace/Drop ops (old_value is Some): keyed by (inode, tag_name, old_value)
+        // so that if two decisions both want to replace the same source value,
+        // the last one wins.
+        //
+        // Add ops (old_value is None): keyed by the FULL tuple including new_value,
+        // since multiple adds for the same tag name are independent multi-value
+        // inserts (e.g., GENRE="Rock" + GENRE="Metal" from a compound split).
+        // Using old_value alone as part of the key would collapse them.
+        let mut replace_drop: HashMap<(i64, String, Option<String>), Option<String>> =
+            HashMap::new();
+        let mut adds: HashSet<(i64, String, String)> = HashSet::new();
+
         for op in all_ops {
             if op.is_nop() {
                 continue;
             }
-            deduped.insert(
-                (op.inode, op.tag_name.clone(), op.old_value.clone()),
-                op.new_value,
-            );
+            match (&op.old_value, &op.new_value) {
+                (None, Some(new)) => {
+                    // Add op: deduplicate by full (inode, tag_name, new_value)
+                    adds.insert((op.inode, op.tag_name.clone(), new.clone()));
+                }
+                _ => {
+                    // Replace or Drop: last writer wins per (inode, tag_name, old_value)
+                    replace_drop.insert(
+                        (op.inode, op.tag_name.clone(), op.old_value.clone()),
+                        op.new_value,
+                    );
+                }
+            }
         }
 
-        let final_ops: Vec<TagOp> = deduped
+        let mut final_ops: Vec<TagOp> = replace_drop
             .into_iter()
             .map(|((inode, tag_name, old_value), new_value)| TagOp {
                 inode,
@@ -65,6 +86,12 @@ fn coalesce_tag_ops(mutations: Vec<Mutation>) -> Vec<Mutation> {
                 new_value,
             })
             .collect();
+        final_ops.extend(adds.into_iter().map(|(inode, tag_name, new_value)| TagOp {
+            inode,
+            tag_name,
+            old_value: None,
+            new_value: Some(new_value),
+        }));
 
         if !final_ops.is_empty() {
             result.push(Mutation::ApplyTagOps(ApplyTagOpsMutation {

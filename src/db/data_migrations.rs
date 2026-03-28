@@ -120,6 +120,27 @@ pub fn all_data_migrations() -> Vec<DataMigrationEntry> {
                 Ok(())
             },
         },
+        DataMigrationEntry {
+            id: "2026-03-reseed-compound-tag-signals",
+            description: "Re-dirty all compound-tag signal inodes (re-evaluate with plural-form check and MB-skip)",
+            apply: |db| {
+                use rusqlite::params;
+                use std::time::{SystemTime, UNIX_EPOCH};
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                db.conn().execute(
+                    r#"
+                    INSERT OR IGNORE INTO dirty_inodes (inode, computation_type, dirtied_at)
+                    SELECT inode, 'compound_tag', ?1
+                    FROM signal_compound_tag
+                    "#,
+                    params![now],
+                )?;
+                Ok(())
+            },
+        },
     ]
 }
 

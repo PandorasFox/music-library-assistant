@@ -29,13 +29,25 @@ fn increment_tags_version(conn: &rusqlite::Connection, inode: i64) -> anyhow::Re
     Ok(())
 }
 
-/// Write tag edit history entries for changed tags.
+/// Write tag edit history entries for changed tags and maintain the
+/// `edit_sessions` summary row (pre-computed counts for the History view).
 fn write_tag_edit_history(
     conn: &rusqlite::Connection,
     inode: i64,
     changes: &[(String, Option<String>, Option<String>)], // (field_name, old_value, new_value)
     session_id: &str,
 ) -> anyhow::Result<()> {
+    if changes.is_empty() {
+        return Ok(());
+    }
+
+    // Check whether this inode already has edits in this session (before inserting)
+    // so we can maintain an accurate distinct-inode count.
+    let inode_is_new: bool = !conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM tag_edit_history WHERE session_id = ?1 AND inode = ?2)",
+        params![session_id, inode],
+        |row| row.get::<_, bool>(0),
+    )?;
 
     for (field_name, old_value, new_value) in changes {
         conn.execute(
@@ -43,6 +55,17 @@ fn write_tag_edit_history(
             params![inode, field_name, old_value, new_value, session_id],
         )?;
     }
+
+    // Upsert session summary: create on first use, accumulate counts.
+    let inode_increment: i64 = if inode_is_new { 1 } else { 0 };
+    conn.execute(
+        "INSERT INTO edit_sessions (session_id, edit_count, inode_count)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(session_id) DO UPDATE SET
+           edit_count = edit_count + excluded.edit_count,
+           inode_count = inode_count + excluded.inode_count",
+        params![session_id, changes.len() as i64, inode_increment],
+    )?;
 
     Ok(())
 }

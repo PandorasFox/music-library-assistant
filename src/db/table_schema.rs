@@ -139,6 +139,18 @@ pub fn schema_inventory() -> Vec<TableEntry> {
     });
 
     tables.push(TableEntry {
+        name: "edit_sessions",
+        kind: TableKind::Core,
+        create_sql: "CREATE TABLE IF NOT EXISTS edit_sessions (
+            session_id TEXT PRIMARY KEY,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            edit_count INTEGER NOT NULL DEFAULT 0,
+            inode_count INTEGER NOT NULL DEFAULT 0
+        )",
+        index_sql: &[],
+    });
+
+    tables.push(TableEntry {
         name: "corpus_health_stats",
         kind: TableKind::Core,
         create_sql: "CREATE TABLE IF NOT EXISTS corpus_health_stats (

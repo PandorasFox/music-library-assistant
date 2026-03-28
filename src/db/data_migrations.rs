@@ -88,6 +88,20 @@ pub fn all_data_migrations() -> Vec<DataMigrationEntry> {
             },
         },
         DataMigrationEntry {
+            id: "2026-03-backfill-edit-sessions",
+            description: "Backfill edit_sessions summary table from tag_edit_history",
+            apply: |db| {
+                db.conn().execute(
+                    "INSERT OR IGNORE INTO edit_sessions (session_id, created_at, edit_count, inode_count)
+                     SELECT session_id, MIN(edited_at), COUNT(*), COUNT(DISTINCT inode)
+                     FROM tag_edit_history
+                     GROUP BY session_id",
+                    [],
+                )?;
+                Ok(())
+            },
+        },
+        DataMigrationEntry {
             id: "2026-03-remove-inbox-zone",
             description: "Remove inbox zone: delete inbox files and drop orphan inbox signal/tag tables",
             apply: |db| {

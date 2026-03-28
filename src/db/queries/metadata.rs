@@ -390,13 +390,9 @@ impl Database {
         use crate::meta::views::EditSessionSummary;
 
         let mut stmt = self.conn.prepare(
-            "SELECT session_id,
-                    MIN(edited_at) AS earliest,
-                    COUNT(*) AS edit_count,
-                    COUNT(DISTINCT inode) AS inode_count
-             FROM tag_edit_history
-             GROUP BY session_id
-             ORDER BY MIN(edited_at) DESC",
+            "SELECT session_id, created_at, edit_count, inode_count
+             FROM edit_sessions
+             ORDER BY created_at DESC",
         )?;
 
         let rows = stmt.query_map(params![], |row| {

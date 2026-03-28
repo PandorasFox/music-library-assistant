@@ -605,22 +605,25 @@ pub(super) fn execute_signal_op(db: &Database, op: &DbWriteOp) {
 
         DbWriteOp::ClearTagEditHistory => {
             with_retry("clear_tag_edit_history", "all", || {
-                db.conn()
-                    .execute("DELETE FROM tag_edit_history", [])
-                    .map(|_| ())
-                    .map_err(Into::into)
+                let conn = db.conn();
+                conn.execute("DELETE FROM tag_edit_history", [])?;
+                conn.execute("DELETE FROM edit_sessions", [])?;
+                Ok(())
             });
         }
 
         DbWriteOp::ClearTagEditHistorySession { session_id } => {
             with_retry("clear_tag_edit_history_session", session_id, || {
-                db.conn()
-                    .execute(
-                        "DELETE FROM tag_edit_history WHERE session_id = ?1",
-                        rusqlite::params![session_id],
-                    )
-                    .map(|_| ())
-                    .map_err(Into::into)
+                let conn = db.conn();
+                conn.execute(
+                    "DELETE FROM tag_edit_history WHERE session_id = ?1",
+                    rusqlite::params![session_id],
+                )?;
+                conn.execute(
+                    "DELETE FROM edit_sessions WHERE session_id = ?1",
+                    rusqlite::params![session_id],
+                )?;
+                Ok(())
             });
         }
 

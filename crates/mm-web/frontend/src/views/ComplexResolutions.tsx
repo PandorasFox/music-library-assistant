@@ -311,7 +311,7 @@ export function MissingAlbum() {
 
 // -- Disc Extraction --
 
-interface DiscFileEntry { inode: number; path: string; original_value: string; cleaned_value: string; source_tag: string; }
+interface DiscFileEntry { inode: number; path: string; original_value: string; cleaned_value: string; source_tag: string; existing_disc_value?: string; }
 interface DiscExtractionGroup { description: string; disc_value: string; files: DiscFileEntry[]; }
 interface DiscExtractionData { groups: DiscExtractionGroup[]; }
 
@@ -338,6 +338,10 @@ export function DiscExtraction() {
     for (const f of group.files) {
       // Replace source tag value with cleaned value
       ops.push({ inode: f.inode, tag_name: f.source_tag, old_value: f.original_value, new_value: f.cleaned_value });
+      // Drop existing disc value before adding extracted one (avoids dual-value e.g. "3;099")
+      if (f.existing_disc_value) {
+        ops.push({ inode: f.inode, tag_name: "DISCNUMBER", old_value: f.existing_disc_value, new_value: null });
+      }
       // Add disc number
       ops.push({ inode: f.inode, tag_name: "DISCNUMBER", old_value: null, new_value: group.disc_value });
     }

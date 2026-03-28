@@ -331,9 +331,42 @@ pub fn write_file_tags(
         .with_context(|| format!("Failed to read metadata before write: {}", path.display()))?;
     use std::os::unix::fs::MetadataExt;
     let inode = file_metadata.ino() as i64;
+    let pre_mtime = file_metadata.mtime();
+    let pre_size = file_metadata.size();
     sender.mark_dirty_inodes(vec![inode], "pending_write", witness);
 
+    crate::logging::log_general(format!(
+        "[TAG_WRITE] Writing {} tags to inode={} path={} (pre: mtime={}, size={})",
+        tags.len(), inode, path.display(), pre_mtime, pre_size,
+    ));
+
     write_tags_to_file(path, tags)?;
+
+    // Verify the file actually changed on disk
+    match std::fs::metadata(path) {
+        Ok(post) => {
+            let post_mtime = post.mtime();
+            let post_size = post.size();
+            if post_mtime == pre_mtime && post_size == pre_size {
+                crate::logging::log_error(format!(
+                    "[TAG_WRITE] WARNING: file unchanged after write! inode={} path={} \
+                     (mtime={}, size={} — identical before and after)",
+                    inode, path.display(), post_mtime, post_size,
+                ));
+            } else {
+                crate::logging::log_general(format!(
+                    "[TAG_WRITE] OK inode={} (post: mtime={}, size={})",
+                    inode, post_mtime, post_size,
+                ));
+            }
+        }
+        Err(e) => {
+            crate::logging::log_error(format!(
+                "[TAG_WRITE] WARNING: cannot stat after write: inode={} path={}: {}",
+                inode, path.display(), e,
+            ));
+        }
+    }
 
     Ok(())
 }

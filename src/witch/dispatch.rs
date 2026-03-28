@@ -75,14 +75,6 @@ impl super::Witch {
         match cmd {
             HandleCommand::Authenticated { token, body, reply } => {
                 let body = *body;
-                crate::logging::log_general(format!(
-                    "[DISPATCH] Authenticated request received, body variant: {}",
-                    match &body {
-                        AuthenticatedBody::Query(_) => "Query",
-                        AuthenticatedBody::Transaction(_) => "Transaction",
-                        AuthenticatedBody::Command(_) => "Command",
-                    }
-                ));
                 // ConfigKdl queries bypass synchronous dispatch — the file read
                 // is offloaded to a blocking task that replies directly.
                 if let AuthenticatedBody::Query(QueryPayload::ConfigKdl) = &body {

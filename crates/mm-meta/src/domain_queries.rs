@@ -24,6 +24,10 @@ pub struct DiscFileEntry {
     pub cleaned_value: String,
     /// Source tag name ("ALBUM" or "TRACKNUMBER").
     pub source_tag: String,
+    /// Existing value of the disc tag (e.g., "099"), if any. Used to drop the
+    /// stale value before adding the extracted disc number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub existing_disc_value: Option<String>,
 }
 
 /// A single group for disc extraction resolution.

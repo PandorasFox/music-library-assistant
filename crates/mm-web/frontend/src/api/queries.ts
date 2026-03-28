@@ -20,6 +20,7 @@ import type {
   MovedFileInfo,
   OobFile,
   PackingKnotData,
+  DirectoryClusterModalData,
 } from "./generated/types";
 
 // -- Query keys --
@@ -50,6 +51,8 @@ export const queryKeys = {
   losslessRemux: ["lossless-remux-data"] as const,
   movedFiles: ["moved-files"] as const,
   oobFiles: (bucket: string) => ["oob-files", bucket] as const,
+  directoryClusters: ["directory-cluster-data"] as const,
+  releaseOverlaps: ["release-overlap-data"] as const,
 } as const;
 
 // -- Hooks --
@@ -181,6 +184,20 @@ export function useOobFiles(bucket: string) {
   });
 }
 
+export function useDirectoryClusterData() {
+  return useQuery({
+    queryKey: queryKeys.directoryClusters,
+    queryFn: () => get<DirectoryClusterModalData>("/queries/directory-cluster-data"),
+  });
+}
+
+export function useReleaseOverlapData() {
+  return useQuery({
+    queryKey: queryKeys.releaseOverlaps,
+    queryFn: () => get<DirectoryClusterModalData>("/queries/release-overlap-data"),
+  });
+}
+
 export function useDirConfig(path: string | null) {
   return useQuery({
     queryKey: queryKeys.dirConfig(path ?? ""),
@@ -266,12 +283,9 @@ export interface DecisionDetail {
 export async function login(
   username: string,
   password: string,
-): Promise<string> {
-  const res = await post<{ token: string }>("/auth/login", {
-    username,
-    password,
-  });
-  return res.token;
+): Promise<void> {
+  // Server sets HttpOnly cookie on success. No token to store client-side.
+  await post("/auth/login", { username, password });
 }
 
 export async function checkSetup(): Promise<{

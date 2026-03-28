@@ -1,17 +1,3 @@
-const TOKEN_KEY = "mm-session-token";
-
-export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
-}
-
-export function setToken(token: string): void {
-  localStorage.setItem(TOKEN_KEY, token);
-}
-
-export function clearToken(): void {
-  localStorage.removeItem(TOKEN_KEY);
-}
-
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -25,20 +11,17 @@ async function request<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
-  const token = getToken();
   const headers = new Headers(options.headers);
 
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
-  }
   if (options.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
 
-  const res = await fetch(path, { ...options, headers });
+  // credentials: "same-origin" ensures the mm_session cookie is sent.
+  const res = await fetch(path, { ...options, headers, credentials: "same-origin" });
 
   if (res.status === 401) {
-    clearToken();
+    // Session expired or invalid — redirect to login.
     window.location.hash = "#/login";
     throw new ApiError(401, "Session expired");
   }

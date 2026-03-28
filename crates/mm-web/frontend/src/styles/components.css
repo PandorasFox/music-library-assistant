@@ -1588,3 +1588,131 @@
   gap: 2px;
   margin-bottom: 12px;
 }
+
+/* Directory cluster */
+.cr-cluster-key {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  font-family: var(--font-mono);
+}
+
+.cr-dir-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 12px;
+}
+
+.cr-dir-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  border-radius: var(--radius);
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.cr-dir-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.cr-dir-item--selected {
+  border-color: var(--accent);
+  background: rgba(88, 166, 255, 0.06);
+}
+
+.cr-dir-item--locked {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.cr-dir-radio {
+  font-size: 1rem;
+  color: var(--accent);
+  min-width: 16px;
+}
+
+.cr-dir-path {
+  flex: 1;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cr-dir-fmt {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.cr-dir-count {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* Picker pages (tag canonicity, compound) */
+.cr-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cr-picker-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  border-radius: var(--radius);
+  cursor: pointer;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+}
+
+.cr-picker-row:hover {
+  background: var(--bg-tertiary);
+}
+
+.cr-picker-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.cr-picker-name {
+  font-weight: 500;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  flex: 1;
+}
+
+.cr-picker-count {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.cr-picker-link {
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.8rem;
+  background: var(--bg-tertiary);
+  color: var(--success);
+}
+
+.cr-picker-link:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+.cr-picker-link--review {
+  color: var(--warning);
+}

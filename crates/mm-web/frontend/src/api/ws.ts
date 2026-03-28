@@ -1,5 +1,4 @@
 import type { WitchEvent } from "./generated/types";
-import { getToken } from "./client";
 
 export type WsState = "connecting" | "connected" | "disconnected";
 export type WsListener = (event: WitchEvent) => void;
@@ -56,16 +55,12 @@ export class WitchSocket {
   }
 
   private tryConnect(): void {
-    const token = getToken();
-    if (!token) {
-      this.setState("disconnected");
-      return;
-    }
-
     this.setState("connecting");
 
+    // Cookie-based auth — the browser sends mm_session automatically.
+    // No token query param needed.
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${proto}//${location.host}/ws?token=${encodeURIComponent(token)}`;
+    const url = `${proto}//${location.host}/ws`;
     const ws = new WebSocket(url);
 
     ws.onopen = () => {

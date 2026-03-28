@@ -142,6 +142,16 @@ impl super::dispatch::Dispatchable for DiscExtractionState {
                         &file.original_value,
                         &file.cleaned_value,
                     ));
+                    // Drop any existing disc tag value before adding the extracted one.
+                    // Files often already have a DISCNUMBER from the original tagger
+                    // (e.g., "099") that conflicts with the extracted value ("3").
+                    if let Some(existing) = &file.existing_disc_value {
+                        ops.push(TagOp::drop_tag(
+                            file.inode,
+                            &self.data.disc_tag_name,
+                            existing,
+                        ));
+                    }
                     ops.push(TagOp::add_tag(
                         file.inode,
                         &self.data.disc_tag_name,
@@ -284,6 +294,7 @@ mod tests {
             original_value: "Album, Disc 1".to_string(),
             cleaned_value: "Album".to_string(),
             source_tag: "ALBUM".to_string(),
+            existing_disc_value: None,
         }
     }
 

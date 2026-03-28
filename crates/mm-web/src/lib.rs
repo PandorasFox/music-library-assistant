@@ -124,6 +124,7 @@ pub fn router(state: AppState) -> Router {
         .route("/setup/check", post(api::unauth::setup_check))
         .route("/setup/complete", post(api::unauth::setup_complete))
         .route("/auth/login", post(api::unauth::login))
+        .route("/auth/logout", post(api::unauth::logout))
         // Queries
         .route("/status", get(api::queries::status))
         .route("/config", get(api::queries::config))

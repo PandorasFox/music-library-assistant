@@ -95,10 +95,18 @@ pub struct LoginRequest {
     password: String,
 }
 
+pub async fn logout() -> impl axum::response::IntoResponse {
+    let cookie = crate::auth::clear_session_cookie();
+    (
+        [(axum::http::header::SET_COOKIE, cookie)],
+        Json(serde_json::json!({ "ok": true })),
+    )
+}
+
 pub async fn login(
     State(state): State<AppState>,
     Json(body): Json<LoginRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<impl axum::response::IntoResponse, ApiError> {
     let req = WireRequest::Unauthenticated {
         request_id: 0,
         body: UnauthenticatedBody::Login {
@@ -115,7 +123,13 @@ pub async fn login(
                 // a Witch round-trip.
                 state.register_session(token.as_bytes());
                 let b64 = STANDARD.encode(token.as_bytes());
-                Ok(Json(serde_json::json!({ "token": b64 })))
+
+                // Set HttpOnly cookie + return token in body (cookie for browser, body for API clients).
+                let cookie = crate::auth::session_cookie(&b64);
+                Ok((
+                    [(axum::http::header::SET_COOKIE, cookie)],
+                    Json(serde_json::json!({ "token": b64 })),
+                ))
             }
             AuthResponse::Failed(msg) => Err(ApiError::Unauthorized(msg)),
         },

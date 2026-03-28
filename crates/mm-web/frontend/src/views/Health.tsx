@@ -143,56 +143,67 @@ function TagSquashBucketView({ data }: { data: TagSquashBucket }) {
           label="Cross-source overlaps"
           count={data.cross_source_overlap_count}
           level={severity(data.cross_source_overlap_count)}
+          link="/resolve/directory-clusters"
         />
         <SignalRow
           label="Release overlaps"
           count={data.release_overlap_count}
           level={severity(data.release_overlap_count)}
+          link="/resolve/release-overlaps"
         />
         <SignalRow
           label="Subpar duplicates"
           count={data.subpar_duplicate_count}
           level={severity(data.subpar_duplicate_count)}
+          link="/resolve/subpar-duplicates"
         />
         <SignalRow
           label="Redundant duplicates"
           count={data.redundant_duplicate_count}
           level={severity(data.redundant_duplicate_count)}
+          link="/resolve/manual-review/RedundantDuplicate"
         />
         <SignalRow
           label="Tag canonicity clusters"
           count={totalCanonicity}
           level={severity(totalCanonicity)}
+          link="/resolve/tag-canonicity-picker"
         />
         <SignalRow
           label="Inconsistent album artists"
           count={data.inconsistent_album_artist_count}
           level={severity(data.inconsistent_album_artist_count)}
+          link="/resolve/tag-canonicity/ALBUM_ARTIST"
         />
         <SignalRow
           label="Compound tags"
           count={totalCompound}
           level={severity(totalCompound)}
+          link="/resolve/compound-picker"
         />
         <SignalRow
           label="Missing album singles"
           count={data.missing_album_single_count}
           level={severity(data.missing_album_single_count)}
+          link="/resolve/missing-album"
         />
         <SignalRow
           label="Disc extraction needed"
           count={data.disc_extraction_count}
           level={severity(data.disc_extraction_count)}
+          link="/resolve/disc-extraction"
         />
         <SignalRow
           label="Path/tag mismatches"
           count={data.path_tag_mismatch_count}
           level={severity(data.path_tag_mismatch_count)}
+          link="/resolve/manual-review/MetadataDuplicate"
         />
         <SignalRow
           label="Same recording, different release"
           count={data.same_recording_different_release_count}
           level="info"
+          link="/resolve/manual-review/SameRecordingDifferentRelease"
         />
       </div>
     </section>

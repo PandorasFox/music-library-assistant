@@ -453,6 +453,37 @@ export interface OobFile {
   mismatches: TagMismatchEntry[];
 }
 
+// -- Directory cluster resolution --
+
+export interface FileMetaSummary {
+  file_type: string;
+  duration_ms: number | null;
+  bitrate_kbps: number | null;
+  sample_rate: number | null;
+  file_size: number;
+  has_pictures: boolean;
+  tags: [string, string][];
+}
+
+export interface DirectoryGroupEntry {
+  path_suffix: string;
+  inodes: number[];
+  paths: string[];
+  format_summary: string;
+  can_stash_dupes: boolean;
+}
+
+export interface DirectoryClusterEntry {
+  cluster_key: string;
+  directories: DirectoryGroupEntry[];
+  overlap_count: number;
+}
+
+export interface DirectoryClusterModalData {
+  clusters: DirectoryClusterEntry[];
+  file_meta_cache: Record<string, FileMetaSummary>;
+}
+
 // -- Packing knots --
 
 export interface KnotAssignment {

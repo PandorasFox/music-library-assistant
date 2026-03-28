@@ -245,6 +245,17 @@ impl_domain_query! {
             path_map.get(&inode).cloned().unwrap_or_else(|| format!("<inode {}>", inode))
         };
 
+        // Look up existing disc tag values so the resolution can drop them before
+        // adding the extracted value. Without this, files that already have e.g.
+        // DISCNUMBER=099 end up with both 099 and the extracted value.
+        let disc_tag_name = "DISCNUMBER"; // matches DiscExtractionOpinions default
+        let existing_disc: std::collections::HashMap<i64, String> = db
+            .get_tag_values_batch(crate::db::types::Zone::Corpus, disc_tag_name, &all_inodes)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(inode, values)| values.into_iter().next().map(|v| (inode, v)))
+            .collect();
+
         let groups = signals
             .into_iter()
             .map(|sig| match &sig.data.source {
@@ -263,6 +274,7 @@ impl_domain_query! {
                             original_value: original_album.clone(),
                             cleaned_value: cleaned_album.clone(),
                             source_tag: "ALBUM".to_string(),
+                            existing_disc_value: existing_disc.get(&inode).cloned(),
                         })
                         .collect();
                     DiscExtractionGroup {
@@ -290,6 +302,7 @@ impl_domain_query! {
                             original_value: tf.original_value.clone(),
                             cleaned_value: tf.cleaned_digits.clone(),
                             source_tag: "TRACKNUMBER".to_string(),
+                            existing_disc_value: existing_disc.get(&tf.inode).cloned(),
                         })
                         .collect();
                     let context = if album_artist.is_empty() {

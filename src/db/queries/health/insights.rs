@@ -131,6 +131,8 @@ impl Database {
 
         let same_recording_different_release_count = self.count_signal_type("same_recording_different_release")?;
 
+        let artist_needs_plural_count = self.count_signal_type("artist_needs_plural")?;
+
         Ok(TagSquashBucket {
             cross_source_overlap_count,
             release_overlap_count,
@@ -143,6 +145,7 @@ impl Database {
             disc_extraction_count,
             path_tag_mismatch_count,
             same_recording_different_release_count,
+            artist_needs_plural_count,
         })
     }
 

@@ -28,6 +28,7 @@ pub mod tabbed_transaction_review;
 pub mod transaction_review;
 
 pub mod acoustid_browse;
+pub mod artist_plural_modal;
 pub mod compound_split_v2;
 pub mod config_editor;
 pub mod corrupt_file_modal;
@@ -357,6 +358,7 @@ impl App {
             ActiveView::CorruptFileResolution(s) => dispatch_input!(CorruptFileResolution, s),
             ActiveView::LosslessRemuxResolution(s) => dispatch_input_raw!(LosslessRemuxResolution, s),
             ActiveView::SubparDuplicateResolution(s) => dispatch_input!(SubparDuplicateResolution, s),
+            ActiveView::ArtistPluralResolution(s) => dispatch_input!(ArtistPluralResolution, s),
             ActiveView::DirectoryClusterResolution(ref mut s) => {
                 match s.handle_input_with_items(&action) {
                     Some(a) => ViewAction::DirectoryClusterResolution(a),

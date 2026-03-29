@@ -162,6 +162,7 @@ pub enum InsightType {
     DiscExtraction,
     PathTagMismatch,
     SameRecordingDifferentRelease,
+    ArtistNeedsPlural,
     // Other bucket - dynamic entries identified by index
     OtherSignal { index: usize },
 }
@@ -182,6 +183,7 @@ impl InsightType {
             InsightType::CorpusCorruptFiles => Some(DecisionKeyKind::CorruptFile),
             InsightType::CorpusLosslessRemuxCandidates => Some(DecisionKeyKind::LosslessRemux),
             InsightType::SubparDuplicates => Some(DecisionKeyKind::SubparDuplicate),
+            InsightType::ArtistNeedsPlural => Some(DecisionKeyKind::ArtistPluralNormalization),
             // Informational entries
             InsightType::CorpusFilesInCorpus
             | InsightType::CorpusFilesIndexed
@@ -371,6 +373,9 @@ impl CachedBucketEntries {
         }
         if bucket.path_tag_mismatch_count > 0 {
             entries.push(BucketEntry::counted(InsightType::PathTagMismatch, "Filename tag schema issues", bucket.path_tag_mismatch_count, Color::Yellow, Color::DarkGray, InsightAction::LaunchPathTagMismatchResolution));
+        }
+        if bucket.artist_needs_plural_count > 0 {
+            entries.push(BucketEntry::counted(InsightType::ArtistNeedsPlural, "Artist tags need pluralizing", bucket.artist_needs_plural_count, Color::Yellow, Color::DarkGray, InsightAction::LaunchArtistPluralResolution));
         }
 
         entries
@@ -619,6 +624,11 @@ fn detail_lines_for_entry(
             "filename path don't match embedded",
             "tag values.",
         ], None, tc, hc),
+        InsightType::ArtistNeedsPlural => detail_popup("Artist Tags Need Pluralizing", &[
+            "Multi-valued ARTIST/ALBUMARTIST tags",
+            "without plural form (ARTISTS/ALBUMARTISTS).",
+            "Normalized for Navidrome conventions.",
+        ], Some(("Press Enter to pluralize all.", cta(Color::Green))), tc, hc),
         InsightType::OtherSignal { index } => {
             if let Some(data) = data {
                 if let Some(signal_entry) = data.bucket_other.entries.get(index) {

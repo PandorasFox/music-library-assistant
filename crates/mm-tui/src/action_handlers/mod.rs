@@ -84,6 +84,7 @@ impl App {
             ViewAction::History(a) => a.handle(self, witness.as_ref()),
             ViewAction::TagCanonicityResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::CompoundTagSplitResolution(a) => a.handle(self, witness.as_ref()),
+            ViewAction::ArtistPluralResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::MissingAlbumSingleResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::DiscExtractionResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::ManualReviewResolution(a) => a.handle(self, witness.as_ref()),
@@ -323,6 +324,7 @@ impl App {
             ActiveView::MovedFileAcknowledge(s) => s.handle_click(x, y).map(ViewAction::MovedFileAcknowledge),
             ActiveView::SubparDuplicateResolution(s) => s.handle_click(x, y).map(ViewAction::SubparDuplicateResolution),
             ActiveView::CorruptFileResolution(s) => s.handle_click(x, y).map(ViewAction::CorruptFileResolution),
+            ActiveView::ArtistPluralResolution(s) => s.handle_click(x, y).map(ViewAction::ArtistPluralResolution),
             ActiveView::MissingDirectoryResolution(s) => s.handle_click(x, y).map(ViewAction::MissingDirectoryResolution),
             ActiveView::MissingFileResolution(s) => s.handle_click(x, y).map(ViewAction::MissingFileResolution),
             ActiveView::LosslessRemuxResolution(s) => s.handle_click(x, y).map(ViewAction::LosslessRemuxResolution),
@@ -497,6 +499,9 @@ impl HandleAction for insights_view::HealthAction {
                     }
                     Some(insights_view::InsightAction::LaunchPathTagMismatchResolution) => {
                         app.status_message = Some("Not yet implemented".to_string());
+                    }
+                    Some(insights_view::InsightAction::LaunchArtistPluralResolution) => {
+                        app.start_artist_plural_resolution();
                     }
                     Some(insights_view::InsightAction::NotImplemented) => {
                         app.status_message = Some("Not yet implemented".to_string());

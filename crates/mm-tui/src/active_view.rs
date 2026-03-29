@@ -5,7 +5,7 @@
 //! mode and state are always consistent.
 
 use crate::{
-    acoustid_browse, config_editor, corrupt_file_modal, deploy_modal,
+    acoustid_browse, artist_plural_modal, config_editor, corrupt_file_modal, deploy_modal,
     external_match_view, eye::Eye,
     history_view, insights_view,
     lossless_remux_modal, missing_directory_modal, missing_file_modal,
@@ -73,6 +73,7 @@ pub(crate) enum ActiveView {
     // Compound tag split with packed data + StandardList + DecisionField
     CompoundTagSplitResolution(mm_ui::resolutions::compound_split::CompoundSplitViewState),
 
+    ArtistPluralResolution(artist_plural_modal::ArtistPluralState),
     MissingAlbumSingleResolution(mm_ui::resolutions::missing_album::MissingAlbumState),
     DiscExtractionResolution(mm_ui::resolutions::disc_extraction::DiscExtractionState),
     ManualReviewResolution(mm_ui::resolutions::manual_review::ManualReviewState),
@@ -161,6 +162,7 @@ impl ActiveView {
                 mm_ui::resolutions::tag_canonicity::CanonicityMode::TagCanonicity => Some("Tag Canonicity"),
             },
             Self::CompoundTagSplitResolution(_) => Some("Compound Tag Split"),
+            Self::ArtistPluralResolution(_) => Some("Artist Plural Normalization"),
             Self::MissingAlbumSingleResolution(_) => Some("Missing Album Singles"),
             Self::DiscExtractionResolution(_) => Some("Disc Extraction"),
             Self::ManualReviewResolution(ref s) => Some(s.data.review_kind.title()),
@@ -191,6 +193,7 @@ impl ActiveView {
             Self::ReleaseReview(s) => s.selected_path(),
             Self::Deploy(ref s) => s.data.selected_path(&s.interaction),
             Self::UnifiedTagEditor(s) => s.selected_path(),
+            Self::ArtistPluralResolution(s) => s.selected_path(),
             Self::MissingAlbumSingleResolution(ref s) => s.selected_path(),
             Self::DiscExtractionResolution(ref s) => s.selected_path(),
             Self::ManualReviewResolution(ref s) => s.selected_path(),
@@ -277,6 +280,7 @@ pub(crate) enum ViewAction {
     History(history_view::HistoryAction),
     TagCanonicityResolution(mm_ui::resolutions::tag_canonicity::CanonicityAction),
     CompoundTagSplitResolution(mm_ui::resolutions::compound_split::CompoundSplitAction),
+    ArtistPluralResolution(artist_plural_modal::ArtistPluralAction),
     MissingAlbumSingleResolution(mm_ui::resolutions::missing_album::MissingAlbumAction),
     DiscExtractionResolution(mm_ui::resolutions::disc_extraction::DiscExtractionAction),
     ManualReviewResolution(mm_ui::resolutions::manual_review::ReviewAction),

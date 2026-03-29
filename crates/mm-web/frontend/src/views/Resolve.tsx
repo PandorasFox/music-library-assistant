@@ -4,6 +4,7 @@ import {
   useMissingFileData,
   useMissingDirectoryData,
   useCorruptFileData,
+  useArtistNeedsPluralData,
   useSubparDuplicateData,
   useLosslessRemuxData,
   useMovedFiles,
@@ -14,6 +15,7 @@ import type {
   MissingFileModalData,
   MissingDirectoryModalData,
   CorruptFileModalData,
+  ArtistNeedsPluralModalData,
   SubparDuplicateModalData,
   LosslessRemuxModalData,
   MovedFileInfo,
@@ -301,6 +303,71 @@ function MovedFiles() {
   );
 }
 
+// -- Artist Needs Plural --
+
+function ArtistNeedsPlural() {
+  const { data, isLoading, error } = useArtistNeedsPluralData();
+  const navigate = useNavigate();
+  const [staging, setStaging] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  if (isLoading) return <div className="view-loading">Loading...</div>;
+  if (error) return <div className="view-error">{error.message}</div>;
+  if (!data) return null;
+  const d = data as ArtistNeedsPluralModalData;
+
+  function pluralizeAll() {
+    const ops: Array<{ inode: number; tag_name: string; old_value: string | null; new_value: string | null }> = [];
+    for (const f of d.files) {
+      if (f.data.needs_artist && f.data.artist_values.length > 1) {
+        for (const v of f.data.artist_values) {
+          ops.push({ inode: f.inode, tag_name: "ARTIST", old_value: v, new_value: null });
+        }
+        ops.push({ inode: f.inode, tag_name: "ARTIST", old_value: null, new_value: f.data.artist_values.join("; ") });
+        for (const v of f.data.artist_values) {
+          ops.push({ inode: f.inode, tag_name: "ARTISTS", old_value: null, new_value: v });
+        }
+      }
+      if (f.data.needs_album_artist && f.data.album_artist_values.length > 1) {
+        for (const v of f.data.album_artist_values) {
+          ops.push({ inode: f.inode, tag_name: "ALBUMARTIST", old_value: v, new_value: null });
+        }
+        ops.push({ inode: f.inode, tag_name: "ALBUMARTIST", old_value: null, new_value: f.data.album_artist_values.join("; ") });
+        for (const v of f.data.album_artist_values) {
+          ops.push({ inode: f.inode, tag_name: "ALBUMARTISTS", old_value: null, new_value: v });
+        }
+      }
+    }
+    if (ops.length === 0) return;
+    const mutations = [{ ApplyTagOps: { ops, zone: "Corpus" } }];
+    void stageBatch("ArtistPluralNormalization", "Pluralize artist tags", mutations, navigate, setErr, setStaging);
+  }
+
+  return (
+    <div className="resolve-view">
+      <h2>Artist Tags Need Pluralizing ({d.files.length})</h2>
+      {err && <div className="form-error">{err}</div>}
+      {d.files.map((f) => (
+        <div key={f.corpus_path} className="resolve-row">
+          <span>{f.corpus_path}</span>
+          <span className="resolve-muted">
+            {f.data.needs_artist && f.data.needs_album_artist
+              ? "[ARTIST+ALBUMARTIST]"
+              : f.data.needs_artist
+                ? "[ARTIST]"
+                : "[ALBUMARTIST]"}
+          </span>
+        </div>
+      ))}
+      <div className="resolve-actions">
+        <button onClick={pluralizeAll} disabled={staging}>
+          {staging ? "Staging..." : "Pluralize All"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // -- OOB Tag Resolution --
 
 function OobResolution({ bucket }: { bucket: string }) {
@@ -346,6 +413,7 @@ const RESOLUTION_TYPES: Record<string, string> = {
   "oob-db": "OOB: DB Only",
   "oob-disk": "OOB: Disk Only",
   "oob-conflict": "OOB: Conflicts",
+  "artist-needs-plural": "Artist Plural Normalization",
 };
 
 export function Resolve() {
@@ -365,6 +433,7 @@ export function Resolve() {
       {type === "oob-db" && <OobResolution bucket="DbOnly" />}
       {type === "oob-disk" && <OobResolution bucket="DiskOnly" />}
       {type === "oob-conflict" && <OobResolution bucket="Conflict" />}
+      {type === "artist-needs-plural" && <ArtistNeedsPlural />}
       {type && !(type in RESOLUTION_TYPES) && (
         <div className="view-placeholder">Unknown resolution type: {type}</div>
       )}

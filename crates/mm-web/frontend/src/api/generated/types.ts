@@ -168,6 +168,7 @@ export interface TagSquashBucket {
   disc_extraction_count: number;
   path_tag_mismatch_count: number;
   same_recording_different_release_count: number;
+  artist_needs_plural_count: number;
 }
 
 export interface OtherSignalEntry {
@@ -407,6 +408,23 @@ export interface CorruptFileEntry {
 
 export interface CorruptFileModalData {
   files: CorruptFileEntry[];
+}
+
+export interface ArtistNeedsPluralData {
+  needs_artist: boolean;
+  needs_album_artist: boolean;
+  artist_values: string[];
+  album_artist_values: string[];
+}
+
+export interface ArtistNeedsPluralEntry {
+  inode: number;
+  corpus_path: string;
+  data: ArtistNeedsPluralData;
+}
+
+export interface ArtistNeedsPluralModalData {
+  files: ArtistNeedsPluralEntry[];
 }
 
 export interface SubparFileEntry {

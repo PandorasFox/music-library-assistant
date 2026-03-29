@@ -8,8 +8,8 @@ use super::super::App;
 use super::witness;
 use super::HandleAction;
 use crate::{
-    corrupt_file_modal, lossless_remux_modal, missing_directory_modal, missing_file_modal,
-    subpar_duplicate_modal, ActiveView,
+    artist_plural_modal, corrupt_file_modal, lossless_remux_modal, missing_directory_modal,
+    missing_file_modal, subpar_duplicate_modal, ActiveView,
 };
 
 /// Start a simple resolution modal: load data via domain query, create preview, set view.
@@ -131,6 +131,42 @@ impl HandleAction for corrupt_file_modal::CorruptFileAction {
 }
 
 // ========================================================================
+// Artist Plural Resolution
+// ========================================================================
+
+impl HandleAction for artist_plural_modal::ArtistPluralAction {
+    fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
+        use mm_ui::resolutions::dispatch::{Dispatchable, DispatchResult};
+
+        let result = {
+            let ActiveView::ArtistPluralResolution(ref state) = app.view else {
+                return;
+            };
+            state.dispatch(self, &app.resolver)
+        };
+
+        match result {
+            DispatchResult::Stage { key, label, mutations } => {
+                let Some(w) = witness else { return };
+                app.stage_mutations_with_transaction(mutations, &label, key, w);
+                app.after_staging_decisions();
+            }
+            DispatchResult::Cancel => {
+                let msg = {
+                    let ActiveView::ArtistPluralResolution(ref state) = app.view else {
+                        app.cancel_and_return_to_source("Resolution cancelled");
+                        return;
+                    };
+                    state.cancel_message()
+                };
+                app.cancel_and_return_to_source(msg);
+            }
+            _ => {}
+        }
+    }
+}
+
+// ========================================================================
 // Lossless Remux Resolution
 // ========================================================================
 
@@ -229,6 +265,14 @@ impl App {
             corrupt_file_modal::CorruptFileData(data),
         );
         self.view = ActiveView::CorruptFileResolution(preview);
+    }
+
+    pub(crate) fn start_artist_plural_resolution(&mut self) {
+        let data = self.query(mm_meta::domain_queries::GetArtistNeedsPluralData);
+        let preview = artist_plural_modal::ArtistPluralState::new(
+            artist_plural_modal::ArtistPluralData(data),
+        );
+        self.view = ActiveView::ArtistPluralResolution(preview);
     }
 
     pub(crate) fn start_lossless_remux_resolution(&mut self) {

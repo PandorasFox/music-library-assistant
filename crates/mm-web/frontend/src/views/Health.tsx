@@ -205,6 +205,12 @@ function TagSquashBucketView({ data }: { data: TagSquashBucket }) {
           level="info"
           link="/resolve/manual-review/SameRecordingDifferentRelease"
         />
+        <SignalRow
+          label="Artist tags need pluralizing"
+          count={data.artist_needs_plural_count}
+          level={severity(data.artist_needs_plural_count)}
+          link="/resolve/artist-needs-plural"
+        />
       </div>
     </section>
   );

@@ -126,6 +126,7 @@ pub enum InsightAction {
     LaunchMissingAlbumSingleResolution,
     LaunchDiscExtractionResolution,
     LaunchPathTagMismatchResolution,
+    LaunchArtistPluralResolution,
     /// Not yet implemented
     NotImplemented,
     /// Informational only - no action available

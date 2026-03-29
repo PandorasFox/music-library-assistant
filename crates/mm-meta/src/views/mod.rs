@@ -84,6 +84,8 @@ pub struct TagSquashBucket {
     pub path_tag_mismatch_count: usize,
     /// Same MB recording on different releases
     pub same_recording_different_release_count: usize,
+    /// Files with multi-valued ARTIST/ALBUMARTIST needing plural form (Navidrome convention)
+    pub artist_needs_plural_count: usize,
 }
 
 /// Entry for tag squash signals (grouped by tag name)

@@ -211,6 +211,9 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         ActiveView::SubparDuplicateResolution(ref mut preview) => {
             preview.render_frame(f, area);
         }
+        ActiveView::ArtistPluralResolution(ref mut preview) => {
+            preview.render_frame(f, area);
+        }
         ActiveView::DirectoryClusterResolution(ref mut s) => {
             super::directory_cluster_modal::render_v3::render_v3(f, area, s);
         }

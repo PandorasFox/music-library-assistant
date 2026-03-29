@@ -15,6 +15,7 @@ import type {
   MissingFileModalData,
   MissingDirectoryModalData,
   CorruptFileModalData,
+  ArtistNeedsPluralModalData,
   SubparDuplicateModalData,
   LosslessRemuxModalData,
   MovedFileInfo,
@@ -47,6 +48,7 @@ export const queryKeys = {
   missingFiles: ["missing-file-data"] as const,
   missingDirs: ["missing-directory-data"] as const,
   corruptFiles: ["corrupt-file-data"] as const,
+  artistNeedsPlural: ["artist-needs-plural-data"] as const,
   subparDupes: ["subpar-duplicate-data"] as const,
   losslessRemux: ["lossless-remux-data"] as const,
   movedFiles: ["moved-files"] as const,
@@ -153,6 +155,13 @@ export function useCorruptFileData() {
   return useQuery({
     queryKey: queryKeys.corruptFiles,
     queryFn: () => get<CorruptFileModalData>("/queries/corrupt-file-data"),
+  });
+}
+
+export function useArtistNeedsPluralData() {
+  return useQuery({
+    queryKey: queryKeys.artistNeedsPlural,
+    queryFn: () => get<ArtistNeedsPluralModalData>("/queries/artist-needs-plural-data"),
   });
 }
 

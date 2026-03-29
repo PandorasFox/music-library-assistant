@@ -247,6 +247,7 @@ unit_web_query!(
     GetMovedFiles,
     GetMissingAlbumSingleSignals, GetPackingKnots, GetPackingInodePaths,
     GetMissingFileData, GetMissingDirectoryData, GetCorruptFileData,
+    GetArtistNeedsPluralData,
     GetSubparDuplicateData, GetDirectoryClusterData, GetReleaseOverlapData,
     GetLosslessRemuxData, GetMissingTagAudioFiles,
 );
@@ -415,6 +416,7 @@ fn build_domain_payload(
         GetPackingKnots, GetPackingInodePaths,
         GetDiscExtractionData,
         GetMissingFileData, GetMissingDirectoryData, GetCorruptFileData,
+        GetArtistNeedsPluralData,
         GetSubparDuplicateData, GetDirectoryClusterData, GetReleaseOverlapData,
         GetLosslessRemuxData, GetDeployData,
         GetManualReviewData, GetCorpusTags, GetPackingBrowserData,

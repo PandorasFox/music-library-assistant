@@ -266,6 +266,7 @@ signal_registry! {
             OutOfBandTagSync(OutOfBandTagSyncSignal, "oob_tag_sync"),
             OutOfBandTagConflict(OutOfBandTagConflictSignal, "oob_tag_conflict"),
             SubparDuplicate(SubparDuplicateSignal, "subpar_duplicate"),
+            ArtistNeedsPlural(ArtistNeedsPluralSignal, "artist_needs_plural"),
             CompoundTag(CompoundTagSignal, "compound_tag"),
             PathTagMismatch(PathTagMismatchSignal, "path_tag_mismatch"),
             ExternalMatch(ExternalMatchSignal, "external_match"),

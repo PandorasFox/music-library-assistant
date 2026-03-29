@@ -64,6 +64,22 @@ pub struct SubparDuplicateData {
 // Compound Tag Data
 // ============================================================================
 
+/// Data for the artist-needs-plural signal.
+///
+/// Identifies which artist tag families (ARTIST, ALBUMARTIST) have multiple
+/// values in the singular tag without a corresponding plural form.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtistNeedsPluralData {
+    /// true if ARTIST has multiple values without ARTISTS.
+    pub needs_artist: bool,
+    /// true if ALBUMARTIST has multiple values without ALBUMARTISTS.
+    pub needs_album_artist: bool,
+    /// The multi-valued ARTIST entries (empty if needs_artist is false).
+    pub artist_values: Vec<String>,
+    /// The multi-valued ALBUMARTIST entries (empty if needs_album_artist is false).
+    pub album_artist_values: Vec<String>,
+}
+
 /// A single compound tag value detected in a file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompoundTagEntry {

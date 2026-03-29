@@ -14,6 +14,7 @@ use crate::meta::computations::helpers::{
 };
 use crate::meta::computations::traits::ComputationContext;
 use crate::meta::signals::data::{
+    ArtistNeedsPluralSignal,
     CompoundTagEntry as TypedCompoundEntry, CompoundTagSignal, DiscExtractionData,
     DiscExtractionSignal, DiscExtractionSource, InconsistentAlbumArtistData,
     InconsistentAlbumArtistSignal, MissingAlbumSingleData, MissingAlbumSingleSignal,
@@ -677,8 +678,11 @@ pub fn execute_detect_compound_tags_for_inode(
     // Get tags for this inode
     let tags = read_only_db.get_tags::<crate::zones::CorpusZone>(inode).unwrap_or_default();
     if tags.is_empty() {
-        // No tags - clear any existing signal and dirty flag
+        // No tags - clear any existing signals and dirty flag
         sender.clear_corpus_signal::<CompoundTagSignal>(inode, witness);
+        helpers::drop_stale_corpus_signal::<ArtistNeedsPluralSignal>(
+            read_only_db, &sender, inode, witness,
+        );
         sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
         return Result::success(computation, Vec::new());
     }
@@ -705,25 +709,62 @@ pub fn execute_detect_compound_tags_for_inode(
         )
     });
 
-    // If no compounds found, clear any existing signal (only if one exists)
+    // --- Compound tag signal ---
     if compounds.is_empty() {
         helpers::drop_stale_corpus_signal::<CompoundTagSignal>(
             read_only_db, &sender, inode, witness,
         );
-        sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
-        return Result::success(computation, Vec::new());
+    } else {
+        let signal = TypedSignalWrite::CompoundTag(CompoundTagSignal {
+            inode,
+            path: corpus_path.clone(),
+            compounds,
+        });
+        let new_hash = signal.content_hash();
+        let existing_hash = read_only_db.corpus_signal_inode_hash::<CompoundTagSignal>(inode);
+        if existing_hash != Some(new_hash) {
+            sender.write_typed_signal(signal, witness);
+        }
     }
 
-    // Emit per-file CompoundTag signal (skip if unchanged via hash comparison)
-    let signal = TypedSignalWrite::CompoundTag(CompoundTagSignal {
-        inode,
-        path: corpus_path,
-        compounds,
-    });
-    let new_hash = signal.content_hash();
-    let existing_hash = read_only_db.corpus_signal_inode_hash::<CompoundTagSignal>(inode);
-    if existing_hash != Some(new_hash) {
-        sender.write_typed_signal(signal, witness);
+    // --- Artist-needs-plural signal ---
+    // Detect multi-valued ARTIST/ALBUMARTIST without corresponding plural tags.
+    // Build tag name sets and value lists from already-loaded tags.
+    let present_upper: HashSet<String> = tags.iter().map(|t| t.tag_name.to_uppercase()).collect();
+    let mut artist_values: Vec<String> = Vec::new();
+    let mut album_artist_values: Vec<String> = Vec::new();
+
+    for tag in &tags {
+        match tag.tag_name.to_uppercase().as_str() {
+            "ARTIST" => artist_values.push(tag.tag_value.clone()),
+            "ALBUMARTIST" => album_artist_values.push(tag.tag_value.clone()),
+            _ => {}
+        }
+    }
+
+    let needs_artist = artist_values.len() > 1 && !present_upper.contains("ARTISTS");
+    let needs_album_artist = album_artist_values.len() > 1 && !present_upper.contains("ALBUMARTISTS");
+
+    if needs_artist || needs_album_artist {
+        let signal = TypedSignalWrite::ArtistNeedsPlural(ArtistNeedsPluralSignal {
+            inode,
+            path: corpus_path,
+            data: mm_meta::signals::data::ArtistNeedsPluralData {
+                needs_artist,
+                needs_album_artist,
+                artist_values: if needs_artist { artist_values } else { Vec::new() },
+                album_artist_values: if needs_album_artist { album_artist_values } else { Vec::new() },
+            },
+        });
+        let new_hash = signal.content_hash();
+        let existing_hash = read_only_db.corpus_signal_inode_hash::<ArtistNeedsPluralSignal>(inode);
+        if existing_hash != Some(new_hash) {
+            sender.write_typed_signal(signal, witness);
+        }
+    } else {
+        helpers::drop_stale_corpus_signal::<ArtistNeedsPluralSignal>(
+            read_only_db, &sender, inode, witness,
+        );
     }
 
     // Clear dirty flag after successful processing

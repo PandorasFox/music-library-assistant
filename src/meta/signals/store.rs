@@ -700,6 +700,22 @@ impl_corpus_signal!(SubparDuplicateSignal, "signal_subpar_duplicate",
     blob_version: 1,
 );
 
+impl_corpus_signal!(ArtistNeedsPluralSignal, "signal_artist_needs_plural",
+    "CREATE TABLE IF NOT EXISTS signal_artist_needs_plural (
+        inode INTEGER PRIMARY KEY,
+        path TEXT NOT NULL,
+        data BLOB NOT NULL,
+        data_hash INTEGER NOT NULL DEFAULT 0,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )",
+    insert_sql: "INSERT OR REPLACE INTO signal_artist_needs_plural (inode, path, data, data_hash) VALUES (?1, ?2, ?3, ?4)",
+    fields: [inode, path],
+    blob: data,
+    blob_version: 1,
+);
+
+impl_signal_query!(by_inode, ArtistNeedsPluralSignal, "signal_artist_needs_plural", [inode, path], data);
+
 impl_corpus_signal!(CompoundTagSignal, "signal_compound_tag",
     "CREATE TABLE IF NOT EXISTS signal_compound_tag (
         inode INTEGER PRIMARY KEY,

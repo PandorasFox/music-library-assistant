@@ -244,6 +244,20 @@ pub struct SubparDuplicateSignal {
     pub data: SubparDuplicateData,
 }
 
+/// Multi-valued ARTIST/ALBUMARTIST without corresponding plural tags.
+///
+/// Files where the singular tag has multiple values (decomposed credits)
+/// but lacks the ARTISTS/ALBUMARTISTS plural form required by Navidrome.
+/// Resolution: join values with "; " into the singular tag, copy originals
+/// to the plural tag.
+#[derive(Debug, Clone)]
+pub struct ArtistNeedsPluralSignal {
+    pub inode: i64,
+    pub path: String,
+    /// Serialized as bincode BLOB.
+    pub data: mm_meta::signals::data::ArtistNeedsPluralData,
+}
+
 /// Per-file compound tag detection results.
 #[derive(Debug, Clone)]
 pub struct CompoundTagSignal {
@@ -432,6 +446,7 @@ impl_content_hash!(MusicBrainzTaggedSignal => []);
 impl_content_hash!(OutOfBandTagSyncSignal => blob(mismatches));
 impl_content_hash!(OutOfBandTagConflictSignal => blob(mismatches));
 impl_content_hash!(SubparDuplicateSignal => blob(data));
+impl_content_hash!(ArtistNeedsPluralSignal => blob(data));
 impl_content_hash!(CompoundTagSignal => blob(compounds));
 impl_content_hash!(PathTagMismatchSignal => blob(data));
 impl_content_hash!(ExternalMatchSignal => blob(data));

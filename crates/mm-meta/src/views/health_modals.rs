@@ -6,8 +6,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::mutations::file_ops::HardLinkMutation;
 use crate::mutations::indexing::{DropDirectoryFromIndexMutation, DropFromIndexMutation};
-use crate::mutations::Mutation;
+use crate::db_types::Zone;
+use crate::mutations::tag_edit::ApplyTagOpsMutation;
+use crate::mutations::{Mutation, TagOp};
 use crate::paths::PathResolver;
+use crate::signals::data::ArtistNeedsPluralData;
 
 // ============================================================================
 // Missing File Resolution
@@ -237,5 +240,71 @@ impl SubparDuplicateModalData {
                 )
             })
             .collect()
+    }
+}
+
+// ============================================================================
+// Artist Needs Plural Resolution
+// ============================================================================
+
+/// A file with multi-valued ARTIST/ALBUMARTIST needing plural tag normalization.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtistNeedsPluralEntry {
+    pub inode: i64,
+    pub corpus_path: String,
+    pub data: ArtistNeedsPluralData,
+}
+
+/// Cached data for the artist-needs-plural resolution modal.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ArtistNeedsPluralModalData {
+    pub files: Vec<ArtistNeedsPluralEntry>,
+}
+
+impl ArtistNeedsPluralModalData {
+    pub fn has_files(&self) -> bool {
+        !self.files.is_empty()
+    }
+
+    /// Generate tag ops to normalize all files: semicolon-join singular,
+    /// copy individual values to plural tag.
+    pub fn pluralize_mutations(&self) -> Vec<Mutation> {
+        let mut all_ops: Vec<TagOp> = Vec::new();
+
+        for file in &self.files {
+            if file.data.needs_artist && file.data.artist_values.len() > 1 {
+                // Drop all existing ARTIST values
+                for val in &file.data.artist_values {
+                    all_ops.push(TagOp::drop_tag(file.inode, "ARTIST", val));
+                }
+                // Add semicolon-joined singular ARTIST
+                let joined = file.data.artist_values.join("; ");
+                all_ops.push(TagOp::add_tag(file.inode, "ARTIST", joined));
+                // Add individual ARTISTS plural entries
+                for val in &file.data.artist_values {
+                    all_ops.push(TagOp::add_tag(file.inode, "ARTISTS", val));
+                }
+            }
+
+            if file.data.needs_album_artist && file.data.album_artist_values.len() > 1 {
+                for val in &file.data.album_artist_values {
+                    all_ops.push(TagOp::drop_tag(file.inode, "ALBUMARTIST", val));
+                }
+                let joined = file.data.album_artist_values.join("; ");
+                all_ops.push(TagOp::add_tag(file.inode, "ALBUMARTIST", joined));
+                for val in &file.data.album_artist_values {
+                    all_ops.push(TagOp::add_tag(file.inode, "ALBUMARTISTS", val));
+                }
+            }
+        }
+
+        if all_ops.is_empty() {
+            return Vec::new();
+        }
+
+        vec![Mutation::ApplyTagOps(ApplyTagOpsMutation {
+            ops: all_ops,
+            zone: Zone::Corpus,
+        })]
     }
 }

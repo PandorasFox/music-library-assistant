@@ -32,6 +32,27 @@ impl Database {
         Ok(results)
     }
 
+    /// Get all ArtistNeedsPlural signals.
+    ///
+    /// Returns (inode, path, data_blob) for each signal. Caller deserializes the blob.
+    pub fn get_artist_needs_plural_signals(
+        &self,
+    ) -> Result<Vec<(i64, String, Vec<u8>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT inode, path, data FROM signal_artist_needs_plural ORDER BY path",
+        )?;
+        let results = stmt
+            .query_map(params![], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(results)
+    }
+
     /// Get all LosslessRemux signals with their inodes.
     ///
     /// Returns (inode, signal_path, file_type) for each lossless_remux signal.

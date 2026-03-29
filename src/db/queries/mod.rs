@@ -551,6 +551,7 @@ impl<'a> ReadOnlyDb<'a> {
         fn get_sidecar_conflict_groups() -> Result<Vec<crate::meta::views::SidecarConflictGroup>>;
         fn get_missing_file_paths() -> Result<Vec<String>>;
         fn get_corrupt_file_signals() -> Result<Vec<(i64, String)>>;
+        fn get_artist_needs_plural_signals() -> Result<Vec<(i64, String, Vec<u8>)>>;
         fn get_lossless_remux_files() -> Result<Vec<(i64, String, String)>>;
         fn get_lossless_remux_counts_by_type() -> Result<Vec<(String, i64)>>;
         fn get_subpar_duplicate_files() -> Result<Vec<crate::meta::views::SubparDuplicateEntry>>;

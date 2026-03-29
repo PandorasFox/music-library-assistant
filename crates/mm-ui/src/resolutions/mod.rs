@@ -10,6 +10,7 @@
 
 pub mod dispatch;
 
+pub mod artist_plural;
 pub mod compound_split;
 pub mod corrupt_file;
 pub mod deploy_conflicts;

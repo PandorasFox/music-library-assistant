@@ -49,6 +49,7 @@ pub enum DecisionKey {
     DiscExtraction { group_index: usize },
     EditReversal { session_label: String },
     ConfigEdit,
+    ArtistPluralNormalization,
     DirConfigEdit { source_path: std::path::PathBuf },
     MbReleaseApproval { release_id: String },
     JettisonEditHistory,
@@ -63,6 +64,7 @@ impl DecisionKey {
             DecisionKey::MissingFile => Some(DecisionKeyKind::MissingFile),
             DecisionKey::MissingDirectory => Some(DecisionKeyKind::MissingDirectory),
             DecisionKey::CorruptFile => Some(DecisionKeyKind::CorruptFile),
+            DecisionKey::ArtistPluralNormalization => Some(DecisionKeyKind::ArtistPluralNormalization),
             DecisionKey::LosslessRemux => Some(DecisionKeyKind::LosslessRemux),
             DecisionKey::SubparDuplicate => Some(DecisionKeyKind::SubparDuplicate),
             _ => None,
@@ -99,6 +101,8 @@ impl DecisionKey {
             DecisionKey::MissingDirectory => &[DropDirectoryFromIndex],
             // Corrupt file → stash from zone + drop from index
             DecisionKey::CorruptFile => &[StashFromZone, DropFromIndex],
+            // Artist plural normalization → tag ops (restructure singular/plural artist tags)
+            DecisionKey::ArtistPluralNormalization => &[ApplyTagOps],
             // Lossless remux → transcode to FLAC
             DecisionKey::LosslessRemux => &[Transcode],
             // Subpar duplicate → stash from zone + drop from index
@@ -148,6 +152,7 @@ impl std::fmt::Display for DecisionKey {
             DecisionKey::MissingFile => write!(f, "Missing File"),
             DecisionKey::MissingDirectory => write!(f, "Missing Directory"),
             DecisionKey::CorruptFile => write!(f, "Corrupt File"),
+            DecisionKey::ArtistPluralNormalization => write!(f, "Artist Plural Normalization"),
             DecisionKey::LosslessRemux => write!(f, "Lossless Remux"),
             DecisionKey::SubparDuplicate => write!(f, "Subpar Duplicate"),
             DecisionKey::DirectoryCluster { cluster_index } => {
@@ -186,6 +191,7 @@ pub enum DecisionKeyKind {
     MissingFile,
     MissingDirectory,
     CorruptFile,
+    ArtistPluralNormalization,
     LosslessRemux,
     SubparDuplicate,
 }

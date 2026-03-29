@@ -37,6 +37,34 @@ pub fn load_corrupt_file_data(
 }
 
 // ============================================================================
+// Artist Needs Plural Modal
+// ============================================================================
+
+/// Load data for the artist-needs-plural resolution modal.
+pub fn load_artist_needs_plural_data(
+    read_db: &ReadOnlyDb<'_>,
+) -> Result<mm_meta::views::health_modals::ArtistNeedsPluralModalData> {
+    use mm_meta::signals::data::ArtistNeedsPluralData;
+    use mm_meta::views::health_modals::{ArtistNeedsPluralEntry, ArtistNeedsPluralModalData};
+
+    let signals = read_db.get_artist_needs_plural_signals()?;
+
+    let files = signals
+        .into_iter()
+        .filter_map(|(inode, corpus_path, blob)| {
+            let data: ArtistNeedsPluralData = bincode::deserialize(&blob).ok()?;
+            Some(ArtistNeedsPluralEntry {
+                inode,
+                corpus_path,
+                data,
+            })
+        })
+        .collect();
+
+    Ok(ArtistNeedsPluralModalData { files })
+}
+
+// ============================================================================
 // Missing File Modal
 // ============================================================================
 

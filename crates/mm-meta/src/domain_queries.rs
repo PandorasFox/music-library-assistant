@@ -152,6 +152,10 @@ pub struct GetMissingDirectoryData;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetCorruptFileData;
 
+/// Artist tags needing pluralization: multi-valued ARTIST/ALBUMARTIST without plural form.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetArtistNeedsPluralData;
+
 /// Subpar duplicate data: lower-quality versions of existing files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetSubparDuplicateData;
@@ -462,6 +466,7 @@ domain_query_protocol! {
     GetMissingFileData("missing-file-data") => crate::views::health_modals::MissingFileModalData,
     GetMissingDirectoryData("missing-directory-data") => crate::views::health_modals::MissingDirectoryModalData,
     GetCorruptFileData("corrupt-file-data") => crate::views::health_modals::CorruptFileModalData,
+    GetArtistNeedsPluralData("artist-needs-plural-data") => crate::views::health_modals::ArtistNeedsPluralModalData,
     GetSubparDuplicateData("subpar-duplicate-data") => crate::views::health_modals::SubparDuplicateModalData,
     GetDirectoryClusterData("directory-cluster-data") => crate::views::cluster_deploy::DirectoryClusterModalData,
     GetReleaseOverlapData("release-overlap-data") => crate::views::cluster_deploy::DirectoryClusterModalData,

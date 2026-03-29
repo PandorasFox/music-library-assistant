@@ -126,8 +126,8 @@ use mm_meta::views::cluster_deploy::{
     DeployModalData, DirectoryClusterModalData, LosslessRemuxModalData,
 };
 use mm_meta::views::health_modals::{
-    CorruptFileModalData, MissingDirectoryModalData, MissingFileModalData,
-    SubparDuplicateModalData,
+    ArtistNeedsPluralModalData, CorruptFileModalData, MissingDirectoryModalData,
+    MissingFileModalData, SubparDuplicateModalData,
 };
 use mm_meta::views::review_match::{
     ManualReviewData, RecordingDetail, RecordingSummary,
@@ -345,6 +345,12 @@ impl_domain_query! {
 impl_domain_query! {
     GetCorruptFileData => CorruptFileModalData, |db| {
         modal_loaders::load_corrupt_file_data(db).ok().unwrap_or_default()
+    }
+}
+
+impl_domain_query! {
+    GetArtistNeedsPluralData => ArtistNeedsPluralModalData, |db| {
+        modal_loaders::load_artist_needs_plural_data(db).ok().unwrap_or_default()
     }
 }
 
@@ -1094,6 +1100,7 @@ dispatch_domain_query_impl! {
     GetMissingFileData,
     GetMissingDirectoryData,
     GetCorruptFileData,
+    GetArtistNeedsPluralData,
     GetSubparDuplicateData,
     GetDirectoryClusterData,
     GetReleaseOverlapData,

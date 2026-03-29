@@ -3,7 +3,8 @@
 //! Missing tags, tag canonicalization, inconsistent album artist, and
 //! compound tag detection.
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::db::ReadOnlyDb;
@@ -26,7 +27,11 @@ use super::{Computation, Result};
 // MusicBrainz-Tagged Detection
 // ============================================================================
 
-/// Load the set of MB-tagged inodes (files with both configured track + release tags).
+/// Load the set of MB-tagged inodes (files with both track + release MB tags).
+///
+/// Checks both the configured MM-style tag names (e.g. MUSICBRAINZ_TRACK) and
+/// Picard-standard aliases (e.g. MUSICBRAINZ_TRACKID), so files tagged by
+/// external tools (Picard, beets) are recognized regardless of naming convention.
 ///
 /// Used by tag-based health computations to elide externally-authoritative files,
 /// and by incremental release packing to skip solved releases.
@@ -34,12 +39,28 @@ pub(crate) fn load_mb_tagged_inodes(
     read_only_db: &ReadOnlyDb<'_>,
     config: &crate::config::Config,
 ) -> std::collections::HashSet<i64> {
+    use mm_meta::config::MbTagNameConfig;
+
     let mb = &config.opinions.external_matching.mb_tag_names;
-    read_only_db
+    let mut inodes: std::collections::HashSet<i64> = read_only_db
         .get_mb_tagged_inodes(&mb.track, &mb.release)
         .unwrap_or_default()
         .into_iter()
-        .collect()
+        .collect();
+
+    // Also recognize Picard-standard aliases (always, regardless of picard_compat
+    // write setting — reading should accept both conventions).
+    let picard_track = MbTagNameConfig::PICARD_RECORDING;
+    let picard_release = MbTagNameConfig::PICARD_RELEASE;
+    if mb.track != picard_track || mb.release != picard_release {
+        inodes.extend(
+            read_only_db
+                .get_mb_tagged_inodes(picard_track, picard_release)
+                .unwrap_or_default(),
+        );
+    }
+
+    inodes
 }
 
 /// Execute DetectMusicBrainzTagged — emit per-file signals for MB-matched files.
@@ -60,12 +81,9 @@ pub fn execute_detect_musicbrainz_tagged(
 
     let config = require_config!(ctx, computation);
 
-    let mb = &config.opinions.external_matching.mb_tag_names;
-    let mb_inodes = read_only_db
-        .get_mb_tagged_inodes(&mb.track, &mb.release)
-        .unwrap_or_default();
+    let mb_inode_set = load_mb_tagged_inodes(read_only_db, &config);
 
-    let computed: Vec<helpers::ComputedCorpusSignal> = mb_inodes
+    let computed: Vec<helpers::ComputedCorpusSignal> = mb_inode_set
         .into_iter()
         .map(|inode| {
             helpers::ComputedCorpusSignal::new(
@@ -332,22 +350,40 @@ pub fn execute_detect_tag_canonicalizations(
                 continue;
             }
 
-            // Get inodes for all variants in this collision, excluding MB-tagged files
-            let variant_refs: Vec<&str> = collision.variants.iter().map(|s| s.as_str()).collect();
-            let inodes: Vec<i64> = read_only_db
-                .get_inodes_for_tag_values_in::<crate::zones::CorpusZone>(&collision.tag_name, &variant_refs)
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|inode| !mb_tagged_inodes.contains(inode))
-                .collect();
+            // Rebuild per-variant counts using only non-MB inodes.
+            // The raw collision counts include MB-tagged files; we need accurate
+            // non-MB counts so the signal reflects actionable work.
+            let mut non_mb_variant_counts: Vec<(String, usize)> = Vec::new();
+            let mut all_non_mb_inodes: Vec<i64> = Vec::new();
 
-            if inodes.is_empty() {
+            for variant in &collision.variants {
+                let variant_slice: &[&str] = &[variant.as_str()];
+                let variant_inodes: Vec<i64> = read_only_db
+                    .get_inodes_for_tag_values_in::<crate::zones::CorpusZone>(
+                        &collision.tag_name,
+                        variant_slice,
+                    )
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|inode| !mb_tagged_inodes.contains(inode))
+                    .collect();
+                let count = variant_inodes.len();
+                all_non_mb_inodes.extend(variant_inodes);
+                // Include variant even if count=0 (MB-only variant serves as
+                // the authoritative canonical form for the non-MB files).
+                non_mb_variant_counts.push((variant.clone(), count));
+            }
+
+            if all_non_mb_inodes.is_empty() {
                 continue;
             }
 
-            // Build sorted variant tuples (count DESC)
-            let mut variants: Vec<(String, usize)> = collision.variant_counts.into_iter().collect();
-            variants.sort_by(|a, b| b.1.cmp(&a.1));
+            // Sort: non-zero counts DESC first, then zero-count variants
+            // (MB-authoritative forms) at the end.
+            non_mb_variant_counts.sort_by(|a, b| b.1.cmp(&a.1));
+
+            let inodes = all_non_mb_inodes;
+            let variants = non_mb_variant_counts;
 
             let key = format!("{}:{}", collision.tag_name, collision.normalized_key);
             let signal = TypedSignalWrite::TagCanonicity(TagCanonicitySignal {
@@ -389,6 +425,23 @@ pub fn execute_detect_tag_canonicalizations(
 
 /// Computation type identifier for dirty inode tracking.
 const COMPOUND_TAG_COMPUTATION: &str = "compound_tag";
+
+// Thread-local cache of known MB artist names for compound tag detection.
+// Loaded once per rayon worker thread, reused across all per-inode computations.
+thread_local! {
+    static MB_ARTIST_NAMES_CACHE: RefCell<Option<HashSet<String>>> = const { RefCell::new(None) };
+}
+
+/// Get (or lazily load) the set of known MusicBrainz artist names for this thread.
+fn with_mb_artist_names<T>(read_only_db: &ReadOnlyDb<'_>, f: impl FnOnce(&HashSet<String>) -> T) -> T {
+    MB_ARTIST_NAMES_CACHE.with(|cell| {
+        let mut opt = cell.borrow_mut();
+        if opt.is_none() {
+            *opt = Some(read_only_db.get_known_mb_artist_names().unwrap_or_default());
+        }
+        f(opt.as_ref().unwrap())
+    })
+}
 
 /// Execute DetectCompoundTagValues - orchestrator for compound tag detection.
 ///
@@ -486,6 +539,7 @@ pub(super) fn detect_compounds_in_tags(
     collab_keywords: &[String],
     tag_values_cache: &mut HashMap<String, std::collections::HashSet<String>>,
     read_only_db: &ReadOnlyDb<'_>,
+    known_mb_artists: &std::collections::HashSet<String>,
 ) -> Vec<TypedCompoundEntry> {
     use crate::corpus::health::compound::{detect_featuring_pattern, CompoundTagValue};
 
@@ -522,7 +576,10 @@ pub(super) fn detect_compounds_in_tags(
         let mut matched_entry: Option<TypedCompoundEntry> = None;
 
         // 1. Collaboration keywords (artist tags only)
-        if is_artist_tag && !collab_keywords.is_empty() {
+        // Skip if the full value is a known MusicBrainz artist name — the keyword
+        // is part of the artist's name, not a collaboration separator
+        // (e.g., "Ron with Leeds", "DANCE WITH THE DEAD").
+        if is_artist_tag && !collab_keywords.is_empty() && !known_mb_artists.contains(&tag.tag_value.to_lowercase()) {
             if let Some((main_part, secondary_parts)) =
                 detect_featuring_pattern(&tag.tag_value, collab_keywords)
             {
@@ -641,9 +698,12 @@ pub fn execute_detect_compound_tags_for_inode(
     let mut tag_values_cache: std::collections::HashMap<String, std::collections::HashSet<String>> =
         std::collections::HashMap::new();
 
-    let compounds = detect_compounds_in_tags(
-        &tags, tag_splitting, &collab_keywords, &mut tag_values_cache, read_only_db,
-    );
+    let compounds = with_mb_artist_names(read_only_db, |mb_artists| {
+        detect_compounds_in_tags(
+            &tags, tag_splitting, &collab_keywords, &mut tag_values_cache, read_only_db,
+            mb_artists,
+        )
+    });
 
     // If no compounds found, clear any existing signal (only if one exists)
     if compounds.is_empty() {

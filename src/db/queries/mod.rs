@@ -619,6 +619,7 @@ impl<'a> ReadOnlyDb<'a> {
         fn get_external_matches_for_derivation(source_key: i64) -> Result<Vec<external::ExternalMatchRow>>;
         fn get_mb_recording_cache(recording_id: &str) -> Result<Option<(Vec<u8>, i64)>>;
         fn get_mb_artist_cache(artist_id: &str) -> Result<Option<(Vec<u8>, i64)>>;
+        fn get_known_mb_artist_names() -> Result<std::collections::HashSet<String>>;
         fn get_packing_manifest() -> Result<Vec<external::PackingManifestRow>>;
         fn get_optimal_packing_scores() -> Result<Vec<external::OptimalPackingScoreRow>>;
         fn get_optimal_packing_scores_for_release(release_id: &str) -> Result<Vec<external::OptimalPackingScoreRow>>;

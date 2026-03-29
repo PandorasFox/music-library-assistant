@@ -237,6 +237,31 @@ impl Database {
         self.get_mb_cache("mb_artist_cache", "artist_id", artist_id)
     }
 
+    /// Get all known MusicBrainz artist names from the artist cache.
+    ///
+    /// Extracts the `name` field from each cached artist JSON, lowercased for
+    /// case-insensitive matching. Used as a vocabulary for compound tag
+    /// detection — values matching a known MB artist name are not compound
+    /// (e.g., "Ron with Leeds" is a real artist, not "Ron" feat. "Leeds").
+    pub fn get_known_mb_artist_names(&self) -> Result<std::collections::HashSet<String>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT json_extract(raw_json, '$.name') FROM mb_artist_cache",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let name: Option<String> = row.get(0)?;
+            Ok(name)
+        })?;
+        let mut names = std::collections::HashSet::new();
+        for row in rows {
+            if let Ok(Some(name)) = row {
+                if !name.is_empty() {
+                    names.insert(name.to_lowercase());
+                }
+            }
+        }
+        Ok(names)
+    }
+
     /// Get cached MusicBrainz release JSON by release ID.
     pub fn get_mb_release_cache(&self, release_id: &str) -> Result<Option<(Vec<u8>, i64)>> {
         self.get_mb_cache("mb_release_cache", "release_id", release_id)

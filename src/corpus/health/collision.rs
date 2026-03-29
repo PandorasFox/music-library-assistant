@@ -21,8 +21,9 @@ pub struct TagCollision {
     pub normalized_key: String,
     /// Original values that collide (multiple spellings)
     pub variants: Vec<String>,
-    /// Count per variant
-    pub variant_counts: HashMap<String, usize>,
+    /// Count per variant (includes all corpus files; non-MB counts are
+    /// recomputed in the canonicity computation).
+    pub _variant_counts: HashMap<String, usize>,
     /// Suggested canonical value (most common spelling)
     pub _canonical: String,
     /// Confidence score (ratio of canonical count to total)
@@ -56,7 +57,7 @@ impl TagCollision {
             tag_name: tag_name.to_string(),
             normalized_key: normalized_key.to_string(),
             variants: variants.keys().cloned().collect(),
-            variant_counts: variants.clone(),
+            _variant_counts: variants.clone(),
             _canonical: canonical,
             _confidence: confidence,
         }

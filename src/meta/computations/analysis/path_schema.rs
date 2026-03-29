@@ -49,15 +49,7 @@ pub fn execute_detect_path_tag_mismatches(
     }
 
     // Skip MB-tagged files (externally authoritative tags)
-    let mb_tagged_inodes = {
-        let mb = &config.opinions.external_matching.mb_tag_names;
-        let inodes: std::collections::HashSet<i64> = read_only_db
-            .get_mb_tagged_inodes(&mb.track, &mb.release)
-            .unwrap_or_default()
-            .into_iter()
-            .collect();
-        inodes
-    };
+    let mb_tagged_inodes = super::tags::load_mb_tagged_inodes(read_only_db, config);
 
     // Load all corpus audio files with their tags.
     let files_with_tags = match read_only_db.get_all_audio_files_with_tags(Zone::Corpus, false) {

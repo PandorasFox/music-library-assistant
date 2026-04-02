@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useDeployStatus, useDeployData } from "../api/queries";
 import { post } from "../api/client";
-import { ApiError } from "../api/client";
 import type {
   DeployModalData,
   DeploySignalFile,
@@ -156,74 +155,8 @@ function DeployPreview({ data }: { data: DeployModalData }) {
     setStaging(true);
     setMessage(null);
     try {
-      // Start transaction
-      try {
-        await post("/tx/start", { label: "Deploy" });
-      } catch (e) {
-        if (!(e instanceof ApiError && e.status === 409)) throw e;
-      }
-
-      // Build deploy mutations from the data
-      // The server has the full data — we just signal intent.
-      // We POST the full deploy data so the server can build mutations.
-      // Actually, we need to build the mutations client-side from the data.
-      // HardLink for new files, LibraryMove for stale, StashLeftovers for leftovers.
-      const mutations: unknown[] = [];
-
-      for (const f of data.leftover) {
-        mutations.push({
-          StashLeftovers: { path: `libraries/${f.library_path}` },
-        });
-      }
-      for (const f of data.stale) {
-        mutations.push({
-          LibraryMove: {
-            source: `libraries/${f.library_path}`,
-            destination: `libraries/${f.expected_path}`,
-          },
-        });
-      }
-      for (const f of data.new) {
-        if (f.deploy_path && f.library_name) {
-          mutations.push({
-            HardLink: {
-              source: f.corpus_path,
-              destination: `libraries/${f.library_name}/${f.deploy_path}`,
-            },
-          });
-        }
-      }
-
-      if (mutations.length > 0) {
-        await post("/tx/add", {
-          key: "Deploy",
-          decision: {
-            label: `Deploy ${mutations.length} operations`,
-            mutations,
-          },
-        });
-      }
-
-      // Sidecar deploy as separate decision
-      const sidecarMutations: unknown[] = [];
-      for (const s of data.sidecars) {
-        sidecarMutations.push({
-          HardLink: {
-            source: s.corpus_image_path,
-            destination: `libraries/${s.library_name}/${s.library_album_dir}/${s.filename}`,
-          },
-        });
-      }
-      if (sidecarMutations.length > 0) {
-        await post("/tx/add", {
-          key: "DeploySidecars",
-          decision: {
-            label: `Deploy ${sidecarMutations.length} sidecars`,
-            mutations: sidecarMutations,
-          },
-        });
-      }
-
+      // Server builds mutations with correct absolute paths via PathResolver.
+      await post("/tx/stage-deploy", {});
       navigate("/tx");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));

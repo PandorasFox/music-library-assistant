@@ -327,3 +327,80 @@ pub async fn approve_releases(
 
     Ok(Json(serde_json::json!({ "staged": n, "skipped": skipped })))
 }
+
+// ============================================================================
+// POST /tx/stage-deploy
+// ============================================================================
+
+/// Server-side deploy staging: fetches deploy data, builds mutations using
+/// PathResolver, and stages them into a transaction.
+///
+/// The web frontend should NOT build mutation paths — it sends only intent.
+pub async fn stage_deploy(
+    State(state): State<AppState>,
+    BearerToken(token): BearerToken,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    use mm_meta::domain_queries::GetDeployData;
+    use mm_meta::paths::PathResolver;
+    use mm_ui::deploy::prepare_deploy_decisions;
+
+    // 1. Load deploy data.
+    let deploy_resp = super::queries::send_query(
+        &state, token.clone(), GetDeployData.into_payload(),
+    ).await?;
+    let deploy_data = GetDeployData::extract_response(deploy_resp);
+
+    let total = deploy_data.total_operations();
+    if total == 0 {
+        return Err(ApiError::BadRequest("no deploy operations to stage".into()));
+    }
+
+    // 2. Load config for PathResolver.
+    let config_resp = super::queries::send_query(
+        &state, token.clone(), QueryPayload::Config,
+    ).await?;
+    let config = match config_resp {
+        mm_meta::protocol::QueryResponse::Config(c) => *c,
+        _ => return Err(ApiError::Internal("expected Config response".into())),
+    };
+    let resolver = PathResolver::from_config(&config);
+
+    // 3. Build decisions server-side.
+    let prepared = prepare_deploy_decisions(&deploy_data, &resolver);
+
+    if prepared.decisions.is_empty() {
+        return Err(ApiError::BadRequest(format!(
+            "no mutations produced (skipped {} files — likely missing library config)",
+            prepared.skipped,
+        )));
+    }
+
+    // 4. Stage transaction.
+    let label = format!("Deploy {} operations", total);
+    let _ = send_tx(&state, token.clone(), TransactionPayload::Discard).await;
+    let tr = send_tx(&state, token.clone(), TransactionPayload::Start { label }).await?;
+    if matches!(tr, TransactionResponse::Error(_)) {
+        return tx_to_json(tr);
+    }
+
+    let n = prepared.decisions.len();
+    for dd in prepared.decisions {
+        let decision = Decision { label: dd.label, mutations: dd.mutations };
+        let tr = send_tx(
+            &state,
+            token.clone(),
+            TransactionPayload::AddDecision { key: dd.key, decision },
+        ).await?;
+        if matches!(tr, TransactionResponse::Error(_)) {
+            return tx_to_json(tr);
+        }
+    }
+
+    eprintln!("[WEB-TX] stage-deploy: {n} decisions staged, {total} ops, {} skipped", prepared.skipped);
+
+    Ok(Json(serde_json::json!({
+        "staged": n,
+        "total_ops": total,
+        "skipped": prepared.skipped,
+    })))
+}

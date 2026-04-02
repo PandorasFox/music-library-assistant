@@ -139,6 +139,7 @@ pub fn router(state: AppState) -> Router {
         .route("/tx/confirm", post(api::transactions::confirm))
         .route("/tx/discard", post(api::transactions::discard))
         .route("/tx/approve-releases", post(api::transactions::approve_releases))
+        .route("/tx/stage-deploy", post(api::transactions::stage_deploy))
         // WebSocket event stream (validated against local session cache)
         .route("/ws", get(api::ws::ws_handler))
         // Build info (unauthenticated — just a timestamp)

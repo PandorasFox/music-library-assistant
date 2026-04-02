@@ -42,13 +42,14 @@ use super::types::{HadesSnapshot, MutationExecutionWitness, Task, TaskKind, Task
 // Task Execution
 // ============================================================================
 
-/// Execute a single task (mutation, computation, or maintenance).
+/// Execute a single task (mutation, soft mutation, computation, or maintenance).
 /// Opens DB connections as needed via thread-local caches.
 pub(super) fn execute_task(task: Task, label: String, snapshot: &HadesSnapshot) -> TaskResult {
     let kind = TaskKind::from_task(&task);
 
     let mut result = match task {
         Task::Mutation(mutation) => execute_mutation(*mutation, label, snapshot),
+        Task::SoftMutation(soft) => execute_soft_mutation(soft, label, snapshot),
         Task::Computation(computation) => execute_computation(computation, label, snapshot),
         Task::Maintenance(task) => execute_maintenance(task, label),
     };
@@ -199,6 +200,114 @@ pub(super) fn execute_mutation(
         spawn,
         spawn_mutations,
         config_update,
+        recomputation_scope,
+        deferred_phases: std::collections::VecDeque::new(),
+        fetch_requests: Vec::new(),
+    }
+}
+
+/// Execute a soft mutation (library-zone filesystem operation).
+///
+/// Trimmed post-execution pipeline: only phases 1b (stash index drop),
+/// 3 (signal update spawning), 4 (additional computations), and
+/// 5 (specific signal clearing). Skips inode clearing, dirty marking,
+/// and file-inherent signal emission — those are corpus-only concerns.
+pub(super) fn execute_soft_mutation(
+    soft: mm_meta::soft_mutations::SoftMutation,
+    label: String,
+    snapshot: &HadesSnapshot,
+) -> TaskResult {
+    use crate::meta::soft_mutations as sm;
+
+    crate::logging::log_mutation(format!(
+        "[EXECUTION] execute_soft_mutation: {} (label={:?})",
+        soft.label(),
+        label
+    ));
+
+    let stash_root = snapshot.config.as_ref().map(|c| c.stash_dir());
+    let result = sm::execute(&soft, stash_root.as_ref());
+
+    if !result.success {
+        if let Some(ref err) = result.error {
+            crate::logging::log_error(format!(
+                "[EXECUTION] Soft mutation failed (label={:?}): {}",
+                label, err
+            ));
+        }
+    }
+
+    // Trimmed post-execution pipeline
+    let mut spawned = Vec::new();
+
+    if result.success {
+        let witness = MutationExecutionWitness::new();
+        let resolver = paths::get_resolver();
+
+        // Phase 1b: Drop stashed inodes from files table
+        if sm::drops_from_index(&soft) && !result.discovered_inodes.is_empty() {
+            if let Some(sender) = write_thread::signal_sender() {
+                for &inode in &result.discovered_inodes {
+                    sender.drop_from_index(inode, "library", &witness);
+                }
+            }
+        }
+
+        // Phase 3: Spawn signal update computations
+        for path in sm::paths_for_signal_updates(&soft) {
+            let rel = if path.is_absolute() {
+                match resolver.to_relative(&path) {
+                    Some(r) => r,
+                    None => continue,
+                }
+            } else {
+                path
+            };
+            let abs = resolver.resolve(&rel);
+            if paths::is_corpus_path(&rel) {
+                spawned.push(Computation::Derivation(
+                    derivation::Computation::UpdateCorpusFileSignals { path: abs },
+                ));
+            } else if paths::is_library_path(&rel) {
+                spawned.push(Computation::Derivation(
+                    derivation::Computation::UpdateLibraryFileSignals { path: abs },
+                ));
+            }
+        }
+
+        // Phase 4: Additional computations
+        spawned.extend(sm::additional_computations(&soft));
+
+        // Phase 5: Specific signal clearing
+        let signals_to_clear = sm::specific_signals_to_clear(&soft);
+        if !signals_to_clear.is_empty() {
+            if let Some(sender) = write_thread::signal_sender() {
+                for spec in &signals_to_clear {
+                    sender.clear_aggregate_signal_fn(
+                        spec.clear_by_key_fn,
+                        &spec.key,
+                        spec.label,
+                        &witness,
+                    );
+                }
+            }
+        }
+    }
+
+    let recomputation_scope = if result.success {
+        sm::recomputation_scope(&soft)
+    } else {
+        RecomputationScope::EMPTY
+    };
+
+    TaskResult {
+        success: result.success,
+        error: result.error,
+        label,
+        kind: TaskKind::SoftMutation,
+        spawn: spawned,
+        spawn_mutations: Vec::new(),
+        config_update: None,
         recomputation_scope,
         deferred_phases: std::collections::VecDeque::new(),
         fetch_requests: Vec::new(),

@@ -278,9 +278,9 @@ impl From<&WorkState> for WorkStateSnapshot {
 
 /// A task that can be queued for execution.
 ///
-/// Three kinds: Mutations (operator-confirmed corpus changes), Computations
-/// (read-only signal derivation), and Maintenance (operator-approved DB
-/// infrastructure tasks that run before observing).
+/// Four kinds: Mutations (operator-confirmed corpus changes), SoftMutations
+/// (automated library-zone operations), Computations (read-only signal
+/// derivation), and Maintenance (operator-approved DB infrastructure tasks).
 ///
 /// External metadata fetching (AcoustID/MusicBrainz) is handled by the
 /// scheduler thread directly — it does not flow through the rayon pool.
@@ -288,6 +288,8 @@ impl From<&WorkState> for WorkStateSnapshot {
 pub enum Task {
     /// A state-altering mutation (requires ConfirmationGesture to stage).
     Mutation(Box<Mutation>),
+    /// A library-zone filesystem operation (no gesture required, auto-deploy).
+    SoftMutation(mm_meta::soft_mutations::SoftMutation),
     /// A read-only computation that emits signals (no gesture required).
     Computation(Computation),
     /// A database maintenance task (requires operator approval, bypasses accepting_mutations).
@@ -299,6 +301,7 @@ pub enum Task {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TaskKind {
     Mutation,
+    SoftMutation,
     Computation,
     Maintenance,
 }
@@ -307,6 +310,7 @@ impl TaskKind {
     pub fn from_task(task: &Task) -> Self {
         match task {
             Task::Mutation(_) => TaskKind::Mutation,
+            Task::SoftMutation(_) => TaskKind::SoftMutation,
             Task::Computation(_) => TaskKind::Computation,
             Task::Maintenance(_) => TaskKind::Maintenance,
         }
@@ -440,10 +444,16 @@ impl TaskLabel {
         Self(task.label())
     }
 
+    /// Create label from a soft mutation.
+    pub fn from_soft_mutation(sm: &mm_meta::soft_mutations::SoftMutation) -> Self {
+        Self(sm.label().to_string())
+    }
+
     /// Create label from a task (mutation, computation, or maintenance).
     pub fn from_task(task: &Task) -> Self {
         match task {
             Task::Mutation(m) => Self::from_mutation(m),
+            Task::SoftMutation(sm) => Self::from_soft_mutation(sm),
             Task::Computation(c) => Self::from_computation(c),
             Task::Maintenance(t) => Self::from_maintenance(t),
         }
@@ -478,6 +488,10 @@ pub(super) enum OffloadResult {
     AutoIndexResult {
         mutations: Vec<Mutation>,
         source: AutoIndexSource,
+    },
+    /// Auto-deploy query result: soft mutations to queue (empty = nothing to deploy).
+    AutoDeployResult {
+        soft_mutations: Vec<mm_meta::soft_mutations::SoftMutation>,
     },
     /// Vacuum check result from PRAGMA queries.
     VacuumCheck {

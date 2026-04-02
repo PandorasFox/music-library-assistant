@@ -76,7 +76,10 @@ impl super::Witch {
             return true;
         }
         // Check pending mutation/computation pipeline phases
-        if !self.pending_mutation_phases.is_empty() || !self.pending_computation_phases.is_empty() {
+        if !self.pending_mutation_phases.is_empty()
+            || !self.pending_soft_mutation_phases.is_empty()
+            || !self.pending_computation_phases.is_empty()
+        {
             return true;
         }
         false

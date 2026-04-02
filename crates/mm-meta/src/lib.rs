@@ -28,6 +28,7 @@ pub mod external;
 pub mod logging;
 pub mod mutations;
 pub mod paths;
+pub mod soft_mutations;
 pub mod tags;
 pub mod signals;
 pub mod transcode;

@@ -127,6 +127,39 @@ impl super::Witch {
                     return; // Stay in Working — more work queued
                 }
 
+                // Soft mutation phases (from auto-deploy) — between mutation
+                // and computation phases.
+                if self.work_state.in_flight() == 0
+                    && self.db_thread_handle.queue_empty()
+                    && !self.pending_soft_mutation_phases.is_empty()
+                {
+                    let (_phase, soft_mutations) =
+                        self.pending_soft_mutation_phases.pop_front().unwrap();
+                    crate::logging::log_general(format!(
+                        "[AUTO-DEPLOY] Phase advancement: queueing {} soft mutations. \
+                         {} phase(s) remaining.",
+                        soft_mutations.len(),
+                        self.pending_soft_mutation_phases.len()
+                    ));
+                    debug_assert!(
+                        self.db_thread_handle.queue_empty(),
+                        "Phase advancement: guard confirmed queue_empty but it changed"
+                    );
+
+                    let label = if let WorkState::Working { ref label, .. } = self.work_state {
+                        label.clone()
+                    } else {
+                        None
+                    };
+                    for sm in soft_mutations {
+                        self.enqueue_one(
+                            super::types::Task::SoftMutation(sm),
+                            label.clone(),
+                        );
+                    }
+                    return; // Stay in Working — more work queued
+                }
+
                 if self.work_state.in_flight() == 0
                     && self.db_thread_handle.queue_empty()
                     && !self.pending_computation_phases.is_empty()
@@ -418,18 +451,26 @@ impl super::Witch {
             Computation::Analysis(analysis::Computation::ScheduleContentAnalysis { scope }),
             Some("Analyzing metadata".to_string()),
         );
+
+        // Content analysis updates deploy signals; flag for auto-deploy check at idle.
+        self.deploy_needed = true;
     }
 
     fn transition_to_idle(&mut self) {
         let has_api_key = self
             .read_config(|c| !c.opinions.external_matching.acoustid_api_key.is_empty())
             .unwrap_or(false);
+        let auto_deploy_enabled = self
+            .read_config(|c| c.opinions.auto_deploy)
+            .unwrap_or(false);
 
         let action = pipeline_triggers::decide_idle_action(
             self.files_indexed_this_cycle,
             self.packing_needed,
+            self.deploy_needed,
             has_api_key,
             self.is_external_fetch_active(),
+            auto_deploy_enabled,
         );
 
         // Always clear files_indexed flag — don't retry every 30s if fetch can't start
@@ -450,6 +491,14 @@ impl super::Witch {
                 );
                 self.request_release_packing(true);
                 // Stay in Done — packing work transitions to Working
+            }
+            pipeline_triggers::IdleAction::TriggerAutoDeploy => {
+                self.deploy_needed = false;
+                crate::logging::log_general(
+                    "[WITCH] Auto-triggering deploy after content analysis",
+                );
+                self.request_auto_deploy_check();
+                // Stay in Done — offload result will transition to Working
             }
             pipeline_triggers::IdleAction::GoIdle => {
                 self.work_state = WorkState::Idle;

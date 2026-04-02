@@ -28,12 +28,15 @@ pub(super) enum IdleAction {
     TriggerFetch,
     /// Trigger full release packing pipeline (MIS).
     TriggerPacking,
+    /// Trigger automatic library deployment (soft mutations).
+    TriggerAutoDeploy,
     /// Actually go idle — nothing to auto-trigger.
     GoIdle,
 }
 
 /// Decide what to do when transitioning to idle.
 ///
+/// Priority: Fetch > Packing > AutoDeploy > GoIdle.
 /// Fetch takes priority over packing because packing depends on fetch results.
 /// The `files_indexed_this_cycle` flag is always cleared by the caller regardless
 /// of the action returned (even if fetch can't trigger due to missing API key,
@@ -41,8 +44,10 @@ pub(super) enum IdleAction {
 pub(super) fn decide_idle_action(
     files_indexed_this_cycle: bool,
     packing_needed: bool,
+    deploy_needed: bool,
     has_api_key: bool,
     fetch_active: bool,
+    auto_deploy_enabled: bool,
 ) -> IdleAction {
     // Fetch takes priority — packing depends on fetch results
     if files_indexed_this_cycle && has_api_key && !fetch_active {
@@ -51,6 +56,10 @@ pub(super) fn decide_idle_action(
 
     if packing_needed {
         return IdleAction::TriggerPacking;
+    }
+
+    if deploy_needed && auto_deploy_enabled {
+        return IdleAction::TriggerAutoDeploy;
     }
 
     IdleAction::GoIdle
@@ -103,7 +112,7 @@ mod tests {
     #[test]
     fn idle_action_triggers_fetch_when_files_indexed_and_api_key_present() {
         assert_eq!(
-            decide_idle_action(true, false, true, false),
+            decide_idle_action(true, false, false, true, false, false),
             IdleAction::TriggerFetch,
         );
     }
@@ -112,7 +121,7 @@ mod tests {
     fn idle_action_skips_fetch_when_no_api_key() {
         // No API key → can't fetch, fall through to GoIdle
         assert_eq!(
-            decide_idle_action(true, false, false, false),
+            decide_idle_action(true, false, false, false, false, false),
             IdleAction::GoIdle,
         );
     }
@@ -120,7 +129,7 @@ mod tests {
     #[test]
     fn idle_action_skips_fetch_when_fetch_already_active() {
         assert_eq!(
-            decide_idle_action(true, false, true, true),
+            decide_idle_action(true, false, false, true, true, false),
             IdleAction::GoIdle,
         );
     }
@@ -129,7 +138,7 @@ mod tests {
     fn idle_action_fetch_takes_priority_over_packing() {
         // Both flags set — fetch first, packing will happen on a later idle
         assert_eq!(
-            decide_idle_action(true, true, true, false),
+            decide_idle_action(true, true, false, true, false, false),
             IdleAction::TriggerFetch,
         );
     }
@@ -137,7 +146,7 @@ mod tests {
     #[test]
     fn idle_action_triggers_packing_when_needed() {
         assert_eq!(
-            decide_idle_action(false, true, true, false),
+            decide_idle_action(false, true, false, true, false, false),
             IdleAction::TriggerPacking,
         );
     }
@@ -146,7 +155,7 @@ mod tests {
     fn idle_action_triggers_packing_without_api_key() {
         // Packing doesn't need an API key — data is already cached
         assert_eq!(
-            decide_idle_action(false, true, false, false),
+            decide_idle_action(false, true, false, false, false, false),
             IdleAction::TriggerPacking,
         );
     }
@@ -154,7 +163,7 @@ mod tests {
     #[test]
     fn idle_action_goes_idle_when_nothing_needed() {
         assert_eq!(
-            decide_idle_action(false, false, true, false),
+            decide_idle_action(false, false, false, true, false, false),
             IdleAction::GoIdle,
         );
     }
@@ -162,7 +171,7 @@ mod tests {
     #[test]
     fn idle_action_goes_idle_when_nothing_needed_no_api_key() {
         assert_eq!(
-            decide_idle_action(false, false, false, false),
+            decide_idle_action(false, false, false, false, false, false),
             IdleAction::GoIdle,
         );
     }
@@ -171,7 +180,7 @@ mod tests {
     fn idle_action_files_indexed_but_fetch_active_falls_to_packing() {
         // Can't fetch (active), but packing is needed
         assert_eq!(
-            decide_idle_action(true, true, true, true),
+            decide_idle_action(true, true, false, true, true, false),
             IdleAction::TriggerPacking,
         );
     }
@@ -220,5 +229,47 @@ mod tests {
         let actions = decide_post_fetch_actions(scope);
         assert!(actions.set_packing_needed);
         assert_eq!(actions.scope_for_content_analysis, Some(scope));
+    }
+
+    // ---- auto-deploy ----
+
+    #[test]
+    fn idle_action_triggers_auto_deploy_when_needed_and_enabled() {
+        assert_eq!(
+            decide_idle_action(false, false, true, false, false, true),
+            IdleAction::TriggerAutoDeploy,
+        );
+    }
+
+    #[test]
+    fn idle_action_auto_deploy_skipped_when_not_enabled() {
+        assert_eq!(
+            decide_idle_action(false, false, true, false, false, false),
+            IdleAction::GoIdle,
+        );
+    }
+
+    #[test]
+    fn idle_action_auto_deploy_skipped_when_not_needed() {
+        assert_eq!(
+            decide_idle_action(false, false, false, false, false, true),
+            IdleAction::GoIdle,
+        );
+    }
+
+    #[test]
+    fn idle_action_fetch_takes_priority_over_auto_deploy() {
+        assert_eq!(
+            decide_idle_action(true, false, true, true, false, true),
+            IdleAction::TriggerFetch,
+        );
+    }
+
+    #[test]
+    fn idle_action_packing_takes_priority_over_auto_deploy() {
+        assert_eq!(
+            decide_idle_action(false, true, true, false, false, true),
+            IdleAction::TriggerPacking,
+        );
     }
 }

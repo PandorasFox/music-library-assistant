@@ -45,6 +45,7 @@ mod handle;
 mod pipeline_triggers;
 mod queue;
 pub(crate) mod socket;
+mod auto_deploy;
 mod startup;
 mod state_machine;
 mod status;
@@ -203,6 +204,16 @@ pub struct Witch {
     /// At `transition_to_idle()`, triggers full release packing pipeline.
     /// Cleared when auto-packing triggers.
     packing_needed: bool,
+
+    /// Set when content analysis is queued (deploy signals about to be refreshed).
+    /// At `transition_to_idle()`, triggers auto-deploy if config enables it.
+    /// Cleared when auto-deploy triggers.
+    deploy_needed: bool,
+
+    /// Remaining soft mutation phases from auto-deploy. Drained by `update_state()`
+    /// after the current phase completes (same pattern as `pending_mutation_phases`).
+    pending_soft_mutation_phases:
+        std::collections::VecDeque<(mm_meta::soft_mutations::SoftMutationPhase, Vec<mm_meta::soft_mutations::SoftMutation>)>,
 
     /// Handle to the dedicated DB write thread.
     /// Provides stats access and shutdown coordination.
@@ -366,6 +377,8 @@ impl Witch {
             post_fetch_computations: Vec::new(),
             files_indexed_this_cycle: false,
             packing_needed: false,
+            deploy_needed: false,
+            pending_soft_mutation_phases: std::collections::VecDeque::new(),
             db_thread_handle: write_thread::spawn(),
             cache_thread_handle: cache_witch_handle,
             mutations_generation: 0,

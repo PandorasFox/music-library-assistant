@@ -269,3 +269,38 @@ if is_corpus_path(&rel) {
 
 Some mutations emit signals on failure rather than success:
 - Index mutations: Emit `WaveformReadError` if fingerprint extraction fails
+
+---
+
+## Soft Mutations (Auto-Deploy)
+
+Soft mutations are library-zone filesystem operations that execute **without operator confirmation** when `auto-deploy` is enabled in config. They bypass the transaction/decision system and are queued directly by the Witch after content analysis refreshes deploy signals.
+
+**Source location**: Data types in `crates/mm-meta/src/soft_mutations.rs`, execution logic in `src/meta/soft_mutations.rs`.
+
+### Variants
+
+| Variant | Phase | Action | Signals Cleared | Computations Spawned |
+|---|---|---|---|---|
+| `DeployLink` | Deploy | Hard-link corpus file → library | — | `UpdateDeploySignals`, `UpdateCorpusFileSignals`, `UpdateLibraryFileSignals` |
+| `DeployMove` | Cleanup | Move library file to correct path | `LibraryStaleSignal` | `UpdateLibraryFileSignals` |
+| `StashLibrary` | Cleanup | Move orphan library file to stash | `LibraryLeftoverSignal` | — |
+
+### Phase Ordering
+
+Soft mutations execute in two phases with a drain barrier:
+1. **Cleanup** (`DeployMove` + `StashLibrary`) — clear destination paths
+2. **Deploy** (`DeployLink`) — hard-link into cleared paths
+
+### Pipeline Integration
+
+```text
+Content analysis completes → deploy_needed = true
+  → Done → 30s linger → transition_to_idle
+    → decide_idle_action: Fetch > Packing > AutoDeploy > GoIdle
+      → request_auto_deploy_check (spawn_blocking)
+        → query DeployReady, LibraryStale, LibraryLeftover signals
+        → build SoftMutation instances with PathResolver
+        → queue via queue_soft_mutations_internal
+          → phased execution → re-derivation → signals updated → no loop
+```

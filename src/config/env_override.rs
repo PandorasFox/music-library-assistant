@@ -94,6 +94,24 @@ fn apply_curated(config: &mut Config) {
             ));
         }
     }
+
+    if let Ok(val) = env::var("MM_AUTO_DEPLOY") {
+        match val.to_lowercase().as_str() {
+            "true" | "1" | "yes" => {
+                logging::log_general("env override: MM_AUTO_DEPLOY = true");
+                config.opinions.auto_deploy = true;
+            }
+            "false" | "0" | "no" => {
+                logging::log_general("env override: MM_AUTO_DEPLOY = false");
+                config.opinions.auto_deploy = false;
+            }
+            _ => {
+                logging::log_general(format!(
+                    "env override: MM_AUTO_DEPLOY invalid bool: {val}"
+                ));
+            }
+        }
+    }
 }
 
 /// Scan `MM_CFG__*` env vars and apply them as opinion overrides.

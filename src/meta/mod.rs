@@ -15,6 +15,7 @@ pub mod maintenance;
 pub mod mutations;
 pub mod protocol;
 pub mod recomputation;
+pub mod soft_mutations;
 pub mod wire;
 pub mod signals;
 pub mod views;

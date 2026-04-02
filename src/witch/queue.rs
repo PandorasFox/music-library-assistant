@@ -42,7 +42,7 @@ impl super::Witch {
     ///
     /// Consolidates the 4-step sequence (inc_queued / inc_in_flight / inc_label /
     /// spawn_task) used by every queue method.
-    fn enqueue_one(&mut self, task: Task, label: Option<String>) {
+    pub(super) fn enqueue_one(&mut self, task: Task, label: Option<String>) {
         let task_label = self.resolve_label(label, &task);
         self.work_state.inc_queued(1);
         self.work_state.inc_in_flight();
@@ -136,6 +136,49 @@ impl super::Witch {
     pub(super) fn queue_computation_with_label(&mut self, computation: Computation, label: Option<String>) {
         self.transition_to_working();
         self.enqueue_one(Task::Computation(computation), label);
+    }
+
+    // -------------------------------------------------------------------------
+    // Soft Mutation Queueing (no transaction required)
+    // -------------------------------------------------------------------------
+
+    /// Queue soft mutations with phase-based ordering.
+    ///
+    /// Soft mutations are bucketed by `SoftMutationPhase` (Cleanup before Deploy)
+    /// and executed with drain barriers between phases. The first phase is queued
+    /// immediately; remaining phases are stashed for advancement in `update_state()`.
+    pub(super) fn queue_soft_mutations_internal(
+        &mut self,
+        soft_mutations: Vec<mm_meta::soft_mutations::SoftMutation>,
+        label: Option<String>,
+    ) {
+        use std::collections::BTreeMap;
+        use mm_meta::soft_mutations::SoftMutationPhase;
+
+        self.transition_to_working();
+
+        let total = soft_mutations.len();
+        crate::logging::log_general(format!(
+            "[WORKER] queue_soft_mutations_internal: queueing {} soft mutations (label={:?})",
+            total, label
+        ));
+
+        // Bucket by phase (Ord on SoftMutationPhase gives natural ordering)
+        let mut by_phase: BTreeMap<SoftMutationPhase, Vec<mm_meta::soft_mutations::SoftMutation>> =
+            BTreeMap::new();
+        for sm in soft_mutations {
+            by_phase.entry(sm.phase()).or_default().push(sm);
+        }
+
+        let mut phases: std::collections::VecDeque<_> = by_phase.into_iter().collect();
+
+        // Queue first phase immediately, stash the rest
+        if let Some((_phase, batch)) = phases.pop_front() {
+            self.pending_soft_mutation_phases = phases;
+            for sm in batch {
+                self.enqueue_one(Task::SoftMutation(sm), label.clone());
+            }
+        }
     }
 
     // -------------------------------------------------------------------------

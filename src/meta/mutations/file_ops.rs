@@ -353,7 +353,7 @@ pub fn execute_hard_link(source: &Path, destination: &Path) -> Result<()> {
 /// - Same inode: File already correctly deployed, nothing to do (caller should
 ///   handle stale source path via separate MoveToStash if cleanup needed)
 /// - Different inode: Conflict - fails so caller can stash the conflicting file first
-fn execute_library_move_impl(source: &Path, destination: &Path) -> Result<()> {
+pub fn execute_library_move_impl(source: &Path, destination: &Path) -> Result<()> {
     use std::os::unix::fs::MetadataExt;
 
     // Check if destination already exists

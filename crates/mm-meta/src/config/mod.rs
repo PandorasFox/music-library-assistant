@@ -37,6 +37,9 @@ pub struct Opinions {
     /// Decisions accumulate in a Transaction tab; commit/discard from there.
     /// Default: false.
     pub leave_transactions_open: bool,
+    /// When true, automatically deploy files with DeployReady signals and fix
+    /// stale library entries after content analysis completes. Default: false.
+    pub auto_deploy: bool,
     /// External matching (AcoustID, etc.) configuration.
     pub external_matching: ExternalMatchingConfig,
     /// Disc extraction configuration (tag name, letter mapping).
@@ -58,6 +61,7 @@ pub struct Opinions {
 impl Opinions {
     // Direct children of the "opinions" block
     pub const KDL_LEAVE_TXN_OPEN: &str = "leave-transactions-open";
+    pub const KDL_AUTO_DEPLOY: &str = "auto-deploy";
 
     pub const KDL_WATCHER_POLL_INTERVAL: &str = "watcher-poll-interval-secs";
     pub const KDL_SESSION_LIFETIME: &str = "session-lifetime";
@@ -611,6 +615,7 @@ impl Default for Opinions {
             duplicate_analysis: DuplicateAnalysisOpinions::default(),
             release_packing: ReleasePackingOpinions::default(),
             leave_transactions_open: false,
+            auto_deploy: false,
             external_matching: ExternalMatchingConfig::default(),
             disc_extraction: DiscExtractionOpinions::default(),
             album_art: AlbumArtOpinions::default(),

@@ -50,6 +50,19 @@ impl super::Witch {
                 }
             }
 
+            OffloadResult::AutoDeployResult { soft_mutations } => {
+                if !soft_mutations.is_empty() {
+                    crate::logging::log_general(format!(
+                        "[AUTO-DEPLOY] Queueing {} soft mutations for library deployment",
+                        soft_mutations.len()
+                    ));
+                    self.queue_soft_mutations_internal(
+                        soft_mutations,
+                        Some("Auto-deploy".to_string()),
+                    );
+                }
+            }
+
             OffloadResult::VacuumCheck { needed } => {
                 self.vacuum_check_pending = false;
                 if needed {

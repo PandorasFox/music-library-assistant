@@ -648,6 +648,13 @@ pub(crate) fn parse_kdl_config(content: &str) -> Result<Config> {
                                     }
                                 }
                             }
+                            Opinions::KDL_AUTO_DEPLOY => {
+                                if let Some(entry) = child.entries().first() {
+                                    if let Some(val) = entry.value().as_bool() {
+                                        config.opinions.auto_deploy = val;
+                                    }
+                                }
+                            }
                             Opinions::KDL_WATCHER_POLL_INTERVAL => {
                                 if let Some(entry) = child.entries().first() {
                                     if let Some(val) = entry.value().as_i64() {

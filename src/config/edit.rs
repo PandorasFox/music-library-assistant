@@ -256,6 +256,15 @@ pub fn apply_config_edits_to_kdl(
         );
     }
 
+    // --- Auto Deploy ---
+    if new_config.opinions.auto_deploy != old_config.opinions.auto_deploy {
+        set_or_create_bool_node(
+            opinions_doc,
+            Opinions::KDL_AUTO_DEPLOY,
+            new_config.opinions.auto_deploy,
+        );
+    }
+
     // --- Watcher Poll Interval ---
     if new_config.opinions.watcher_poll_interval_secs
         != old_config.opinions.watcher_poll_interval_secs

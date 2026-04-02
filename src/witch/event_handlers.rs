@@ -136,7 +136,9 @@ impl super::Witch {
                         mtime_secs, mtime_nanos, file_size,
                     });
                 }
-                if zone == crate::db::types::Zone::Corpus {
+                if zone == crate::db::types::Zone::Corpus
+                    && !crate::meta::computations::helpers::is_image_file(&path)
+                {
                     self.queue_computation_with_label(
                         Computation::Observation(
                             crate::meta::computations::observation::Computation::VerifyTags {

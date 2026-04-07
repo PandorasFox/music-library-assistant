@@ -560,34 +560,100 @@ services:
       - MM_ACOUSTID_API_KEY=${ACOUSTID_API_KEY}
 
   # ── MusicBrainz Mirror ────────────────────────────────────────────────
-  # Uses official prebuilt images. See https://musicbrainz.org/doc/MusicBrainz_Docker
+  # Full local replica with search. ~8 GB RAM, ~60 GB disk.
+  # See https://github.com/metabrainz/musicbrainz-docker
+  #
+  # You need a MetaBrainz access token (free, get one at
+  # https://metabrainz.org/supporters/account-type) saved to
+  # ./musicbrainz/secrets/metabrainz_access_token
+  #
+  # First-time setup: run `docker compose exec musicbrainz-web bash` then
+  # `fetch-dump.sh` and `createdb.sh` to import the initial DB dump.
+  # After that, replication keeps data fresh hourly.
   musicbrainz-db:
-    image: ghcr.io/metabrainz/musicbrainz-docker-postgres:2024-01
+    image: metabrainz/musicbrainz-docker-db:16-build0
     container_name: musicbrainz-db
     restart: unless-stopped
+    command: >-
+      postgres
+      -c "shared_buffers=2048MB"
+      -c "effective_cache_size=4096MB"
+      -c "work_mem=64MB"
+      -c "maintenance_work_mem=512MB"
+      -c "random_page_cost=1.1"
+      -c "shared_preload_libraries=pg_amqp.so"
+    environment:
+      POSTGRES_USER: musicbrainz
+      POSTGRES_PASSWORD: musicbrainz
+    shm_size: "2GB"
     volumes:
       - mb_pgdata:/var/lib/postgresql/data
+
+  musicbrainz-web:
+    image: metabrainz/musicbrainz-docker-musicbrainz:v-2026-02-12.0-build1
+    container_name: musicbrainz-web
+    restart: unless-stopped
+    volumes:
+      - mb_dbdump:/media/dbdump
+      - ./musicbrainz/crons.conf:/crons.conf:ro
     environment:
-      - POSTGRES_USER=musicbrainz
-      - POSTGRES_PASSWORD=musicbrainz
+      POSTGRES_USER: musicbrainz
+      POSTGRES_PASSWORD: musicbrainz
+      MUSICBRAINZ_POSTGRES_SERVER: musicbrainz-db
+      MUSICBRAINZ_POSTGRES_READONLY_SERVER: musicbrainz-db
+      MUSICBRAINZ_RABBITMQ_SERVER: musicbrainz-mq
+      MUSICBRAINZ_REDIS_SERVER: musicbrainz-redis
+      MUSICBRAINZ_SEARCH_SERVER: musicbrainz-search:8983/solr
+      MUSICBRAINZ_SERVER_PROCESSES: 4
+      MUSICBRAINZ_WEB_SERVER_HOST: localhost
+      MUSICBRAINZ_WEB_SERVER_PORT: 5000
+    secrets:
+      - metabrainz_access_token
+    depends_on:
+      - musicbrainz-db
+      - musicbrainz-mq
+      - musicbrainz-search
+      - musicbrainz-redis
+
+  musicbrainz-search:
+    image: metabrainz/mb-solr:4.1.0
+    container_name: musicbrainz-search
+    restart: unless-stopped
+    environment:
+      SOLR_HEAP: 512m
+      LOG4J_FORMAT_MSG_NO_LOOKUPS: "true"
+    volumes:
+      - mb_solrdata:/var/solr
+
+  # Search Index Rebuilder — keeps Solr in sync with the DB via RabbitMQ.
+  # Build from a simple Dockerfile (see below) because the official
+  # metabrainz/sir image bundles consul-template which doesn't work
+  # outside their infra.
+  musicbrainz-sir:
+    build: ./musicbrainz/sir
+    container_name: musicbrainz-sir
+    restart: unless-stopped
+    volumes:
+      - ./musicbrainz/indexer.ini:/code/config.ini:ro
+      - ./musicbrainz/sir-crons.conf:/crons.conf:ro
+    depends_on:
+      - musicbrainz-db
+      - musicbrainz-mq
+      - musicbrainz-search
+
+  musicbrainz-mq:
+    image: rabbitmq:3.6.16-management
+    container_name: musicbrainz-mq
+    restart: unless-stopped
+    ulimits:
+      nofile: 65536
+    volumes:
+      - mb_mqdata:/var/lib/rabbitmq
 
   musicbrainz-redis:
     image: redis:7-alpine
     container_name: musicbrainz-redis
     restart: unless-stopped
-
-  musicbrainz-web:
-    image: ghcr.io/metabrainz/musicbrainz-docker:latest
-    container_name: musicbrainz-web
-    restart: unless-stopped
-    depends_on:
-      - musicbrainz-db
-      - musicbrainz-redis
-    environment:
-      - MUSICBRAINZ_SERVER_URL=http://musicbrainz-web:5000
-      - MUSICBRAINZ_WEB_SERVER_HOST=musicbrainz-web
-      - MUSICBRAINZ_DB_HOST=musicbrainz-db
-      - MUSICBRAINZ_REDIS_HOST=musicbrainz-redis
 
   # ── Navidrome (streaming) ─────────────────────────────────────────────
   navidrome:
@@ -628,10 +694,17 @@ services:
     volumes:
       - /path/to/library:/music:ro
 
+secrets:
+  metabrainz_access_token:
+    file: ./musicbrainz/secrets/metabrainz_access_token
+
 volumes:
   mm_config:
   mm_data:
   mb_pgdata:
+  mb_dbdump:
+  mb_solrdata:
+  mb_mqdata:
   navidrome_data:
   audiomuse_pgdata:
 ```
@@ -639,8 +712,124 @@ volumes:
 Adjust volume paths and image tags for your environment. The key points:
 
 - **Volume layout**: The example mounts a single `/library` tree that contains corpus, libraries, and stash subdirectories. All three `MM_*_ROOT` paths must be on the same filesystem for hardlink-based deploys to work.
-- **MusicBrainz mirror**: `MM_MB_BASE_URL` pointed at a local mirror eliminates the public API's 1 req/s rate limit. With a local mirror you can safely set `MM_MB_REQUESTS_PER_SECOND=50` or higher.
+- **MusicBrainz mirror**: `MM_MB_BASE_URL` pointed at a local mirror eliminates the public API's 1 req/s rate limit. With a local mirror you can safely set `MM_MB_REQUESTS_PER_SECOND=50` or higher. The full mirror stack (6 containers) uses ~8 GB RAM at steady state and ~60 GB disk. Postgres is the main consumer (~5 GB with 2 GB shared_buffers). The initial DB import and search index build are one-time costs; after that, hourly replication and the SIR indexer keep everything current.
+- **MusicBrainz SIR build**: The SIR Dockerfile is minimal — clone and pip install. See the [SIR setup section](#musicbrainz-search-index-rebuilder-sir) below.
 - **Navidrome integration**: Navidrome reads from the library root (deploy target), not the corpus. MM deploys files into the library via hardlinks, and Navidrome picks them up on its scan interval.
+
+### MusicBrainz Search Index Rebuilder (SIR)
+
+The `musicbrainz-sir` service requires a small custom build because the official `metabrainz/sir` Docker image bundles consul-template for MetaBrainz's production infrastructure.
+
+**`musicbrainz/sir/Dockerfile`:**
+
+```dockerfile
+ARG PYTHON_VERSION=3.13
+ARG BASE_IMAGE_DATE=20250313
+FROM metabrainz/python:${PYTHON_VERSION}-${BASE_IMAGE_DATE}
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends -qy \
+      ca-certificates cron gcc git libc6-dev \
+      libffi-dev libssl-dev libpq-dev libxslt1-dev libz-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG SIR_VERSION=4.0.1
+RUN git clone --depth=1 --branch "v${SIR_VERSION}" https://github.com/metabrainz/sir.git /code \
+    && cd /code && pip install -r requirements.txt && rm -f /code/config.ini
+
+WORKDIR /code
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
+```
+
+**`musicbrainz/sir/entrypoint.sh`:**
+
+```bash
+#!/bin/sh
+set -e
+if [ -f /crons.conf ] && [ -s /crons.conf ]; then
+    crontab /crons.conf
+    cron
+fi
+exec python -m sir amqp_watch
+```
+
+**`musicbrainz/indexer.ini`:**
+
+```ini
+[database]
+dbname = musicbrainz_db
+host = musicbrainz-db
+port = 5432
+user = musicbrainz
+password = musicbrainz
+
+[solr]
+uri = http://musicbrainz-search:8983/solr
+batch_size = 200
+
+[sir]
+import_threads = 16
+index_limit = 200000
+live_index_batch_size = 100
+process_delay = 15
+query_batch_size = 5000
+wscompat = on
+
+[rabbitmq]
+host = musicbrainz-mq
+user = sir
+password = sir
+vhost = /search-index-rebuilder
+prefetch_count = 350
+```
+
+**`musicbrainz/crons.conf`** (hourly replication, mounted into musicbrainz-web):
+
+```
+BASH_ENV=/noninteractive.bash_env
+0 * * * * /usr/local/bin/replication.sh >> /musicbrainz-server/mirror.log 2>&1
+```
+
+**`musicbrainz/sir-crons.conf`** (weekly full reindex, mounted into musicbrainz-sir):
+
+```
+0 4 * * 0 cd /code && python -m sir reindex >> /var/log/sir-reindex.log 2>&1
+```
+
+**One-time setup after first boot:**
+
+```bash
+# 1. Set up RabbitMQ vhost and user for SIR
+docker exec musicbrainz-mq rabbitmqctl add_vhost /search-index-rebuilder
+docker exec musicbrainz-mq rabbitmqctl add_user sir sir
+docker exec musicbrainz-mq rabbitmqctl set_permissions -p /search-index-rebuilder sir ".*" ".*" ".*"
+
+# 2. Install pg_amqp extension and configure the broker
+docker exec musicbrainz-db psql -U musicbrainz musicbrainz_db \
+  -c "CREATE EXTENSION amqp;"
+docker exec musicbrainz-db psql -U musicbrainz musicbrainz_db \
+  -c "INSERT INTO amqp.broker (host, port, vhost, username, password) VALUES ('musicbrainz-mq', 5672, '/search-index-rebuilder', 'sir', 'sir');"
+
+# 3. Set up AMQP queues and DB triggers
+docker exec musicbrainz-sir python -m sir amqp_setup
+docker exec musicbrainz-sir python -m sir triggers --broker-id 1 \
+  -f /tmp/CreateFunctions.sql -t /tmp/CreateTriggers.sql
+docker cp musicbrainz-sir:/tmp/CreateFunctions.sql /tmp/
+docker cp musicbrainz-sir:/tmp/CreateTriggers.sql /tmp/
+docker cp /tmp/CreateFunctions.sql musicbrainz-web:/tmp/
+docker cp /tmp/CreateTriggers.sql musicbrainz-web:/tmp/
+docker exec musicbrainz-web bash -c \
+  'cd /musicbrainz-server && carton exec -- admin/psql < /tmp/CreateFunctions.sql'
+docker exec musicbrainz-web bash -c \
+  'cd /musicbrainz-server && carton exec -- admin/psql < /tmp/CreateTriggers.sql'
+
+# 4. Build search indices (takes 1-4 hours depending on CPU)
+docker exec musicbrainz-sir python -m sir reindex
+```
 
 ## Debugging
 

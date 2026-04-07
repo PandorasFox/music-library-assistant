@@ -63,7 +63,13 @@ pub fn write_initial_config(root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Load config from disk. Does NOT validate.
+/// Load config from disk, falling back to env-var-only defaults.
+///
+/// If config.kdl exists, parses it and layers env overrides on top.
+/// If config.kdl is absent, constructs a default Config and applies env
+/// overrides — this allows fully env-driven configuration (e.g. Docker
+/// with a read-only config mount). Requires at least `MM_STORAGE_ROOT`
+/// (or `MM_ROOT`) to be set when no config file is present.
 ///
 /// Filesystem validation (`config.validate()`) should be called once at startup.
 /// It doesn't need to be repeated - the filesystem layout won't change at runtime.
@@ -71,29 +77,47 @@ pub fn load_config() -> Result<Config> {
     let config_dir = get_config_dir()?;
     let config_path = config_dir.join("config.kdl");
 
-    if !config_path.exists() {
+    let mut config = if config_path.exists() {
+        let content = fs::read_to_string(&config_path)
+            .with_context(|| format!("Failed to read config from {:?}", config_path))?;
+
+        let mut cfg = parse_kdl_config(&content)?;
+
+        // Load dirs.kdl (optional — empty dirs is valid)
+        let dirs_path = config_dir.join("dirs.kdl");
+        if dirs_path.exists() {
+            let dirs_content = fs::read_to_string(&dirs_path)
+                .with_context(|| format!("Failed to read dirs from {:?}", dirs_path))?;
+            cfg.source_dirs = parse_dirs_kdl(&dirs_content)?;
+        }
+
+        cfg
+    } else {
+        // No config file — start from defaults. Env overrides (below) supply
+        // storage_root and any other non-default values.
+        crate::logging::log_general(
+            "No config.kdl found — using defaults with environment overrides"
+        );
+        Config {
+            storage_root: std::path::PathBuf::new(),
+            libraries_root: None,
+            stash_root: None,
+            source_dirs: Vec::new(),
+            opinions: types::Opinions::default(),
+        }
+    };
+
+    // Layer environment variable overrides on top
+    env_override::apply_env_overrides(&mut config);
+
+    // Without a config file, storage_root must come from env
+    if config.storage_root.as_os_str().is_empty() {
         anyhow::bail!(
-            "config.kdl not found at {:?}\n\
-            Please create a config file at $XDG_CONFIG_HOME/mm/config.kdl (or ~/.config/mm/config.kdl)",
+            "No config.kdl at {:?} and MM_STORAGE_ROOT not set.\n\
+            Either create a config file or set MM_STORAGE_ROOT (or MM_ROOT) in the environment.",
             config_path
         );
     }
-
-    let content = fs::read_to_string(&config_path)
-        .with_context(|| format!("Failed to read config from {:?}", config_path))?;
-
-    let mut config = parse_kdl_config(&content)?;
-
-    // Load dirs.kdl (optional — empty dirs is valid)
-    let dirs_path = config_dir.join("dirs.kdl");
-    if dirs_path.exists() {
-        let dirs_content = fs::read_to_string(&dirs_path)
-            .with_context(|| format!("Failed to read dirs from {:?}", dirs_path))?;
-        config.source_dirs = parse_dirs_kdl(&dirs_content)?;
-    }
-
-    // Layer environment variable overrides on top of file-based config
-    env_override::apply_env_overrides(&mut config);
 
     // Clamp root dir None values to system defaults — None means "inherit
     // from parent" but root has no parent.

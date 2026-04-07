@@ -350,8 +350,13 @@ fn complete_setup_blocking(
     use mm_meta::auth::FirstTimeSetupToken;
 
     if !config::config_exists() {
-        config::write_initial_config(&root)
-            .map_err(|e| format!("Failed to write config: {}", e))?;
+        // Try to persist config to disk; tolerate failure (e.g. read-only FS)
+        // because load_config() can fall back to env-var-only defaults.
+        if let Err(e) = config::write_initial_config(&root) {
+            crate::logging::log_general(format!(
+                "[WITCH] Could not write config.kdl ({}), proceeding with env-only config", e
+            ));
+        }
     }
 
     let cfg = config::load_config().map_err(|e| format!("Failed to load config: {}", e))?;

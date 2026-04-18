@@ -1025,7 +1025,33 @@ fn populate_cover_art_queue(
         }).and_then(|rows| {
             for row in rows {
                 if let Ok((release_id, path)) = row {
-                    // Extract directory from path
+                    if let Some(dir) = std::path::Path::new(&path).parent() {
+                        let dir_str = dir.to_string_lossy().to_string();
+                        release_dirs.entry(release_id).or_insert(dir_str);
+                    }
+                }
+            }
+            Ok(())
+        });
+    }
+
+    // Also pick up release IDs from MUSICBRAINZ_ALBUMID tags (e.g. CD rips
+    // matched via CDTOC that bypass the AcoustID → release packing pipeline).
+    let tag_sql = r#"
+        SELECT DISTINCT ct.tag_value, f.path
+        FROM corpus_tags ct
+        JOIN files f ON ct.inode = f.inode
+        WHERE ct.tag_name = 'MUSICBRAINZ_ALBUMID'
+          AND f.zone = 'corpus'
+    "#;
+    if let Ok(mut stmt) = db.conn().prepare(tag_sql) {
+        let _ = stmt.query_map([], |row| {
+            let release_id: String = row.get(0)?;
+            let path: String = row.get(1)?;
+            Ok((release_id, path))
+        }).and_then(|rows| {
+            for row in rows {
+                if let Ok((release_id, path)) = row {
                     if let Some(dir) = std::path::Path::new(&path).parent() {
                         let dir_str = dir.to_string_lossy().to_string();
                         release_dirs.entry(release_id).or_insert(dir_str);

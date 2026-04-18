@@ -25,8 +25,12 @@ impl super::Witch {
     ) {
         let tx = self.offload_tx.clone();
         tokio::task::spawn_blocking(move || {
-            let mutations = auto_index_query_blocking();
-            let _ = tx.send(super::types::OffloadResult::AutoIndexResult { mutations, source });
+            let result = auto_index_query_blocking();
+            let _ = tx.send(super::types::OffloadResult::AutoIndexResult {
+                mutations: result.mutations,
+                stale_inodes: result.stale_inodes,
+                source,
+            });
         });
     }
 
@@ -69,18 +73,26 @@ impl super::Witch {
 // Free functions for blocking offloaded work
 // ============================================================================
 
-/// Query for unindexed corpus files (blocking, off main thread).
-///
-/// Opens its own read-only DB connection, queries UnindexedFileSignal rows,
-/// and builds IndexFileFromPath mutations for each.
-fn auto_index_query_blocking() -> Vec<Mutation> {
+/// Result of the auto-index blocking query.
+struct AutoIndexQueryResult {
+    mutations: Vec<Mutation>,
+    /// Inodes whose paths no longer exist on disk (moved/deleted).
+    stale_inodes: Vec<i64>,
+}
+
+fn auto_index_query_blocking() -> AutoIndexQueryResult {
+    let empty = AutoIndexQueryResult {
+        mutations: Vec::new(),
+        stale_inodes: Vec::new(),
+    };
+
     let db_path = match config::get_db_path() {
         Ok(p) => p,
-        Err(_) => return Vec::new(),
+        Err(_) => return empty,
     };
     let db = match Database::open_read_only(&db_path) {
         Ok(d) => d,
-        Err(_) => return Vec::new(),
+        Err(_) => return empty,
     };
     let read_db = crate::db::ReadOnlyDb::new(&db);
 
@@ -91,28 +103,39 @@ fn auto_index_query_blocking() -> Vec<Mutation> {
                 "[AUTO-INDEX] Failed to query unindexed signals: {}",
                 e
             ));
-            return Vec::new();
+            return empty;
         }
     };
 
     if unindexed.is_empty() {
-        return Vec::new();
+        return empty;
     }
 
     let resolver = crate::corpus::paths::get_resolver();
-    unindexed
-        .iter()
-        .map(|(_inode, path)| {
-            let abs_path = resolver.resolve_for_zone(
-                crate::db::types::Zone::Corpus,
-                std::path::Path::new(path),
-            );
-            Mutation::IndexFileFromPath(mm_meta::mutations::indexing::IndexFileFromPathMutation {
-                path: abs_path,
-                zone: "corpus".to_string(),
-            })
-        })
-        .collect()
+    let mut mutations = Vec::new();
+    let mut stale_inodes = Vec::new();
+
+    for (inode, path) in &unindexed {
+        let abs_path = resolver.resolve_for_zone(
+            crate::db::types::Zone::Corpus,
+            std::path::Path::new(path),
+        );
+        if abs_path.exists() {
+            mutations.push(Mutation::IndexFileFromPath(
+                mm_meta::mutations::indexing::IndexFileFromPathMutation {
+                    path: abs_path,
+                    zone: "corpus".to_string(),
+                },
+            ));
+        } else {
+            stale_inodes.push(*inode);
+        }
+    }
+
+    AutoIndexQueryResult {
+        mutations,
+        stale_inodes,
+    }
 }
 
 /// Result of the pre-loop startup maintenance check.

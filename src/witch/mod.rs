@@ -195,20 +195,11 @@ pub struct Witch {
     /// Populated by `handle_fetch_requests()`, drained when fetch scheduler reports done.
     post_fetch_computations: Vec<Computation>,
 
-    /// Set when `auto_index_unindexed_files()` queues mutations (new fingerprints incoming).
-    /// At `transition_to_idle()`, triggers auto AcoustID fetch if API key is configured.
-    /// Cleared when auto-fetch triggers or at transition_to_idle.
-    files_indexed_this_cycle: bool,
-
-    /// Set when external fetch completes with new match data (EXTERNAL scope).
-    /// At `transition_to_idle()`, triggers full release packing pipeline.
-    /// Cleared when auto-packing triggers.
-    packing_needed: bool,
-
-    /// Set when content analysis is queued (deploy signals about to be refreshed).
-    /// At `transition_to_idle()`, triggers auto-deploy if config enables it.
-    /// Cleared when auto-deploy triggers.
-    deploy_needed: bool,
+    /// Pipeline actions pending after work completes.
+    ///
+    /// FETCH, PACKING, AUDIO_DEPLOY are consumed at idle (30s linger + priority chain).
+    /// SIDECAR_DEPLOY fires eagerly from `transition_to_completed`.
+    pending_work: types::PendingWork,
 
     /// Remaining soft mutation phases from auto-deploy. Drained by `update_state()`
     /// after the current phase completes (same pattern as `pending_mutation_phases`).
@@ -375,9 +366,7 @@ impl Witch {
             pending_mutation_phases: VecDeque::new(),
             pending_computation_phases: VecDeque::new(),
             post_fetch_computations: Vec::new(),
-            files_indexed_this_cycle: false,
-            packing_needed: false,
-            deploy_needed: false,
+            pending_work: types::PendingWork::EMPTY,
             pending_soft_mutation_phases: std::collections::VecDeque::new(),
             db_thread_handle: write_thread::spawn(),
             cache_thread_handle: cache_witch_handle,

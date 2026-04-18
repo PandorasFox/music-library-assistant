@@ -122,14 +122,14 @@ impl MutationExecutor for IndexFileFromPathMutation {
             ctx.session_id,
             ctx.witness,
         ) {
-            Ok(pending_signals) => MutationResult {
+            Ok(result) => MutationResult {
                 _mutation: Mutation::IndexFileFromPath(self.clone()),
                 success: true,
                 error: None,
                 _duration_ms: start.elapsed().as_millis() as u64,
                 spawn_mutations: Vec::new(),
-                pending_signals,
-                discovered_inodes: Vec::new(),
+                pending_signals: result.pending_signals,
+                discovered_inodes: vec![result.inode],
             },
             Err(e) => MutationResult {
                 _mutation: Mutation::IndexFileFromPath(self.clone()),
@@ -144,7 +144,11 @@ impl MutationExecutor for IndexFileFromPathMutation {
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope {
-        SignalClearScope::MutableOnly
+        // All: full re-index clears everything including CorruptFile (which is
+        // inherent).  A prior CorruptFile may be a false positive from indexing
+        // a file mid-write; successful re-index proves the file is fine.
+        // LosslessRemux is re-emitted via pending_signals when warranted.
+        SignalClearScope::All
     }
     fn affected_inodes(&self) -> Vec<i64> {
         Vec::new()
@@ -371,13 +375,19 @@ fn index_track_from_metadata(
 /// Returns pending signals to emit post-execution. Signals are determined from
 /// extracted metadata BEFORE the async DB write, avoiding race conditions where
 /// a post-execution DB read might not see the write yet.
+/// Successful indexing result: the inode that was indexed, plus any pending signals.
+pub struct IndexFileResult {
+    pub inode: i64,
+    pub pending_signals: Vec<PendingSignal>,
+}
+
 pub fn execute_index_file_from_path(
     _db: &ReadOnlyDb<'_>,
     path: &Path,
     zone: &str,
     session_id: &str,
     witness: &MutationExecutionWitness,
-) -> Result<Vec<PendingSignal>> {
+) -> Result<IndexFileResult> {
     use crate::corpus::metadata;
 
     // Extract audio properties (returns ExtractedMetadata with empty tags)
@@ -413,10 +423,15 @@ pub fn execute_index_file_from_path(
         }
     }
 
+    let inode = extracted.inode;
+
     // Note: _db is unused - index_track_from_metadata routes through signal_sender
     index_track_from_metadata(_db, path, zone, &extracted, session_id, witness)?;
 
-    Ok(pending_signals)
+    Ok(IndexFileResult {
+        inode,
+        pending_signals,
+    })
 }
 
 // ============================================================================

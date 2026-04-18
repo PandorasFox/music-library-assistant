@@ -196,8 +196,8 @@ fn execute_transcode_impl(
         .get_audio_file_by_inode(inode, Zone::Corpus)?
         .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", inode))?;
 
-    // Convert new absolute path to relative for storage
-    let relative_new_path = paths::resolve_relative(&dest_path)?;
+    // Convert new absolute path to zone-relative for DB storage
+    let relative_new_path = paths::resolve_zone_relative(&dest_path, Zone::Corpus)?;
 
     // Get signal_sender for DB writes
     use crate::db::write_thread::{self, FileEntryData};

@@ -487,10 +487,18 @@ pub(super) enum OffloadResult {
     /// Auto-index query result: mutations to queue (empty = no unindexed files).
     AutoIndexResult {
         mutations: Vec<Mutation>,
+        /// Inodes whose signal_unindexed_file entries reference paths that no
+        /// longer exist on disk.  The offload handler clears these so the
+        /// auto-indexer doesn't spin on them forever.
+        stale_inodes: Vec<i64>,
         source: AutoIndexSource,
     },
     /// Auto-deploy query result: soft mutations to queue (empty = nothing to deploy).
     AutoDeployResult {
+        soft_mutations: Vec<mm_meta::soft_mutations::SoftMutation>,
+    },
+    /// Sidecar-only deploy result (eager path, doesn't wait for idle).
+    SidecarDeployResult {
         soft_mutations: Vec<mm_meta::soft_mutations::SoftMutation>,
     },
     /// Vacuum check result from PRAGMA queries.
@@ -515,6 +523,50 @@ pub(super) enum AutoIndexSource {
     InodesTransition,
     /// Called during steady-state Full. Informational only.
     SteadyState,
+}
+
+// ============================================================================
+// Pipeline Scheduling
+// ============================================================================
+
+/// Bitmask of pipeline actions pending after work completes.
+///
+/// Replaces scattered boolean flags with a single typed value that makes
+/// scheduling policy explicit: some flags are consumed at idle (30s linger +
+/// priority chain), while `SIDECAR_DEPLOY` fires eagerly.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct PendingWork(u8);
+
+impl PendingWork {
+    /// No pending work.
+    pub const EMPTY: Self = Self(0);
+    /// New files indexed → trigger AcoustID fetch at idle.
+    pub const FETCH: Self = Self(1 << 0);
+    /// External fetch matched → trigger release packing at idle.
+    pub const PACKING: Self = Self(1 << 1);
+    /// Content analysis ran → trigger audio file deploy at idle.
+    pub const AUDIO_DEPLOY: Self = Self(1 << 2);
+    /// Content analysis ran → trigger sidecar deploy eagerly.
+    pub const SIDECAR_DEPLOY: Self = Self(1 << 3);
+
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    pub fn insert(&mut self, other: Self) {
+        self.0 |= other.0;
+    }
+
+    pub fn remove(&mut self, other: Self) {
+        self.0 &= !other.0;
+    }
+}
+
+impl std::ops::BitOr for PendingWork {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0 | rhs.0)
+    }
 }
 
 /// Output from the blocking first-time setup task.

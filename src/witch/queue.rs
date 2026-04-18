@@ -174,7 +174,7 @@ impl super::Witch {
 
         // Queue first phase immediately, stash the rest
         if let Some((_phase, batch)) = phases.pop_front() {
-            self.pending_soft_mutation_phases = phases;
+            self.pending_soft_mutation_phases.extend(phases);
             for sm in batch {
                 self.enqueue_one(Task::SoftMutation(sm), label.clone());
             }

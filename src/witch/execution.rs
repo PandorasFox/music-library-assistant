@@ -142,7 +142,8 @@ pub(super) fn execute_mutation(
                 if let Ok(metadata) = std::fs::metadata(path) {
                     let inode = metadata.ino() as i64;
                     let resolver = paths::get_resolver();
-                    if let Some(rel) = resolver.to_relative(path) {
+                    // to_zone_relative for DB-stored paths (not to_relative which adds zone prefix)
+                    if let Some(rel) = resolver.to_zone_relative(path, crate::db::types::Zone::Corpus) {
                         let rel_str = rel.to_string_lossy();
                         sender.write_typed_signal(
                             TypedSignalWrite::CorruptFile(

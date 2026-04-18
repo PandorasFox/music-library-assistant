@@ -1,4 +1,4 @@
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::json;
@@ -40,7 +40,17 @@ impl IntoResponse for ApiError {
             ApiError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
 
-        (status, Json(json!({"error": message}))).into_response()
+        let mut response = (status, Json(json!({"error": message}))).into_response();
+
+        // Clear the session cookie on auth failures so the browser stops
+        // sending a stale token (e.g. after container restart).
+        if status == StatusCode::UNAUTHORIZED {
+            if let Ok(val) = HeaderValue::from_str(&crate::auth::clear_session_cookie()) {
+                response.headers_mut().insert("set-cookie", val);
+            }
+        }
+
+        response
     }
 }
 

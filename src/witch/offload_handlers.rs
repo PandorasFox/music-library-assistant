@@ -32,7 +32,34 @@ impl super::Witch {
                 }
             }
 
-            OffloadResult::AutoIndexResult { mutations, source } => {
+            OffloadResult::AutoIndexResult {
+                mutations,
+                stale_inodes,
+                source,
+            } => {
+                // Clear signals for files whose paths no longer exist on disk.
+                // Without this, moved/deleted files spin the auto-indexer forever
+                // (mutation fails with ENOENT → recomputation_scope is EMPTY →
+                // had_mutations=false → immediate re-check → same failures → loop).
+                if !stale_inodes.is_empty() {
+                    if let Some(sender) = crate::db::write_thread::signal_sender() {
+                        use crate::meta::signals::data::UnindexedFileSignal;
+                        // Witness: infrastructure cleanup within crate::witch,
+                        // same authorization scope as execute_mutation().
+                        let witness = super::types::MutationExecutionWitness::new();
+                        crate::logging::log_general(format!(
+                            "[AUTO-INDEX] Clearing {} stale unindexed signals (files no longer at recorded path)",
+                            stale_inodes.len()
+                        ));
+                        for inode in &stale_inodes {
+                            sender.clear_corpus_signal::<UnindexedFileSignal>(
+                                *inode,
+                                &witness,
+                            );
+                        }
+                    }
+                }
+
                 if !mutations.is_empty() {
                     crate::logging::log_general(format!(
                         "[AUTO-INDEX] Queueing {} index mutations for unindexed corpus files",
@@ -42,7 +69,7 @@ impl super::Witch {
                         mutations,
                         Some("Auto-index unindexed files".to_string()),
                     );
-                    self.files_indexed_this_cycle = true;
+                    self.pending_work.insert(super::types::PendingWork::FETCH);
                 } else if matches!(source, AutoIndexSource::InodesTransition) {
                     // No unindexed files at Inodes→Full — go straight to content analysis.
                     let witness = ContentAnalysisWitness::new();
@@ -59,6 +86,19 @@ impl super::Witch {
                     self.queue_soft_mutations_internal(
                         soft_mutations,
                         Some("Auto-deploy".to_string()),
+                    );
+                }
+            }
+
+            OffloadResult::SidecarDeployResult { soft_mutations } => {
+                if !soft_mutations.is_empty() {
+                    crate::logging::log_general(format!(
+                        "[SIDECAR-DEPLOY] Queueing {} sidecar deploy links",
+                        soft_mutations.len()
+                    ));
+                    self.queue_soft_mutations_internal(
+                        soft_mutations,
+                        Some("Sidecar deploy".to_string()),
                     );
                 }
             }

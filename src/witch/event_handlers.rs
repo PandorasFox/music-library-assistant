@@ -265,7 +265,7 @@ impl super::Witch {
                     );
                 }
                 if post_fetch.set_packing_needed {
-                    self.packing_needed = true;
+                    self.pending_work.insert(super::types::PendingWork::PACKING);
                 }
             }
             external_fetch::SchedulerMessage::CoverArtProgress(progress) => {

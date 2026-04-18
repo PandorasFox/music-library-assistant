@@ -57,20 +57,7 @@ pub fn get_resolver() -> &'static PathResolver {
     })
 }
 
-/// Convert an absolute path to a root-relative path, returning an error if
-/// the path is not within the archive root.
-///
-/// This is a convenience wrapper around `get_resolver().to_relative()` for the
-/// common pattern where failure to resolve means an error, not a skip.
-pub fn resolve_relative(path: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
-    let resolver = get_resolver();
-    resolver.to_relative(path).ok_or_else(|| {
-        anyhow::anyhow!(
-            "Path {} does not match root. Check config.kdl roots.",
-            path.display()
-        )
-    })
-}
+
 
 /// Convert an absolute path to a zone-relative path for DB storage, returning
 /// an error if the path is not within the zone's directory.

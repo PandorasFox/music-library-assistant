@@ -325,6 +325,18 @@ impl super::Witch {
         self.session_recomputation_scope = crate::meta::recomputation::RecomputationScope::EMPTY;
 
         self.dispatch_post_transition_work(work);
+
+        // Sidecar deploy fires eagerly — no 30s linger, no idle priority chain.
+        // Content analysis emitted SidecarDeployReady signals; deploy them now.
+        if self.pending_work.contains(super::types::PendingWork::SIDECAR_DEPLOY) {
+            let auto_deploy_enabled = self
+                .read_config(|c| c.opinions.auto_deploy)
+                .unwrap_or(false);
+            if auto_deploy_enabled {
+                self.pending_work.remove(super::types::PendingWork::SIDECAR_DEPLOY);
+                self.request_sidecar_deploy_check();
+            }
+        }
     }
 
     /// Dispatch deferred work after a session transition to Done.
@@ -452,8 +464,12 @@ impl super::Witch {
             Some("Analyzing metadata".to_string()),
         );
 
-        // Content analysis updates deploy signals; flag for auto-deploy check at idle.
-        self.deploy_needed = true;
+        // Content analysis updates deploy signals.
+        // AUDIO_DEPLOY waits for idle; SIDECAR_DEPLOY fires eagerly.
+        self.pending_work.insert(
+            super::types::PendingWork::AUDIO_DEPLOY
+            | super::types::PendingWork::SIDECAR_DEPLOY
+        );
     }
 
     fn transition_to_idle(&mut self) {
@@ -465,16 +481,14 @@ impl super::Witch {
             .unwrap_or(false);
 
         let action = pipeline_triggers::decide_idle_action(
-            self.files_indexed_this_cycle,
-            self.packing_needed,
-            self.deploy_needed,
+            self.pending_work,
             has_api_key,
             self.is_external_fetch_active(),
             auto_deploy_enabled,
         );
 
-        // Always clear files_indexed flag — don't retry every 30s if fetch can't start
-        self.files_indexed_this_cycle = false;
+        // Always clear FETCH flag — don't retry every 30s if fetch can't start
+        self.pending_work.remove(super::types::PendingWork::FETCH);
 
         match action {
             pipeline_triggers::IdleAction::TriggerFetch => {
@@ -485,7 +499,7 @@ impl super::Witch {
                 // Stay in Done — fetch will produce scheduler messages
             }
             pipeline_triggers::IdleAction::TriggerPacking => {
-                self.packing_needed = false;
+                self.pending_work.remove(super::types::PendingWork::PACKING);
                 crate::logging::log_general(
                     "[WITCH] Auto-triggering release packing after external fetch",
                 );
@@ -493,7 +507,7 @@ impl super::Witch {
                 // Stay in Done — packing work transitions to Working
             }
             pipeline_triggers::IdleAction::TriggerAutoDeploy => {
-                self.deploy_needed = false;
+                self.pending_work.remove(super::types::PendingWork::AUDIO_DEPLOY);
                 crate::logging::log_general(
                     "[WITCH] Auto-triggering deploy after content analysis",
                 );

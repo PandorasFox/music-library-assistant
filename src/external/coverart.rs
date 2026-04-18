@@ -27,6 +27,7 @@ pub struct CaaListing {
 /// A single cover art image entry from the CAA listing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaaImage {
+    #[serde(deserialize_with = "deserialize_id")]
     pub id: i64,
     pub types: Vec<String>,
     pub front: bool,
@@ -39,14 +40,33 @@ pub struct CaaImage {
 }
 
 /// Available thumbnail URLs for a cover art image.
+///
+/// Older CAA entries may omit some thumbnail sizes; all fields are optional.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaaThumbnails {
-    #[serde(rename = "250")]
-    pub small: String,
-    #[serde(rename = "500")]
-    pub medium: String,
-    #[serde(rename = "1200")]
-    pub large: String,
+    #[serde(rename = "250", default)]
+    pub small: Option<String>,
+    #[serde(rename = "500", default)]
+    pub medium: Option<String>,
+    #[serde(rename = "1200", default)]
+    pub large: Option<String>,
+}
+
+/// Deserialize `id` from either a JSON number or a string-encoded number.
+fn deserialize_id<'de, D: serde::Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
+    struct IdVisitor;
+    impl serde::de::Visitor<'_> for IdVisitor {
+        type Value = i64;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("integer or string-encoded integer")
+        }
+        fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<i64, E> { Ok(v) }
+        fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<i64, E> { Ok(v as i64) }
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<i64, E> {
+            v.parse().map_err(E::custom)
+        }
+    }
+    d.deserialize_any(IdVisitor)
 }
 
 /// A downloaded image with its detected format.

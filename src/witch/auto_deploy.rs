@@ -85,6 +85,8 @@ fn auto_deploy_query_blocking(config: &crate::config::Config) -> Vec<SoftMutatio
     }
 
     // 3. Deploy-ready files → DeployLink
+    //    If the destination is already occupied by a different inode (superseded
+    //    deployment from a conflict tiebreak change), stash the old file first.
     if let Ok(new_files) = read_db.get_deploy_ready_files() {
         for file in &new_files {
             if file.deploy_path.is_empty() || file.library_name.is_empty() {
@@ -95,6 +97,29 @@ fn auto_deploy_query_blocking(config: &crate::config::Config) -> Vec<SoftMutatio
                 .join(&file.library_name)
                 .join(&file.deploy_path);
             let destination = resolver.resolve(&dest_rel);
+
+            // Detect superseded deployments: destination occupied by a different inode.
+            // This happens when duplicate corpus tracks compute the same deploy path
+            // and the conflict tiebreak winner changes (e.g. new corpus files ingested).
+            // The old winner's hard link still occupies the path but is no longer
+            // classified as a leftover (library-side sees it as Healthy).
+            if destination.exists() {
+                use std::os::unix::fs::MetadataExt;
+                let src_ino = std::fs::metadata(&source).ok().map(|m| m.ino());
+                let dst_ino = std::fs::metadata(&destination).ok().map(|m| m.ino());
+                if src_ino.is_some() && dst_ino.is_some() && src_ino != dst_ino {
+                    crate::logging::log_general(format!(
+                        "[AUTO-DEPLOY] Superseded deployment at {}: stashing occupant (src_ino={}, dst_ino={})",
+                        destination.display(),
+                        src_ino.unwrap(),
+                        dst_ino.unwrap(),
+                    ));
+                    result.push(SoftMutation::StashLibrary {
+                        path: destination.clone(),
+                    });
+                }
+            }
+
             result.push(SoftMutation::DeployLink {
                 source,
                 destination,

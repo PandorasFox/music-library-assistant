@@ -25,6 +25,44 @@ use mm_utils::tag_names::find_tag_in_map;
 // Path Computation (enabled for health signal computation)
 // ============================================================================
 
+/// Maximum filename length in bytes (ext4 NAME_MAX).
+const FILENAME_MAX_BYTES: usize = 255;
+
+/// Truncate a filename to fit within the filesystem's NAME_MAX limit (255 bytes).
+///
+/// If the filename exceeds 255 bytes, the stem (everything before the last
+/// extension group) is shortened at a UTF-8 character boundary so that
+/// `stem.ext` fits. This avoids ENAMETOOLONG (os error 36) on deploy.
+fn truncate_filename(filename: String) -> String {
+    if filename.len() <= FILENAME_MAX_BYTES {
+        return filename;
+    }
+
+    // Find the extension: everything after the first '.' that follows the
+    // track-prefix region (e.g. "1-07. Title.flac" → ext = "flac",
+    // "Title.mp3.LOSSY.flac" → ext = "mp3.LOSSY.flac").
+    // We split on the LAST '.' for the common case; compound extensions
+    // like ".LOSSY.flac" are already baked into the `ext` variable by the
+    // caller, so the filename ends with e.g. ".mp3.LOSSY.flac" as one unit.
+    let (stem, dot_ext) = match filename.rfind('.') {
+        Some(pos) => (&filename[..pos], &filename[pos..]), // includes the '.'
+        None => return filename, // no extension — leave as-is
+    };
+
+    let max_stem_bytes = FILENAME_MAX_BYTES - dot_ext.len();
+    if max_stem_bytes == 0 {
+        return filename; // extension alone exceeds limit — nothing we can do
+    }
+
+    // Truncate stem at a UTF-8 char boundary
+    let mut end = max_stem_bytes;
+    while end > 0 && !stem.is_char_boundary(end) {
+        end -= 1;
+    }
+
+    format!("{}{}", &stem[..end], dot_ext)
+}
+
 /// Sanitize a path component by replacing invalid characters.
 fn sanitize_path_component(s: &str) -> String {
     s.chars()
@@ -169,7 +207,7 @@ pub fn compute_deployment_path_with_tags(
                 .to_string_lossy()
                 .to_string()
         };
-        path.push(filename);
+        path.push(truncate_filename(filename));
         path
     } else {
         // Single: {album_artist}/{title}.{ext}
@@ -186,7 +224,7 @@ pub fn compute_deployment_path_with_tags(
                 .to_string_lossy()
                 .to_string()
         };
-        path.push(filename);
+        path.push(truncate_filename(filename));
         path
     }
 }

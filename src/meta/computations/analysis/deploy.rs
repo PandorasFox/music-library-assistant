@@ -974,12 +974,29 @@ pub fn execute_derive_corpus_deploy_status(
     let mut deployed_stale_count = 0usize;
     let mut conflict_skipped_count = 0usize;
     let mut overlap_skipped_count = 0usize;
+    let mut superseded_count = 0usize;
 
     for file in &precomputed {
         let phase = classify_corpus_file(file, &library_inode_to_paths);
 
         match phase {
             DeployLifecyclePhase::Healthy => {
+                // If this file is deployed but lost the conflict tiebreak,
+                // its deployment is superseded — a different corpus file now
+                // owns this deploy path. Don't emit DeployedHealthy; the
+                // auto-deploy pipeline will stash the old link before
+                // deploying the winner.
+                if conflict_paths.contains(file.deploy_path.as_str())
+                    && !conflict_winners.contains(&file.inode)
+                {
+                    superseded_count += 1;
+                    log_general(format!(
+                        "[COMPUTE] DeriveCorpusDeployStatus: superseded deployment: inode {} at {} (conflict loser for {})",
+                        file.inode, file.corpus_path, file.deploy_path,
+                    ));
+                    continue;
+                }
+
                 // Correctly deployed — find the matching library path for the signal
                 let lib_path = library_inode_to_paths
                     .get(&file.inode)
@@ -1105,7 +1122,7 @@ pub fn execute_derive_corpus_deploy_status(
     );
 
     log_general(format!(
-        "[COMPUTE] DeriveCorpusDeployStatus: {} total corpus inodes, {} healthy, {} precomputed, {} conflict paths, {} overlap dirs, {} deploy-ready, {} deployed-healthy, {} deployed-stale, {} conflict-skipped, {} overlap-skipped, {} not configured, {} sidecars",
+        "[COMPUTE] DeriveCorpusDeployStatus: {} total corpus inodes, {} healthy, {} precomputed, {} conflict paths, {} overlap dirs, {} deploy-ready, {} deployed-healthy, {} deployed-stale, {} conflict-skipped, {} overlap-skipped, {} superseded, {} not configured, {} sidecars",
         all_corpus_inodes.len(),
         healthy_signals.len(),
         precomputed.len(),
@@ -1116,6 +1133,7 @@ pub fn execute_derive_corpus_deploy_status(
         deployed_stale_count,
         conflict_skipped_count,
         overlap_skipped_count,
+        superseded_count,
         skipped_not_configured,
         sidecar_count,
     ));

@@ -456,14 +456,47 @@ pub fn load_deploy_data(
         DeployModalData,
     };
 
-    let healthy = read_db.get_deployed_healthy_files()?;
+    let mut healthy = read_db.get_deployed_healthy_files()?;
     let new = read_db.get_deploy_ready_files()?;
     let conflicts = read_db.get_deploy_conflict_groups()?;
-    let leftover = read_db.get_library_leftover_files()?;
+    let mut leftover = read_db.get_library_leftover_files()?;
     let stale = read_db.get_library_stale_files()?;
 
     let sidecars = load_deploy_sidecars(read_db);
     let sidecar_conflicts = read_db.get_sidecar_conflict_groups().unwrap_or_default();
+
+    // Detect superseded deployments: healthy files whose library path matches
+    // a deploy-ready file's destination. This happens when the conflict tiebreak
+    // winner changed — the old winner is still Healthy but a different corpus
+    // file now owns that path. Move superseded files from healthy to leftover
+    // so the pipeline stashes them before deploying the new winner.
+    let new_destinations: HashSet<String> = new
+        .iter()
+        .filter(|f| !f.library_name.is_empty())
+        .map(|f| format!("{}/{}", f.library_name, f.deploy_path))
+        .collect();
+
+    let mut superseded = Vec::new();
+    healthy.retain(|h| {
+        // For healthy files, deploy_path is the full library path (e.g. "music/Artist/Album/track.flac")
+        if new_destinations.contains(&h.deploy_path) {
+            superseded.push(mm_meta::views::LeftoverSignalFile {
+                library_name: h.library_name.clone(),
+                library_path: h.deploy_path.clone(),
+            });
+            false
+        } else {
+            true
+        }
+    });
+
+    if !superseded.is_empty() {
+        crate::logging::log_general(format!(
+            "[UI] DeployModalData::load: {} superseded deployments moved from healthy to leftover",
+            superseded.len(),
+        ));
+        leftover.extend(superseded);
+    }
 
     crate::logging::log_general(format!(
         "[UI] DeployModalData::load: healthy={}, new={}, conflicts={}, leftover={}, stale={}, sidecars={}, sidecar_conflicts={}",
@@ -475,12 +508,6 @@ pub fn load_deploy_data(
 
     let leftover_by_dir =
         aggregate_by_directory(leftover.iter().map(|f| f.library_path.as_str()));
-
-    let new_destinations: HashSet<String> = new
-        .iter()
-        .filter(|f| !f.library_name.is_empty())
-        .map(|f| format!("{}/{}", f.library_name, f.deploy_path))
-        .collect();
 
     let replaced_count = leftover
         .iter()

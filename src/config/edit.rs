@@ -409,6 +409,12 @@ pub fn apply_config_edits_to_kdl(
         if new_tn.track != old_tn.track {
             set_or_create_string_node(tn_block, MbTagNameConfig::KDL_TRACK, &new_tn.track);
         }
+        if new_tn.artist_id != old_tn.artist_id {
+            set_or_create_string_node(tn_block, MbTagNameConfig::KDL_ARTIST_ID, &new_tn.artist_id);
+        }
+        if new_tn.albumartist_id != old_tn.albumartist_id {
+            set_or_create_string_node(tn_block, MbTagNameConfig::KDL_ALBUMARTIST_ID, &new_tn.albumartist_id);
+        }
         if new_tn.picard_compat != old_tn.picard_compat {
             set_or_create_bool_node(tn_block, MbTagNameConfig::KDL_PICARD_COMPAT, new_tn.picard_compat);
         }

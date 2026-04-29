@@ -13,6 +13,12 @@ use crate::external::musicbrainz::{
 };
 use crate::mutations::TagOp;
 
+/// MusicBrainz MBID for the special "Various Artists" artist. Used to detect
+/// genuine VA-credited compilations (where MB itself credits the release to VA)
+/// vs. multi-artist releases like "Deadmau5 vs Meleefresh" which keep the
+/// joinphrase-rendered display name.
+pub const MB_VARIOUS_ARTISTS_ID: &str = "89ad4ac3-39f7-470e-963a-56509c546377";
+
 // ============================================================================
 // Input Types
 // ============================================================================
@@ -66,6 +72,7 @@ pub fn generate_tag_ops(
     let individual_artists = extract_individual_artists(
         recording, artists, locales, routing,
     );
+    let individual_artist_ids = extract_individual_artist_ids(recording, routing);
     if individual_artists.len() > 1 {
         let recording_artists: Vec<(String, Option<MbArtist>)> = recording
             .artist_credit
@@ -86,9 +93,24 @@ pub fn generate_tag_ops(
             desired.push(("ARTIST".to_string(), artist_name.clone()));
         }
     }
+    // MUSICBRAINZ_ARTISTID (multi-value): one per individual recording artist.
+    // Mirrors the order/dedup of ARTIST(S) above so Navidrome can correlate
+    // by MBID even when display names drift across releases/aliases.
+    for artist_id in &individual_artist_ids {
+        desired.push((tag_names.artist_id.clone(), artist_id.clone()));
+    }
 
     // ALBUM: release title
     desired.push(("ALBUM".to_string(), release.title.clone()));
+
+    // Various Artists detection: MB explicitly credits the release to the
+    // special "Various Artists" artist. Only then do we collapse ALBUMARTIST
+    // to "Various Artists" — multi-artist releases like "A vs B" keep their
+    // joinphrase-rendered display name.
+    let is_va_release = release
+        .artist_credit
+        .iter()
+        .any(|c| c.artist.id == MB_VARIOUS_ARTISTS_ID);
 
     // ALBUMARTIST / ALBUMARTISTS: Navidrome singular/plural convention.
     // Singular = display string, plural = individual release-level credits.
@@ -100,10 +122,16 @@ pub fn generate_tag_ops(
             (c.artist.id.clone(), artist)
         })
         .collect();
-    let album_artist_display =
-        join_artist_credits_localized(&release.artist_credit, &release_artists, locales);
+    let album_artist_display = if is_va_release {
+        "Various Artists".to_string()
+    } else {
+        join_artist_credits_localized(&release.artist_credit, &release_artists, locales)
+    };
     desired.push(("ALBUMARTIST".to_string(), album_artist_display));
-    if release.artist_credit.len() > 1 {
+    // Only emit ALBUMARTISTS for non-VA multi-credit releases. VA releases
+    // collapse to a single albumartist; the per-track ARTISTS still carry the
+    // real per-track credits for Navidrome to surface.
+    if !is_va_release && release.artist_credit.len() > 1 {
         for credit in &release.artist_credit {
             let resolved = resolve_artist_name(
                 credit,
@@ -112,6 +140,33 @@ pub fn generate_tag_ops(
             );
             desired.push(("ALBUMARTISTS".to_string(), resolved));
         }
+    }
+    // MUSICBRAINZ_ALBUMARTISTID (multi-value): one per release credit.
+    // For VA releases this is just the VA MBID. This is what Navidrome uses
+    // as the canonical join key when display strings vary between scrapes.
+    for credit in &release.artist_credit {
+        desired.push((
+            tag_names.albumartist_id.clone(),
+            credit.artist.id.clone(),
+        ));
+    }
+
+    // COMPILATION flag: set when MB credits the release to "Various Artists"
+    // OR the release-group's secondary types include "Compilation". The
+    // release-group check requires `inc=release-groups` on the fetch; older
+    // cached releases without this data silently skip (no harm — the VA
+    // check above catches the most common case).
+    let is_compilation_rg = release
+        .release_group
+        .as_ref()
+        .map(|rg| {
+            rg.secondary_types
+                .iter()
+                .any(|t| t.eq_ignore_ascii_case("Compilation"))
+        })
+        .unwrap_or(false);
+    if is_va_release || is_compilation_rg {
+        desired.push(("COMPILATION".to_string(), "1".to_string()));
     }
 
     // TRACKNUMBER
@@ -238,6 +293,33 @@ pub fn extract_individual_artists(
         }
     }
 
+    result
+}
+
+/// Extract individual artist MBIDs from recording credits + relations, mirroring
+/// the iteration order of `extract_individual_artists`. Used to emit
+/// `MUSICBRAINZ_ARTISTID` aligned with `ARTIST(S)` values.
+pub fn extract_individual_artist_ids(
+    recording: &MbRecording,
+    routing: &CreditRoutingConfig,
+) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    for credit in &recording.artist_credit {
+        if seen.insert(credit.artist.id.clone()) {
+            result.push(credit.artist.id.clone());
+        }
+    }
+    for relation in &recording.relations {
+        if !routing.route_for(&relation.type_).artist {
+            continue;
+        }
+        if let Some(ref a) = relation.artist {
+            if seen.insert(a.id.clone()) {
+                result.push(a.id.clone());
+            }
+        }
+    }
     result
 }
 

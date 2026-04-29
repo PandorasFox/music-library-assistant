@@ -62,10 +62,11 @@ impl MusicBrainzClient {
         self.fetch_entity(&url).await
     }
 
-    /// Fetch a release by MBID with artist credits, recordings, and media (tracklist).
+    /// Fetch a release by MBID with artist credits, recordings, media (tracklist),
+    /// and release-group classification (for compilation detection).
     pub async fn fetch_release(&self, mbid: &str) -> Result<MbLookupOutcome> {
         let url = format!(
-            "{}/release/{}?inc=recordings+media+artist-credits&fmt=json",
+            "{}/release/{}?inc=recordings+media+artist-credits+release-groups&fmt=json",
             self.base_url, mbid
         );
         self.fetch_entity(&url).await

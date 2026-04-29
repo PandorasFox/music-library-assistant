@@ -114,6 +114,24 @@ pub struct MbRelease {
     /// that was fetched without `inc=recordings+media`.
     #[serde(default)]
     pub media: Vec<MbMedium>,
+    /// Release group classification (primary type, secondary types like "Compilation").
+    /// Present only when the release was fetched with `inc=release-groups`; older
+    /// cached JSON has this as `None` and compilation detection silently skips.
+    #[serde(default, rename = "release-group")]
+    pub release_group: Option<MbReleaseGroup>,
+}
+
+/// Release-group classification (from release lookup with `inc=release-groups`).
+///
+/// Used for compilation detection: a release is a compilation if `secondary_types`
+/// contains "Compilation".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MbReleaseGroup {
+    pub id: String,
+    #[serde(default, rename = "primary-type")]
+    pub primary_type: Option<String>,
+    #[serde(default, rename = "secondary-types")]
+    pub secondary_types: Vec<String>,
 }
 
 /// A medium within a release (CD, vinyl side, digital media, etc.).

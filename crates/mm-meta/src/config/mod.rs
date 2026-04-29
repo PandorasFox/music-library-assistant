@@ -445,6 +445,10 @@ pub struct MbTagNameConfig {
     pub release: String,
     /// Tag name for the track-on-release MBID.
     pub track: String,
+    /// Tag name for individual recording-artist MBIDs (multi-value).
+    pub artist_id: String,
+    /// Tag name for individual release-artist (album-artist) MBIDs (multi-value).
+    pub albumartist_id: String,
     /// Also write Picard-compatible alias tags alongside the clean names.
     /// Adds: MUSICBRAINZ_ALBUMID (release), MUSICBRAINZ_TRACKID (recording),
     /// MUSICBRAINZ_RELEASETRACKID (track).
@@ -457,6 +461,8 @@ impl Default for MbTagNameConfig {
             recording: "MUSICBRAINZ_RECORDING".to_string(),
             release: "MUSICBRAINZ_RELEASE".to_string(),
             track: "MUSICBRAINZ_TRACK".to_string(),
+            artist_id: "MUSICBRAINZ_ARTISTID".to_string(),
+            albumartist_id: "MUSICBRAINZ_ALBUMARTISTID".to_string(),
             picard_compat: false,
         }
     }
@@ -467,6 +473,8 @@ impl MbTagNameConfig {
     pub const KDL_RECORDING: &str = "recording";
     pub const KDL_RELEASE: &str = "release";
     pub const KDL_TRACK: &str = "track";
+    pub const KDL_ARTIST_ID: &str = "artist-id";
+    pub const KDL_ALBUMARTIST_ID: &str = "albumartist-id";
     pub const KDL_PICARD_COMPAT: &str = "picard-compat";
 
     // Picard-standard Vorbis Comment names (for compatibility writes).

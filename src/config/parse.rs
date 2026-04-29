@@ -521,6 +521,8 @@ fn parse_mb_tag_names(node: &kdl::KdlNode, config: &mut MbTagNameConfig) {
                         MbTagNameConfig::KDL_RECORDING => config.recording = val,
                         MbTagNameConfig::KDL_RELEASE => config.release = val,
                         MbTagNameConfig::KDL_TRACK => config.track = val,
+                        MbTagNameConfig::KDL_ARTIST_ID => config.artist_id = val,
+                        MbTagNameConfig::KDL_ALBUMARTIST_ID => config.albumartist_id = val,
                         _ => {}
                     }
                 }

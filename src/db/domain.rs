@@ -589,18 +589,27 @@ impl_domain_query! {
     GetReleaseStagingData => ReleaseStagingData, |s, db| {
         use crate::external::musicbrainz::load_mb_cache_bundle;
         let bundle = load_mb_cache_bundle(db, &s.release_ids, &s.recording_ids);
-        let mut tags = std::collections::HashMap::new();
-        for inode in &s.inodes {
-            tags.insert(
-                *inode,
-                db.get_tags::<crate::zones::CorpusZone>(*inode)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|t| (t.tag_name.to_uppercase(), t.tag_value))
-                    .collect(),
-            );
+
+        // Chunk well under SQLite's SQLITE_LIMIT_VARIABLE_NUMBER (32766).
+        const TAG_BATCH: usize = 8000;
+        let mut inode_tags: std::collections::HashMap<i64, Vec<(String, String)>> =
+            std::collections::HashMap::with_capacity(s.inodes.len());
+        for chunk in s.inodes.chunks(TAG_BATCH) {
+            let rows = db
+                .get_tags_batch_for_zone(chunk, crate::db::types::Zone::Corpus)
+                .unwrap_or_default();
+            for (inode, pairs) in rows {
+                inode_tags.insert(
+                    inode,
+                    pairs
+                        .into_iter()
+                        .map(|(name, value)| (name.to_uppercase(), value))
+                        .collect(),
+                );
+            }
         }
-        ReleaseStagingData { bundle, inode_tags: tags }
+
+        ReleaseStagingData { bundle, inode_tags }
     }
 }
 

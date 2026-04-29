@@ -241,7 +241,11 @@ function ReleaseReview({
         "/tx/approve-releases",
         { release_ids: ids },
       );
-      setMessage(`Staged ${res.staged} release(s), skipped ${res.skipped}`);
+      setMessage(
+        res.skipped > 0
+          ? `Staged ${res.staged} release(s); skipped ${res.skipped} track(s) — missing MB cache`
+          : `Staged ${res.staged} release(s)`
+      );
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
     } finally {

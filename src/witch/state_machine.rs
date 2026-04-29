@@ -395,10 +395,14 @@ impl super::Witch {
         let observed_corpus = self.observed_inodes.corpus.clone();
 
         let label = if include_second_level { "Awakening" } else { "Steady-state derivation" };
+        let extras = if include_second_level {
+            ", ScheduleSecondLevelDerivations, ReconcileLibraryFiles"
+        } else {
+            ", ReconcileLibraryFiles"
+        };
         crate::logging::log_general(format!(
             "[STATE] Queueing {}: DeriveCorpusSignals ({} inodes){}",
-            label, observed_corpus.len(),
-            if include_second_level { ", ScheduleSecondLevelDerivations" } else { "" },
+            label, observed_corpus.len(), extras,
         ));
 
         self.queue_computation_with_label(
@@ -413,34 +417,37 @@ impl super::Witch {
                 Computation::Derivation(derivation::Computation::ScheduleSecondLevelDerivations),
                 Some("Computing directory signals".to_string()),
             );
-
-            // Convert watcher library observations to ObservedLibraryFile format
-            // and queue ReconcileLibraryFiles directly (no WalkLibrary/ScanLibraryDirectory needed).
-            // Always run even with empty observed set — stale library entries must be cleaned up.
-            let observed_files: Vec<derivation::ObservedLibraryFile> = self
-                .observed_inodes
-                .library
-                .iter()
-                .map(|(inode, meta)| derivation::ObservedLibraryFile {
-                    stored_path: meta.path.clone(),
-                    inode: *inode,
-                    mtime_secs: meta.mtime_secs,
-                    mtime_nanos: meta.mtime_nanos,
-                    file_size: meta.file_size,
-                })
-                .collect();
-
-            crate::logging::log_general(format!(
-                "[STATE] Queueing ReconcileLibraryFiles from watcher data ({} files)",
-                observed_files.len()
-            ));
-            self.queue_computation_with_label(
-                Computation::Derivation(derivation::Computation::ReconcileLibraryFiles {
-                    observed_files,
-                }),
-                Some("Reconciling library files".to_string()),
-            );
         }
+
+        // Reconcile the watcher's authoritative live library set against the DB
+        // every tick — both at awakening and in steady state. Without this on
+        // steady-state ticks, file removals observed by the watcher post-startup
+        // never propagate to the `files` table; stale rows then drive a
+        // perpetual LibraryLeftover loop where stash mutations fail with ENOENT
+        // and the signal never clears.
+        let observed_files: Vec<derivation::ObservedLibraryFile> = self
+            .observed_inodes
+            .library
+            .iter()
+            .map(|(inode, meta)| derivation::ObservedLibraryFile {
+                stored_path: meta.path.clone(),
+                inode: *inode,
+                mtime_secs: meta.mtime_secs,
+                mtime_nanos: meta.mtime_nanos,
+                file_size: meta.file_size,
+            })
+            .collect();
+
+        crate::logging::log_general(format!(
+            "[STATE] Queueing ReconcileLibraryFiles from watcher data ({} files)",
+            observed_files.len()
+        ));
+        self.queue_computation_with_label(
+            Computation::Derivation(derivation::Computation::ReconcileLibraryFiles {
+                observed_files,
+            }),
+            Some("Reconciling library files".to_string()),
+        );
     }
 
     /// Queue content analysis computations (internal only).

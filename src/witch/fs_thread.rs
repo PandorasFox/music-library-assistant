@@ -253,7 +253,18 @@ impl ZoneState {
     }
 
     /// Insert a file into the cached state.
+    ///
+    /// If the inode already exists at a different path, the old path→inode
+    /// mapping is cleaned up (directory renames move inodes to new paths
+    /// without explicit per-file remove events).
     fn insert(&mut self, inode: i64, relative_path: String, state: CachedFileState) {
+        // Clean up stale path_to_inode entry if this inode was previously at a different path.
+        if let Some((old_rel, _)) = self.files.get(&inode) {
+            if *old_rel != relative_path {
+                let old_abs = self.root.join(&*old_rel);
+                self.path_to_inode.remove(&old_abs);
+            }
+        }
         let abs_path = self.root.join(&relative_path);
         self.path_to_inode.insert(abs_path, inode);
         self.files.insert(inode, (relative_path, state));
@@ -708,8 +719,23 @@ fn process_notify_event(
             continue;
         }
 
-        // Skip directories (we watch recursively, so new dirs are auto-watched)
+        // Directory events: a directory was created, renamed, or removed.
+        // When a directory is renamed, inotify fires events for the directory
+        // but NOT for individual files inside it — their paths change silently.
+        // We synthesize per-file events so the watcher discovers the new paths.
         if path.is_dir() {
+            // Directory exists here (renamed TO / created). Walk it and
+            // schedule tracked files for debounced processing.
+            synthesize_directory_children(path, zone_states, debounce_map, pending_paths, now);
+            continue;
+        }
+
+        if !path.exists() && !is_tracked_file(path) {
+            // Path doesn't exist and isn't a tracked file — might be a
+            // directory that was renamed FROM here. Find tracked children
+            // under this prefix so their stale paths get stat-checked
+            // (stat will fail → FileRemoved).
+            synthesize_stale_children(path, zone_states, debounce_map, pending_paths, now);
             continue;
         }
 
@@ -868,6 +894,84 @@ fn process_settled_event(
             }
             // If we didn't know about it, ignore
         }
+    }
+}
+
+/// Walk a directory that appeared on disk (renamed TO or created) and schedule
+/// its tracked children for debounced processing. This lets `process_settled_event`
+/// discover new paths for inodes that moved due to a directory rename.
+fn synthesize_directory_children(
+    dir: &Path,
+    zone_states: &[ZoneState],
+    debounce_map: &mut HashMap<PathBuf, Instant>,
+    pending_paths: &mut Vec<PathBuf>,
+    now: Instant,
+) {
+    // Recursive walk — directory renames move the entire subtree.
+    let mut stack = vec![dir.to_path_buf()];
+    let mut file_count = 0usize;
+    while let Some(current) = stack.pop() {
+        let entries = match std::fs::read_dir(&current) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() && !path.is_symlink() {
+                stack.push(path);
+            } else if is_tracked_file(&path) {
+                let in_zone = zone_states.iter().any(|zs| zs.accepts_path(&path));
+                if in_zone {
+                    let is_new = !debounce_map.contains_key(&path);
+                    debounce_map.insert(path.clone(), now);
+                    if is_new {
+                        pending_paths.push(path);
+                        file_count += 1;
+                    }
+                }
+            }
+        }
+    }
+    if file_count > 0 {
+        crate::logging::log_general(format!(
+            "[FS_THREAD] Directory event at {:?}: synthesized events for {} tracked files",
+            dir, file_count
+        ));
+    }
+}
+
+/// When a path doesn't exist and isn't a tracked file, it may be a directory
+/// that was renamed FROM here. Find all tracked file paths under this prefix
+/// and schedule them for debounced processing — stat will fail at the stale
+/// path, producing `FileRemoved` messages that clean up watcher state.
+fn synthesize_stale_children(
+    gone_dir: &Path,
+    zone_states: &[ZoneState],
+    debounce_map: &mut HashMap<PathBuf, Instant>,
+    pending_paths: &mut Vec<PathBuf>,
+    now: Instant,
+) {
+    let mut stale_count = 0usize;
+    for zs in zone_states {
+        if !zs.accepts_path(gone_dir) {
+            continue;
+        }
+        for tracked_path in zs.path_to_inode.keys() {
+            if tracked_path.starts_with(gone_dir) {
+                let is_new = !debounce_map.contains_key(tracked_path);
+                debounce_map.insert(tracked_path.clone(), now);
+                if is_new {
+                    pending_paths.push(tracked_path.clone());
+                    stale_count += 1;
+                }
+            }
+        }
+    }
+    if stale_count > 0 {
+        crate::logging::log_general(format!(
+            "[FS_THREAD] Directory gone at {:?}: synthesized events for {} stale tracked files",
+            gone_dir, stale_count
+        ));
     }
 }
 

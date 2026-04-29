@@ -91,6 +91,26 @@ pub enum Computation {
         observed_files: Vec<ObservedLibraryFile>,
     },
 
+    /// Apply a single watcher-observed library file create-or-change to the DB.
+    ///
+    /// Per-event surface for `WatcherMessage::FileCreated` and `FileChanged` on
+    /// the library zone. Lets the DB stay in sync with the watcher's authoritative
+    /// in-memory map without waiting for the next `ReconcileLibraryFiles` tick —
+    /// closes the steady-state divergence gap that drove the perpetual-leftover
+    /// loop.
+    WatcherUpsertLibraryFile {
+        file: ObservedLibraryFile,
+    },
+
+    /// Apply a single watcher-observed library file removal to the DB.
+    ///
+    /// Per-event surface for `WatcherMessage::FileRemoved` on the library zone.
+    /// Symmetric to `WatcherUpsertLibraryFile`: drops the path row immediately
+    /// rather than waiting for the next reconcile.
+    WatcherDeleteLibraryFile {
+        stored_path: String,
+    },
+
     /// Update deploy signals after a HardLink mutation.
     ///
     /// Clears DeployReady, ensures DeployedHealthy, clears library leftovers.
@@ -125,6 +145,8 @@ impl Computation {
             Computation::UpdateCorpusFileSignals { .. } => "Updating corpus file signals",
             Computation::UpdateLibraryFileSignals { .. } => "Updating library file signals",
             Computation::ReconcileLibraryFiles { .. } => "Reconciling library files",
+            Computation::WatcherUpsertLibraryFile { .. } => "Recording library file upsert",
+            Computation::WatcherDeleteLibraryFile { .. } => "Recording library file removal",
             Computation::UpdateDeploySignals { .. } => "Updating deploy signals",
             Computation::StashAndReplaceSidecars { .. } => "Stashing and replacing sidecar images",
         }

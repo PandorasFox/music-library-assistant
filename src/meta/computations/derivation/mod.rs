@@ -51,6 +51,12 @@ impl DerivationExecute for Computation {
             Computation::ReconcileLibraryFiles { observed_files } => {
                 execute_reconcile_library_files(ctx.read_db, observed_files, ctx.witness)
             }
+            Computation::WatcherUpsertLibraryFile { file } => {
+                execute_watcher_upsert_library_file(file, ctx.witness)
+            }
+            Computation::WatcherDeleteLibraryFile { stored_path } => {
+                execute_watcher_delete_library_file(stored_path, ctx.witness)
+            }
             Computation::UpdateDeploySignals {
                 corpus_path,
                 library_path,

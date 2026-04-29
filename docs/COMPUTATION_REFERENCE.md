@@ -64,6 +64,8 @@ This follows the same pattern as `pending_mutation_phases` (used for two-stage d
 | WalkLibrary | Enumerate library directories, spawn per-directory scans |
 | ScanLibraryDirectory | Scan library directory, return observed files to Witch |
 | ReconcileLibraryFiles | Reconcile observed library files against DB (set reconciliation) |
+| WatcherUpsertLibraryFile | Apply a single library FileCreated/FileChanged event to the DB (per-event watcher sync) |
+| WatcherDeleteLibraryFile | Apply a single library FileRemoved event to the DB (per-event watcher sync) |
 
 ### Analysis Phase
 
@@ -128,7 +130,9 @@ This follows the same pattern as `pending_mutation_phases` (used for two-stage d
 | StashAndReplaceSidecars | — | — | All corpus signals for stashed inodes | Moves old sidecar to cover-art stash, writes new bytes, drops old inode from files index. Queued by Witch when CAA fetch scheduler reports sidecar replacements. |
 | WalkLibrary | ScanLibraryDirectory × N | — | — |
 | ScanLibraryDirectory | — | — | — | Returns observed library files to the Witch via Result (accumulated in tick()). No direct DB writes. |
-| ReconcileLibraryFiles | — | — | — | Set reconciliation: compares observed files against DB. Upserts new/changed files, deletes stale files, skips unchanged. Queued by the Witch after derivation stage 1 drains (two-stage derivation transition). |
+| ReconcileLibraryFiles | — | — | — | Set reconciliation: compares observed files against DB. Upserts new/changed files, deletes stale files, skips unchanged. Queued at startup awakening and on every steady-state derivation tick as a backstop for crash recovery. |
+| WatcherUpsertLibraryFile | — | — | — | Per-event upsert of one library file into `inodes`+`inode_paths`. Queued by the Witch's watcher event handler on `FileCreated`/`FileChanged` for the library zone. Drives steady-state DB sync without waiting for the next `ReconcileLibraryFiles` tick. |
+| WatcherDeleteLibraryFile | — | — | — | Per-event removal of one library file from `inode_paths` (and `inodes` if no other paths remain). Queued by the Witch's watcher event handler on `FileRemoved` for the library zone. |
 
 ### Analysis Phase Computations
 

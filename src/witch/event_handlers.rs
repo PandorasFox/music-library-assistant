@@ -125,14 +125,14 @@ impl super::Witch {
                     "[WITCH] Watcher: file changed — zone={} inode={} path={:?}",
                     zone, inode, path
                 ));
+                let rel_path = crate::corpus::paths::get_resolver()
+                    .to_zone_relative(&path, zone)
+                    .unwrap_or_else(|| path.clone())
+                    .to_string_lossy()
+                    .to_string();
                 if let Some(map) = self.observed_inodes.for_zone_mut(zone) {
-                    let rel_path = crate::corpus::paths::get_resolver()
-                        .to_zone_relative(&path, zone)
-                        .unwrap_or_else(|| path.clone())
-                        .to_string_lossy()
-                        .to_string();
                     map.insert(inode, ObservedInodeMeta {
-                        path: rel_path,
+                        path: rel_path.clone(),
                         mtime_secs, mtime_nanos, file_size,
                     });
                 }
@@ -149,6 +149,19 @@ impl super::Witch {
                         ),
                         Some("Verify tags (watcher)".to_string()),
                     );
+                } else if zone == crate::db::types::Zone::Library {
+                    self.queue_computation_with_label(
+                        Computation::Derivation(
+                            crate::meta::computations::derivation::Computation::WatcherUpsertLibraryFile {
+                                file: crate::meta::computations::derivation::ObservedLibraryFile {
+                                    stored_path: rel_path,
+                                    inode,
+                                    mtime_secs, mtime_nanos, file_size,
+                                },
+                            }
+                        ),
+                        Some("Library upsert (watcher)".to_string()),
+                    );
                 }
             }
             fs_thread::WatcherMessage::FileCreated {
@@ -159,16 +172,33 @@ impl super::Witch {
                     "[WITCH] Watcher: file created — zone={} inode={} path={:?}",
                     zone, inode, path
                 ));
+                let rel_path = crate::corpus::paths::get_resolver()
+                    .to_zone_relative(&path, zone)
+                    .unwrap_or_else(|| path.clone())
+                    .to_string_lossy()
+                    .to_string();
                 if let Some(map) = self.observed_inodes.for_zone_mut(zone) {
-                    let rel_path = crate::corpus::paths::get_resolver()
-                        .to_zone_relative(&path, zone)
-                        .unwrap_or_else(|| path.clone())
-                        .to_string_lossy()
-                        .to_string();
                     map.insert(inode, ObservedInodeMeta {
-                        path: rel_path,
+                        path: rel_path.clone(),
                         mtime_secs, mtime_nanos, file_size,
                     });
+                }
+                if zone == crate::db::types::Zone::Library {
+                    // Drive the DB row creation directly from the watcher event
+                    // so steady-state library state stays in sync without
+                    // waiting for the next ReconcileLibraryFiles tick.
+                    self.queue_computation_with_label(
+                        Computation::Derivation(
+                            crate::meta::computations::derivation::Computation::WatcherUpsertLibraryFile {
+                                file: crate::meta::computations::derivation::ObservedLibraryFile {
+                                    stored_path: rel_path,
+                                    inode,
+                                    mtime_secs, mtime_nanos, file_size,
+                                },
+                            }
+                        ),
+                        Some("Library upsert (watcher)".to_string()),
+                    );
                 }
                 self.watcher_derivation_needed = true;
             }
@@ -177,8 +207,23 @@ impl super::Witch {
                     "[WITCH] Watcher: file removed — zone={} inode={} path={:?}",
                     zone, inode, path
                 ));
+                let rel_path = crate::corpus::paths::get_resolver()
+                    .to_zone_relative(&path, zone)
+                    .unwrap_or_else(|| path.clone())
+                    .to_string_lossy()
+                    .to_string();
                 if let Some(map) = self.observed_inodes.for_zone_mut(zone) {
                     map.remove(&inode);
+                }
+                if zone == crate::db::types::Zone::Library {
+                    self.queue_computation_with_label(
+                        Computation::Derivation(
+                            crate::meta::computations::derivation::Computation::WatcherDeleteLibraryFile {
+                                stored_path: rel_path,
+                            }
+                        ),
+                        Some("Library delete (watcher)".to_string()),
+                    );
                 }
                 self.watcher_derivation_needed = true;
             }

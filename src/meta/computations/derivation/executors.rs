@@ -711,6 +711,56 @@ pub fn execute_reconcile_library_files(
 }
 
 // ============================================================================
+// Watcher-Driven Library File Sync (Phase D)
+// ============================================================================
+
+/// Apply a single library `FileCreated`/`FileChanged` event to the DB.
+///
+/// Per-event surface for the library-zone watcher pipeline. Mirrors the per-row
+/// upsert path of `ReconcileLibraryFiles` but operates on one observation at a
+/// time, so the DB stays in sync with the watcher's authoritative live set
+/// without waiting for the next reconciliation tick.
+pub fn execute_watcher_upsert_library_file(
+    file: &super::ObservedLibraryFile,
+    witness: &ComputationWitness,
+) -> Result {
+    let computation = Computation::WatcherUpsertLibraryFile {
+        file: file.clone(),
+    };
+
+    let sender = require_sender!(computation);
+    sender.upsert_library_file(
+        &file.stored_path,
+        file.inode,
+        file.mtime_secs,
+        file.mtime_nanos,
+        file.file_size,
+        witness,
+    );
+
+    Result::success(computation, Vec::new())
+}
+
+/// Apply a single library `FileRemoved` event to the DB.
+///
+/// Per-event surface for the library-zone watcher pipeline. The executor in
+/// `write_thread` cleans up the inode row and audio metadata when no other
+/// paths remain.
+pub fn execute_watcher_delete_library_file(
+    stored_path: &str,
+    witness: &ComputationWitness,
+) -> Result {
+    let computation = Computation::WatcherDeleteLibraryFile {
+        stored_path: stored_path.to_string(),
+    };
+
+    let sender = require_sender!(computation);
+    sender.delete_library_file(stored_path, witness);
+
+    Result::success(computation, Vec::new())
+}
+
+// ============================================================================
 // Deploy Signal Updates (Post-Mutation)
 // ============================================================================
 

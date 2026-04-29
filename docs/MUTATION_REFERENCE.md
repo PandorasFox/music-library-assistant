@@ -116,7 +116,7 @@ Recovery process: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue
 | StashFromZone | UpdateCorpusFileSignals | — | All scope signals for discovered inode | Operator-driven stash of corpus files; discovers inode before move |
 | StashLeftovers | UpdateCorpusFileSignals | — | All scope signals for discovered inode; LibraryLeftoverSignal by path key | Automated cleanup of orphaned library files during deploy |
 | UpdateTrackPath | UpdateCorpusFileSignals × 2 | — | (signals for both paths wiped) | Update path in index |
-| Transcode | UpdateCorpusFileSignals × 2 | WaveformReadError | (signals for both paths wiped) | Transcode lossless non-Vorbis file to FLAC |
+| Transcode | UpdateCorpusFileSignals × 2 | WaveformReadError | (signals for both paths wiped) | Transcode lossless non-Vorbis file to FLAC. Post-encode validation runs `verify_audio_integrity` on the produced file (same check as VerifyAudio); if the encoder produced an undecodable bitstream, the broken output is stashed under `transcode_failed/` and the source is left in place — the mutation fails cleanly without corrupt files entering the corpus. |
 ### Deployment Operations
 
 | Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |

@@ -80,6 +80,21 @@ pub fn transcode(
         ));
     }
 
+    // Validate the encoder produced a decodable file. flac_codec's
+    // `finalize()` returns Ok when the file *closes cleanly*, not when its
+    // frame bitstream is decodable; a buggy encoder run can leave well-formed
+    // metadata blocks wrapped around corrupt frames. Reusing the same audio
+    // integrity check that VerifyAudio runs in the observation phase keeps
+    // strictness consistent: anything we'd later flag as CorruptFile gets
+    // caught here, before the source is stashed.
+    crate::corpus::metadata::verify_audio_integrity(dest).with_context(|| {
+        format!(
+            "Transcode produced an undecodable file: {} -> {}",
+            source.display(),
+            dest.display()
+        )
+    })?;
+
     Ok(())
 }
 

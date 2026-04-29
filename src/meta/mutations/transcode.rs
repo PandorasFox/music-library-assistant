@@ -165,14 +165,37 @@ fn execute_transcode_impl(
         })?;
     }
 
-    // Transcode via native pipeline
-    transcode::transcode(source_path, &dest_path, target_format, witness).with_context(|| {
-        format!(
-            "Transcode failed: {} -> {}",
-            source_path.display(),
-            dest_path.display()
-        )
-    })?;
+    // Transcode via native pipeline. If this fails (including post-encode
+    // validation), the source file stays in place — no stash, no DB update.
+    // A broken encoder output may have been left at dest_path; move it to
+    // stash so it doesn't sit in the corpus and trip CorruptFile signals.
+    if let Err(transcode_err) = transcode::transcode(source_path, &dest_path, target_format, witness) {
+        if dest_path.exists() {
+            if let Err(stash_err) = file_ops::execute_move_to_stash(
+                &dest_path,
+                "transcode_failed",
+                stash_root,
+            ) {
+                crate::logging::log_error(format!(
+                    "[TRANSCODE] Failed to stash broken transcode output {}: {:#}",
+                    dest_path.display(),
+                    stash_err,
+                ));
+            } else {
+                crate::logging::log_general(format!(
+                    "[TRANSCODE] Stashed broken transcode output to transcode_failed/: {}",
+                    dest_path.display(),
+                ));
+            }
+        }
+        return Err(transcode_err).with_context(|| {
+            format!(
+                "Transcode failed: {} -> {}",
+                source_path.display(),
+                dest_path.display()
+            )
+        });
+    }
 
     // Stash the original file
     file_ops::execute_move_to_stash(source_path, stash_name, stash_root)

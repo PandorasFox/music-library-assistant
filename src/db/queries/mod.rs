@@ -497,6 +497,16 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_inodes_for_tag_values_in::<Z>(tag_name, values)
     }
 
+    /// Get inodes grouped by tag value for a tagged zone in a single batched query.
+    pub fn get_inodes_for_tag_values_batch<Z: crate::zones::TaggedZone>(
+        &self,
+        tag_name: &str,
+        values: &[&str],
+    ) -> Result<std::collections::HashMap<String, Vec<i64>>> {
+        self.db
+            .get_inodes_for_tag_values_batch::<Z>(tag_name, values)
+    }
+
     /// Get audio files with tag presence info for a tagged zone.
     #[allow(clippy::type_complexity)]
     pub fn get_audio_files_with_tag_presence_for<Z: crate::zones::TaggedZone>(

@@ -470,24 +470,40 @@ fn apply_post_execution(
     }
 
     // Phase 1c: Mark affected inodes dirty for per-inode computations
-    // Uses the same inode collection as Phase 1 signal clearing. Only runs when
-    // the mutation's recomputation scope includes TAGS — dirty inodes exist for
-    // tag-dependent computations only.
+    // Uses the same inode collection as Phase 1 signal clearing.
+    //
+    // Tag-scope dirty marking covers `PER_INODE_TAG_SCOPE_COMPUTATIONS` whose
+    // outputs depend purely on tag content. `corpus_deploy_status` is broader:
+    // it also reacts to file-state and deploy-state changes, so we mark it dirty
+    // whenever the mutation touches TAGS, FILES, or DEPLOY.
     {
         let executor = mutation.as_executor();
         let scope = executor.recomputation_scope();
-        if scope.contains(RecomputationScope::TAGS) {
-            let pre_known = executor.affected_inodes();
-            let all_inodes: Vec<i64> = pre_known
-                .into_iter()
-                .chain(discovered_inodes.iter().copied())
-                .collect();
+        let pre_known = executor.affected_inodes();
+        let all_inodes: Vec<i64> = pre_known
+            .into_iter()
+            .chain(discovered_inodes.iter().copied())
+            .collect();
 
-            if !all_inodes.is_empty() {
-                if let Some(sender) = write_thread::signal_sender() {
-                    for computation_type in crate::meta::computations::PER_INODE_COMPUTATIONS {
+        if !all_inodes.is_empty() {
+            if let Some(sender) = write_thread::signal_sender() {
+                if scope.contains(RecomputationScope::TAGS) {
+                    for computation_type in
+                        crate::meta::computations::PER_INODE_TAG_SCOPE_COMPUTATIONS
+                    {
                         sender.mark_dirty_inodes(all_inodes.clone(), computation_type, witness);
                     }
+                }
+                if scope.touches_any(&[
+                    RecomputationScope::TAGS,
+                    RecomputationScope::FILES,
+                    RecomputationScope::DEPLOY,
+                ]) {
+                    sender.mark_dirty_inodes(
+                        all_inodes.clone(),
+                        crate::meta::computations::CORPUS_DEPLOY_STATUS_COMPUTATION,
+                        witness,
+                    );
                 }
             }
         }

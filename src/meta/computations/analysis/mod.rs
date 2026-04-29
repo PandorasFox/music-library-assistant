@@ -19,7 +19,7 @@
 //! - `DetectDuplicateInodes` - Find tracks sharing the same inode
 //! - `DetectMissingTags` - Find tracks missing required tags
 //! - `DetectMetadataDuplicates` - Find tracks with identical tag sets
-//! - `DetectTagCanonicalizations` - Find tag canonicalization opportunities
+//! - `Detect{Artist,AlbumArtist,Album,Genre}TagCanonicalizations` - Find tag canonicalization opportunities (per tag type, run in parallel)
 //!
 //! Deploy Health:
 //! - `DetectDeployConflicts` - Bulk detection of deploy path collisions
@@ -92,10 +92,30 @@ pub enum Computation {
     /// Groups tracks by their full tag signature.
     DetectMetadataDuplicates,
 
-    /// Detect tag canonicalization opportunities.
+    /// Detect artist tag canonicalization opportunities.
     ///
-    /// Finds similar tag values that could be unified.
-    DetectTagCanonicalizations,
+    /// Finds similar `artist` tag values that could be unified.
+    /// Reconciles only `TagCanonicitySignal` rows keyed `artist:*`.
+    DetectArtistTagCanonicalizations,
+
+    /// Detect albumartist tag canonicalization opportunities.
+    ///
+    /// Finds similar `albumartist` tag values that could be unified.
+    /// Reconciles only `TagCanonicitySignal` rows keyed `albumartist:*`.
+    DetectAlbumArtistTagCanonicalizations,
+
+    /// Detect album tag canonicalization opportunities.
+    ///
+    /// Finds similar `album` tag values that could be unified, gated by
+    /// disjoint release-id checks to avoid false positives across distinct releases.
+    /// Reconciles only `TagCanonicitySignal` rows keyed `album:*`.
+    DetectAlbumTagCanonicalizations,
+
+    /// Detect genre tag canonicalization opportunities.
+    ///
+    /// Finds similar `genre` tag values that could be unified.
+    /// Reconciles only `TagCanonicitySignal` rows keyed `genre:*`.
+    DetectGenreTagCanonicalizations,
 
     /// Detect albums with inconsistent album_artist tags.
     ///
@@ -329,7 +349,10 @@ impl Computation {
             Computation::DetectDuplicateInodes => "Detecting duplicate inodes",
             Computation::DetectMissingTags => "Detecting missing tags",
             Computation::DetectMetadataDuplicates => "Detecting metadata duplicates",
-            Computation::DetectTagCanonicalizations => "Detecting tag canonicalizations",
+            Computation::DetectArtistTagCanonicalizations => "Detecting artist canonicalizations",
+            Computation::DetectAlbumArtistTagCanonicalizations => "Detecting albumartist canonicalizations",
+            Computation::DetectAlbumTagCanonicalizations => "Detecting album canonicalizations",
+            Computation::DetectGenreTagCanonicalizations => "Detecting genre canonicalizations",
             Computation::DetectInconsistentAlbumArtist => "Detecting inconsistent album_artist",
             Computation::DetectCompoundTagValues => "Scheduling compound tag detection",
             Computation::DetectCompoundTagsForInode { .. } => "Detecting compound tags",
@@ -380,8 +403,17 @@ impl Computation {
             Computation::DetectMetadataDuplicates => {
                 execute_detect_metadata_duplicates(ctx)
             }
-            Computation::DetectTagCanonicalizations => {
-                execute_detect_tag_canonicalizations(ctx)
+            Computation::DetectArtistTagCanonicalizations => {
+                execute_detect_artist_canonicalizations(ctx)
+            }
+            Computation::DetectAlbumArtistTagCanonicalizations => {
+                execute_detect_album_artist_canonicalizations(ctx)
+            }
+            Computation::DetectAlbumTagCanonicalizations => {
+                execute_detect_album_canonicalizations(ctx)
+            }
+            Computation::DetectGenreTagCanonicalizations => {
+                execute_detect_genre_canonicalizations(ctx)
             }
             Computation::DetectInconsistentAlbumArtist => {
                 execute_detect_inconsistent_album_artist(ctx)

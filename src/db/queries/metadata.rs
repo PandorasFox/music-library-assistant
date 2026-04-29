@@ -189,6 +189,62 @@ impl Database {
         Ok(ids)
     }
 
+    /// Get inodes grouped by tag value for a single tag name across multiple values.
+    ///
+    /// Like `get_inodes_for_tag_values_in` but returns the variant→inodes mapping
+    /// in a single query instead of N. Used by canonicalization detection where
+    /// each collision group has multiple variants and we want all their inodes
+    /// without per-variant round trips.
+    pub fn get_inodes_for_tag_values_batch<Z: crate::zones::TaggedZone>(
+        &self,
+        tag_name: &str,
+        values: &[&str],
+    ) -> Result<std::collections::HashMap<String, Vec<i64>>> {
+        if values.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        let normalized_tag_name = mm_utils::tag_names::normalize_tag_name(tag_name);
+
+        let placeholders: Vec<&str> = values.iter().map(|_| "?").collect();
+        let sql = format!(
+            r#"SELECT DISTINCT t.tag_value, t.inode FROM {} t
+               INNER JOIN files f ON t.inode = f.inode AND f.zone = ?1
+               WHERE REPLACE(REPLACE(REPLACE(REPLACE(UPPER(t.tag_name), '_', ''), '-', ''), ' ', ''), '.', '') = ?2
+               AND t.tag_value IN ({})"#,
+            Z::TAG_TABLE,
+            placeholders.join(",")
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+
+        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(values.len() + 2);
+        let zone_str = Z::ZONE_STR;
+        params.push(&zone_str);
+        params.push(&normalized_tag_name);
+        for v in values {
+            params.push(v);
+        }
+
+        let mut map: std::collections::HashMap<String, Vec<i64>> =
+            std::collections::HashMap::with_capacity(values.len());
+        for value in values {
+            map.insert((*value).to_string(), Vec::new());
+        }
+
+        let rows = stmt.query_map(params.as_slice(), |row| {
+            let value: String = row.get(0)?;
+            let inode: i64 = row.get(1)?;
+            Ok((value, inode))
+        })?;
+        for row in rows {
+            let (value, inode) = row?;
+            map.entry(value).or_default().push(inode);
+        }
+
+        Ok(map)
+    }
+
     // ========================================================================
     // Album Value Queries (for embedded disc number detection)
     // ========================================================================

@@ -394,6 +394,44 @@ pub fn execute_derive_deploy_health_signals(
         .map(|(path, inode)| (path.clone(), *inode))
         .collect();
 
+    // Bulk-load corpus tags for every library inode in one chunked IN query,
+    // replacing per-file `get_tags(inode)` round trips inside `classify_audio_stale`
+    // and `compute_expected_library_path`. Library files share inodes with their
+    // corpus origins via hardlinks, so the library inode set is the lookup key.
+    let unique_inodes: Vec<i64> = {
+        let mut set: HashSet<i64> = HashSet::new();
+        for (_, inode) in &library_files {
+            set.insert(*inode);
+        }
+        set.into_iter().collect()
+    };
+    let corpus_tag_maps: HashMap<i64, HashMap<String, String>> = match read_only_db
+        .get_tags_batch_for_zone(&unique_inodes, crate::db::types::Zone::Corpus)
+    {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|(inode, tags)| {
+                let tag_map: HashMap<String, String> = tags
+                    .into_iter()
+                    .map(|(name, value)| (name.to_uppercase(), value))
+                    .collect();
+                (inode, tag_map)
+            })
+            .collect(),
+        Err(e) => {
+            log_error(format!(
+                "[COMPUTE] DeriveDeployHealthSignals '{}': get_tags_batch_for_zone failed: {} (will fall back to per-inode queries)",
+                library_name, e,
+            ));
+            HashMap::new()
+        }
+    };
+    log_general(format!(
+        "[COMPUTE] DeriveDeployHealthSignals '{}': preloaded tags for {} unique corpus inodes",
+        library_name,
+        corpus_tag_maps.len(),
+    ));
+
     // Lazy cache: corpus directory → Option<album_dir> for sidecar stale detection.
     // Populated on first image encounter per directory, avoids redundant lookups.
     let mut dir_to_album_dir: HashMap<String, Option<String>> = HashMap::new();
@@ -429,6 +467,7 @@ pub fn execute_derive_deploy_health_signals(
                     corpus_path,
                     &library_path_to_inode,
                     &mut dir_to_album_dir,
+                    &corpus_tag_maps,
                 );
                 (phase, Some(corpus_path))
             }
@@ -447,6 +486,7 @@ pub fn execute_derive_deploy_health_signals(
                     *library_inode,
                     corpus_path,
                     &mut dir_to_album_dir,
+                    &corpus_tag_maps,
                 );
                 if let Some(expected_path) = expected_with_prefix {
                     let is_image = is_image_file(Path::new(corpus_path));
@@ -552,6 +592,7 @@ fn classify_library_file(
     corpus_path: &str,
     library_path_to_inode: &HashMap<PathBuf, i64>,
     dir_to_album_dir: &mut HashMap<String, Option<String>>,
+    corpus_tag_maps: &HashMap<i64, HashMap<String, String>>,
 ) -> DeployLifecyclePhase {
     // Try audio file path first
     if let Ok(Some(audio_file)) = read_only_db.get_audio_file_by_path(corpus_path) {
@@ -563,6 +604,7 @@ fn classify_library_file(
             corpus_path,
             audio_file.inode(),
             library_path_to_inode,
+            corpus_tag_maps,
         );
     }
 
@@ -580,30 +622,38 @@ fn classify_library_file(
         corpus_path,
         library_path_to_inode,
         dir_to_album_dir,
+        corpus_tag_maps,
     )
+}
+
+/// Look up a corpus inode's tag map, preferring the precomputed batch and
+/// falling back to a single per-inode query if absent (defense in depth).
+fn corpus_tags_for(
+    read_only_db: &ReadOnlyDb<'_>,
+    inode: i64,
+    corpus_tag_maps: &HashMap<i64, HashMap<String, String>>,
+) -> HashMap<String, String> {
+    if let Some(map) = corpus_tag_maps.get(&inode) {
+        return map.clone();
+    }
+    let tags = read_only_db
+        .get_tags::<crate::zones::CorpusZone>(inode)
+        .unwrap_or_default();
+    crate::meta::computations::helpers::tags_to_map(tags)
 }
 
 /// Classify an audio library file as stale or healthy by comparing deploy paths.
 fn classify_audio_stale(
-    read_only_db: &ReadOnlyDb<'_>,
+    _read_only_db: &ReadOnlyDb<'_>,
     library_name: &str,
     library_path: &Path,
     library_inode: i64,
     corpus_path: &str,
     inode: i64,
     library_path_to_inode: &HashMap<PathBuf, i64>,
+    corpus_tag_maps: &HashMap<i64, HashMap<String, String>>,
 ) -> DeployLifecyclePhase {
-    let tags = match read_only_db.get_tags::<crate::zones::CorpusZone>(inode) {
-        Ok(v) => v,
-        Err(e) => {
-            log_error(format!(
-                "[COMPUTE] DeriveDeployHealthSignals: get_corpus_tags failed for inode {} (corpus={}): {}",
-                inode, corpus_path, e
-            ));
-            Vec::new()
-        }
-    };
-    let tag_map = crate::meta::computations::helpers::tags_to_map(tags);
+    let tag_map = corpus_tags_for(_read_only_db, inode, corpus_tag_maps);
 
     let expected_relative = compute_deployment_path_with_tags(corpus_path, &tag_map);
     let library_path_suffix = library_path
@@ -642,6 +692,7 @@ fn check_sidecar_stale(
     corpus_path: &str,
     library_path_to_inode: &HashMap<PathBuf, i64>,
     dir_to_album_dir: &mut HashMap<String, Option<String>>,
+    corpus_tag_maps: &HashMap<i64, HashMap<String, String>>,
 ) -> DeployLifecyclePhase {
     let corpus_dir = Path::new(corpus_path)
         .parent()
@@ -652,7 +703,7 @@ fn check_sidecar_stale(
     let album_dir = if let Some(v) = dir_to_album_dir.get(&corpus_dir) {
         v.clone()
     } else {
-        let v = lookup_album_dir_from_sibling(read_only_db, &corpus_dir);
+        let v = lookup_album_dir_from_sibling(read_only_db, &corpus_dir, corpus_tag_maps);
         dir_to_album_dir.entry(corpus_dir).or_insert(v).clone()
     };
 
@@ -700,20 +751,24 @@ fn check_sidecar_stale(
 
 /// Look up the deploy album directory for a corpus directory by finding an audio
 /// sibling and computing its deploy path from tags.
+///
+/// Reads the sibling's tag map from `corpus_tag_maps` when present (sidecar
+/// directories almost always have an audio sibling that is itself a library
+/// file, so its tags are in the precomputed batch). Falls back to a per-inode
+/// query for the rare miss.
 fn lookup_album_dir_from_sibling(
     read_only_db: &ReadOnlyDb<'_>,
     corpus_dir: &str,
+    corpus_tag_maps: &HashMap<i64, HashMap<String, String>>,
 ) -> Option<String> {
     let (sibling_inode, sibling_path) = read_only_db
         .get_any_audio_sibling_in_directory(corpus_dir)
         .ok()??;
 
-    let tags = read_only_db.get_tags::<crate::zones::CorpusZone>(sibling_inode).ok()?;
-    if tags.is_empty() {
+    let tag_map = corpus_tags_for(read_only_db, sibling_inode, corpus_tag_maps);
+    if tag_map.is_empty() {
         return None;
     }
-
-    let tag_map = crate::meta::computations::helpers::tags_to_map(tags);
 
     let deploy_path = compute_deployment_path_with_tags(&sibling_path, &tag_map);
     let album_dir = deploy_album_directory(&deploy_path.to_string_lossy());
@@ -735,11 +790,11 @@ fn compute_expected_library_path(
     library_inode: i64,
     corpus_path: &str,
     dir_to_album_dir: &mut HashMap<String, Option<String>>,
+    corpus_tag_maps: &HashMap<i64, HashMap<String, String>>,
 ) -> Option<String> {
     // Audio file: compute from tags directly
     if let Ok(Some(_audio_file)) = read_only_db.get_audio_file_by_path(corpus_path) {
-        let tags = read_only_db.get_tags::<crate::zones::CorpusZone>(library_inode).ok()?;
-        let tag_map = crate::meta::computations::helpers::tags_to_map(tags);
+        let tag_map = corpus_tags_for(read_only_db, library_inode, corpus_tag_maps);
         let expected_relative = compute_deployment_path_with_tags(corpus_path, &tag_map);
         let expected_with_prefix = Path::new(library_name).join(&expected_relative);
         return Some(expected_with_prefix.to_string_lossy().to_string());
@@ -754,7 +809,7 @@ fn compute_expected_library_path(
     let album_dir = if let Some(v) = dir_to_album_dir.get(&corpus_dir) {
         v.clone()?
     } else {
-        let v = lookup_album_dir_from_sibling(read_only_db, &corpus_dir);
+        let v = lookup_album_dir_from_sibling(read_only_db, &corpus_dir, corpus_tag_maps);
         dir_to_album_dir.entry(corpus_dir).or_insert(v).clone()?
     };
 
@@ -784,6 +839,38 @@ pub fn execute_derive_corpus_deploy_status(
     let computation = Computation::DeriveCorpusDeployStatus;
 
     let sender = require_sender!(computation);
+
+    // Incremental short-circuit: if no inodes have been marked dirty for
+    // corpus_deploy_status AND prior signals exist (i.e. we have run before
+    // and the result set is non-empty), skip the full corpus scan.
+    //
+    // Dirty marking fires under TAGS|FILES|DEPLOY scope mutations (see
+    // witch/execution.rs Phase 1c), which covers every state change that can
+    // flip a corpus inode's deploy classification. An empty dirty set therefore
+    // means no inode has changed state since the last successful run.
+    {
+        let dirty = read_only_db
+            .get_dirty_inodes(crate::meta::computations::CORPUS_DEPLOY_STATUS_COMPUTATION)
+            .unwrap_or_default();
+        if dirty.is_empty() {
+            let dr_count = read_only_db
+                .corpus_signal_all_inodes::<DeployReadySignal>()
+                .map(|v| v.len())
+                .unwrap_or(0);
+            let dh_count = read_only_db
+                .corpus_signal_all_inodes::<DeployedHealthySignal>()
+                .map(|v| v.len())
+                .unwrap_or(0);
+            if dr_count + dh_count > 0 {
+                log_general(format!(
+                    "[COMPUTE] DeriveCorpusDeployStatus: skipped (no dirty corpus inodes; \
+                     {} DeployReady + {} DeployedHealthy signals retained)",
+                    dr_count, dh_count,
+                ));
+                return Result::success(computation, Vec::new());
+            }
+        }
+    }
 
     // Get all HealthyFile signals
     let healthy_signals = match read_only_db.get_healthy_file_signals() {
@@ -850,10 +937,36 @@ pub fn execute_derive_corpus_deploy_status(
 
     let healthy_inodes: HashSet<i64> = healthy_signals.iter().map(|s| s.inode).collect();
 
+    // Bulk-load tags for every corpus inode in chunked IN queries. Replaces
+    // ~100k individual `get_tags(inode)` round trips inside the loop below.
+    let inode_keys: Vec<i64> = all_corpus_inodes.keys().copied().collect();
+    let corpus_tag_maps: HashMap<i64, HashMap<String, String>> = match read_only_db
+        .get_tags_batch_for_zone(&inode_keys, crate::db::types::Zone::Corpus)
+    {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|(inode, tags)| {
+                let map: HashMap<String, String> = tags
+                    .into_iter()
+                    .map(|(name, value)| (name.to_uppercase(), value))
+                    .collect();
+                (inode, map)
+            })
+            .collect(),
+        Err(e) => {
+            log_error(format!(
+                "[COMPUTE] DeriveCorpusDeployStatus: get_tags_batch_for_zone failed: {} (will fall back to per-inode queries)",
+                e,
+            ));
+            HashMap::new()
+        }
+    };
+
     log_general(format!(
-        "[COMPUTE] DeriveCorpusDeployStatus: {} corpus inodes, {} healthy inodes, {} source_dirs: [{}]",
+        "[COMPUTE] DeriveCorpusDeployStatus: {} corpus inodes, {} healthy inodes, {} preloaded tag maps, {} source_dirs: [{}]",
         all_corpus_inodes.len(),
         healthy_inodes.len(),
+        corpus_tag_maps.len(),
         config.source_dirs.len(),
         config.source_dirs.iter().map(|sd| format!("{:?}(libs={:?})", sd.path, sd.libraries)).collect::<Vec<_>>().join(", "),
     ));
@@ -866,22 +979,22 @@ pub fn execute_derive_corpus_deploy_status(
     let mut sample_not_in_source: Option<String> = None;
 
     for (&inode, corpus_path) in &all_corpus_inodes {
-        let tags = match read_only_db.get_tags::<crate::zones::CorpusZone>(inode) {
-            Ok(v) => v,
-            Err(e) => {
-                log_error(format!(
-                    "[COMPUTE] DeriveCorpusDeployStatus: get_corpus_tags failed for inode {} (path={}): {}",
-                    inode, corpus_path, e
-                ));
-                Vec::new()
+        let tag_map = match corpus_tag_maps.get(&inode) {
+            Some(m) => m.clone(),
+            None => {
+                // Fallback for inodes the batch missed (shouldn't happen, but
+                // keeps behavior identical if the batch returns a partial set).
+                let tags = read_only_db
+                    .get_tags::<crate::zones::CorpusZone>(inode)
+                    .unwrap_or_default();
+                crate::meta::computations::helpers::tags_to_map(tags)
             }
         };
-        if tags.is_empty() {
+        if tag_map.is_empty() {
             skipped_no_tags += 1;
             continue;
         }
 
-        let tag_map = crate::meta::computations::helpers::tags_to_map(tags);
         let expected_relative = compute_deployment_path_with_tags(corpus_path, &tag_map);
         let deploy_path = expected_relative.to_string_lossy().to_string();
 
@@ -1141,6 +1254,13 @@ pub fn execute_derive_corpus_deploy_status(
         "[COMPUTE] DeriveCorpusDeployStatus reconcile: DeployReady({}) DeployedHealthy({})",
         dr_stats, dh_stats,
     ));
+
+    // Clear all dirty marks now that the full scan has run; the next cycle will
+    // short-circuit until another TAGS|FILES|DEPLOY mutation marks inodes dirty.
+    sender.clear_all_dirty_inodes(
+        crate::meta::computations::CORPUS_DEPLOY_STATUS_COMPUTATION,
+        witness,
+    );
 
     Result::success(computation, Vec::new())
 }

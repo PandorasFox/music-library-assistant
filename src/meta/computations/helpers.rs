@@ -253,6 +253,22 @@ pub(super) fn reconcile_aggregate_signals<S: AggregateSignalStore>(
     computed: Vec<ComputedAggregateSignal>,
     witness: &ComputationWitness,
 ) -> ReconcileStats {
+    reconcile_aggregate_signals_scoped::<S>(read_only_db, sender, computed, witness, |_| true)
+}
+
+/// Reconcile computed aggregate signals against existing DB signals, but only
+/// clear stale signals whose key matches the `in_scope` predicate.
+///
+/// Use this when a single signal type is split across multiple computations
+/// distinguished by a key prefix (e.g. `"artist:"` vs `"album:"`). Each
+/// computation reconciles only its own slice without wiping the others'.
+pub(super) fn reconcile_aggregate_signals_scoped<S: AggregateSignalStore>(
+    read_only_db: &ReadOnlyDb<'_>,
+    sender: &write_thread::SignalWriteSender,
+    computed: Vec<ComputedAggregateSignal>,
+    witness: &ComputationWitness,
+    in_scope: impl Fn(&str) -> bool,
+) -> ReconcileStats {
     let existing_hashes: HashMap<String, i64> = read_only_db
         .aggregate_signal_key_hashes::<S>()
         .unwrap_or_default();
@@ -264,9 +280,9 @@ pub(super) fn reconcile_aggregate_signals<S: AggregateSignalStore>(
     let mut updated = 0;
     let mut unchanged = 0;
 
-    // Stale: exist in DB but not computed -> clear
+    // Stale: in scope, exist in DB but not computed -> clear
     for key in existing_hashes.keys() {
-        if !computed_keys.contains(key.as_str()) {
+        if in_scope(key) && !computed_keys.contains(key.as_str()) {
             sender.clear_aggregate_signal::<S>(key, witness);
             cleared += 1;
         }

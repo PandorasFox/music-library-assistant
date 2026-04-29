@@ -606,7 +606,8 @@ impl Database {
     /// Get all tags for a batch of inodes from the given zone's tag table.
     ///
     /// Returns a Vec of (inode, Vec<(tag_name, tag_value)>) in the order of input inodes.
-    /// Inodes with no tags get an empty Vec.
+    /// Inodes with no tags get an empty Vec. Inputs are chunked internally to
+    /// stay under SQLite's `SQLITE_LIMIT_VARIABLE_NUMBER` (default 999).
     pub fn get_tags_batch_for_zone(
         &self,
         inodes: &[i64],
@@ -620,36 +621,42 @@ impl Database {
             return Ok(Vec::new());
         }
 
-        // Build IN clause with parameter placeholders.
-        let placeholders: String = (0..inodes.len())
-            .map(|i| format!("?{}", i + 1))
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!(
-            "SELECT inode, tag_name, tag_value FROM {table} \
-             WHERE inode IN ({placeholders}) \
-             ORDER BY inode, tag_name, tag_value"
-        );
+        // SQLite's default SQLITE_LIMIT_VARIABLE_NUMBER is 999 (configurable up
+        // to 32k since 3.32). Chunk well below the conservative default so a
+        // 99k-inode call stays correct without touching SQLite limits.
+        const CHUNK_SIZE: usize = 900;
 
-        let mut stmt = self.conn.prepare(&sql)?;
-        let params: Vec<&dyn rusqlite::ToSql> = inodes
-            .iter()
-            .map(|i| i as &dyn rusqlite::ToSql)
-            .collect();
-        let rows = stmt.query_map(&*params, |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })?;
-
-        // Collect into a HashMap, then reorder to match input.
         let mut map: std::collections::HashMap<i64, Vec<(String, String)>> =
-            std::collections::HashMap::new();
-        for row in rows {
-            let (inode, name, value) = row?;
-            map.entry(inode).or_default().push((name, value));
+            std::collections::HashMap::with_capacity(inodes.len());
+
+        for chunk in inodes.chunks(CHUNK_SIZE) {
+            let placeholders: String = (0..chunk.len())
+                .map(|i| format!("?{}", i + 1))
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "SELECT inode, tag_name, tag_value FROM {table} \
+                 WHERE inode IN ({placeholders}) \
+                 ORDER BY inode, tag_name, tag_value"
+            );
+
+            let mut stmt = self.conn.prepare(&sql)?;
+            let params: Vec<&dyn rusqlite::ToSql> = chunk
+                .iter()
+                .map(|i| i as &dyn rusqlite::ToSql)
+                .collect();
+            let rows = stmt.query_map(&*params, |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
+
+            for row in rows {
+                let (inode, name, value) = row?;
+                map.entry(inode).or_default().push((name, value));
+            }
         }
 
         Ok(inodes

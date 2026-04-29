@@ -39,7 +39,10 @@ pub fn execute_schedule_content_analysis(
         spawn.extend([
             Computation::DetectMusicBrainzTagged,
             Computation::DetectMissingTags,
-            Computation::DetectTagCanonicalizations,
+            Computation::DetectArtistTagCanonicalizations,
+            Computation::DetectAlbumArtistTagCanonicalizations,
+            Computation::DetectAlbumTagCanonicalizations,
+            Computation::DetectGenreTagCanonicalizations,
             Computation::DetectInconsistentAlbumArtist,
             Computation::DetectCompoundTagValues,
             Computation::DetectDiscExtractions,

@@ -468,6 +468,8 @@ fn seed_dirty_inodes_all(conn: &Connection) -> Result<()> {
         "oob_tag_sync",
         "external_match",
         "sidecar_deploy",
+        "release_packing",
+        "corpus_deploy_status",
     ];
 
     for comp_type in &computation_types {

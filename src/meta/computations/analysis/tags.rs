@@ -10,7 +10,8 @@ use std::path::Path;
 use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{
-    self, reconcile_aggregate_signals, ComputedAggregateSignal,
+    self, reconcile_aggregate_signals, reconcile_aggregate_signals_scoped,
+    ComputedAggregateSignal,
 };
 use crate::meta::computations::traits::ComputationContext;
 use crate::meta::signals::data::{
@@ -306,120 +307,208 @@ pub fn execute_detect_missing_tags(
 // Tag Canonicalization Detection
 // ============================================================================
 
-/// Execute DetectTagCanonicalizations - detect tag canonicalization opportunities.
+/// Tag-name prefix used in `TagCanonicitySignal::key` for each tag type.
 ///
-/// Emits TagCanonicity aggregate signals for each detected collision cluster.
-/// Respects `strip_album_format_suffixes` from config for album collision detection.
-/// Skips collision groups where any variant has a CanonicalTag signal.
-pub fn execute_detect_tag_canonicalizations(
-    ctx: &ComputationContext<'_>,
-) -> Result {
-    use crate::corpus::health::collision::{
-        get_album_artist_collisions, get_album_collisions, get_artist_collisions,
-        get_genre_collisions,
-    };
+/// Keys are formatted as `"{tag_name}:{normalized_key}"` and serve as the
+/// scope for split reconciliation: each per-tag-type computation only clears
+/// signals whose key starts with its own prefix.
+mod canon_prefix {
+    pub const ARTIST: &str = "artist:";
+    pub const ALBUM_ARTIST: &str = "album_artist:";
+    pub const ALBUM: &str = "album:";
+    pub const GENRE: &str = "genre:";
+}
+
+/// Build `ComputedAggregateSignal`s for a set of collisions.
+///
+/// Per-collision: skip groups with any CanonicalTag signal, recompute per-variant
+/// counts excluding MB-tagged inodes, sort variants DESC by count, emit one
+/// `TagCanonicitySignal` per non-trivial group.
+fn compute_canonicity_signals(
+    read_only_db: &ReadOnlyDb<'_>,
+    collisions: Vec<crate::corpus::health::collision::TagCollision>,
+    mb_tagged_inodes: &HashSet<i64>,
+) -> Vec<ComputedAggregateSignal> {
+    let mut computed: Vec<ComputedAggregateSignal> = Vec::new();
+
+    for collision in collisions {
+        let any_canonical = collision.variants.iter().any(|v| {
+            read_only_db
+                .is_canonical_tag(&collision.tag_name, v)
+                .unwrap_or(false)
+        });
+        if any_canonical {
+            continue;
+        }
+
+        // One batched IN-clause query for all variants of this collision,
+        // replacing the previous per-variant round trip pattern.
+        let variant_strs: Vec<&str> = collision.variants.iter().map(|s| s.as_str()).collect();
+        let variant_inodes_map = read_only_db
+            .get_inodes_for_tag_values_batch::<crate::zones::CorpusZone>(
+                &collision.tag_name,
+                &variant_strs,
+            )
+            .unwrap_or_default();
+
+        let mut non_mb_variant_counts: Vec<(String, usize)> = Vec::new();
+        let mut all_non_mb_inodes: Vec<i64> = Vec::new();
+        for variant in &collision.variants {
+            let variant_inodes: Vec<i64> = variant_inodes_map
+                .get(variant)
+                .map(|v: &Vec<i64>| {
+                    v.iter()
+                        .copied()
+                        .filter(|inode| !mb_tagged_inodes.contains(inode))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let count = variant_inodes.len();
+            all_non_mb_inodes.extend(variant_inodes);
+            non_mb_variant_counts.push((variant.clone(), count));
+        }
+
+        if all_non_mb_inodes.is_empty() {
+            continue;
+        }
+
+        non_mb_variant_counts.sort_by(|a, b| b.1.cmp(&a.1));
+
+        let key = format!("{}:{}", collision.tag_name, collision.normalized_key);
+        let signal = TypedSignalWrite::TagCanonicity(TagCanonicitySignal {
+            key: key.clone(),
+            tag_name: collision.tag_name,
+            data: TagCanonicityData {
+                variants: non_mb_variant_counts,
+                inodes: all_non_mb_inodes,
+            },
+        });
+        computed.push(ComputedAggregateSignal::new(key, signal));
+    }
+
+    computed
+}
+
+/// Execute DetectArtistTagCanonicalizations.
+///
+/// Detects collisions on the `artist` tag. Reconciles only `TagCanonicitySignal`
+/// keys prefixed `artist:`, leaving the other tag namespaces untouched.
+pub fn execute_detect_artist_canonicalizations(ctx: &ComputationContext<'_>) -> Result {
+    use crate::corpus::health::collision::get_artist_collisions;
 
     let read_only_db = ctx.read_db;
     let witness = ctx.witness;
-
-    let computation = Computation::DetectTagCanonicalizations;
-
+    let computation = Computation::DetectArtistTagCanonicalizations;
     let sender = require_sender!(computation);
+    let config = require_config!(ctx, computation);
 
+    let mb_tagged_inodes = load_mb_tagged_inodes(read_only_db, config);
+    let collisions = get_artist_collisions(read_only_db).unwrap_or_default();
+    let computed = compute_canonicity_signals(read_only_db, collisions, &mb_tagged_inodes);
+
+    let stats = reconcile_aggregate_signals_scoped::<TagCanonicitySignal>(
+        read_only_db,
+        &sender,
+        computed,
+        witness,
+        |key| key.starts_with(canon_prefix::ARTIST),
+    );
+
+    log_general(format!("[COMPUTE] DetectArtistTagCanonicalizations: {}", stats));
+
+    Result::success(computation, Vec::new())
+}
+
+/// Execute DetectAlbumArtistTagCanonicalizations.
+///
+/// Detects collisions on the `albumartist` tag (across separator variants).
+/// Reconciles only `TagCanonicitySignal` keys prefixed `album_artist:`.
+pub fn execute_detect_album_artist_canonicalizations(ctx: &ComputationContext<'_>) -> Result {
+    use crate::corpus::health::collision::get_album_artist_collisions;
+
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
+    let computation = Computation::DetectAlbumArtistTagCanonicalizations;
+    let sender = require_sender!(computation);
+    let config = require_config!(ctx, computation);
+
+    let mb_tagged_inodes = load_mb_tagged_inodes(read_only_db, config);
+    let collisions = get_album_artist_collisions(read_only_db).unwrap_or_default();
+    let computed = compute_canonicity_signals(read_only_db, collisions, &mb_tagged_inodes);
+
+    let stats = reconcile_aggregate_signals_scoped::<TagCanonicitySignal>(
+        read_only_db,
+        &sender,
+        computed,
+        witness,
+        |key| key.starts_with(canon_prefix::ALBUM_ARTIST),
+    );
+
+    log_general(format!("[COMPUTE] DetectAlbumArtistTagCanonicalizations: {}", stats));
+
+    Result::success(computation, Vec::new())
+}
+
+/// Execute DetectAlbumTagCanonicalizations.
+///
+/// Detects collisions on the `album` tag, gated by disjoint release-id checks.
+/// Reconciles only `TagCanonicitySignal` keys prefixed `album:`.
+pub fn execute_detect_album_canonicalizations(ctx: &ComputationContext<'_>) -> Result {
+    use crate::corpus::health::collision::get_album_collisions;
+
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
+    let computation = Computation::DetectAlbumTagCanonicalizations;
+    let sender = require_sender!(computation);
     let config = require_config!(ctx, computation);
 
     let strip_format_suffixes = config.opinions.canonicalization.strip_album_format_suffixes;
     let mb_release_tag_name = &config.opinions.external_matching.mb_tag_names.release;
 
-    // Skip MB-tagged files (externally authoritative tags)
     let mb_tagged_inodes = load_mb_tagged_inodes(read_only_db, config);
+    let collisions = get_album_collisions(read_only_db, strip_format_suffixes, mb_release_tag_name)
+        .unwrap_or_default();
+    let computed = compute_canonicity_signals(read_only_db, collisions, &mb_tagged_inodes);
 
-    let mut computed: Vec<ComputedAggregateSignal> = Vec::new();
-
-    // Helper to collect signals for a set of collisions
-    let mut collect_collision_signals = |collisions: Vec<
-        crate::corpus::health::collision::TagCollision,
-    >| {
-        for collision in collisions {
-            // Skip groups where any variant has a CanonicalTag signal
-            let any_canonical = collision.variants.iter().any(|v| {
-                read_only_db
-                    .is_canonical_tag(&collision.tag_name, v)
-                    .unwrap_or(false)
-            });
-            if any_canonical {
-                continue;
-            }
-
-            // Rebuild per-variant counts using only non-MB inodes.
-            // The raw collision counts include MB-tagged files; we need accurate
-            // non-MB counts so the signal reflects actionable work.
-            let mut non_mb_variant_counts: Vec<(String, usize)> = Vec::new();
-            let mut all_non_mb_inodes: Vec<i64> = Vec::new();
-
-            for variant in &collision.variants {
-                let variant_slice: &[&str] = &[variant.as_str()];
-                let variant_inodes: Vec<i64> = read_only_db
-                    .get_inodes_for_tag_values_in::<crate::zones::CorpusZone>(
-                        &collision.tag_name,
-                        variant_slice,
-                    )
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|inode| !mb_tagged_inodes.contains(inode))
-                    .collect();
-                let count = variant_inodes.len();
-                all_non_mb_inodes.extend(variant_inodes);
-                // Include variant even if count=0 (MB-only variant serves as
-                // the authoritative canonical form for the non-MB files).
-                non_mb_variant_counts.push((variant.clone(), count));
-            }
-
-            if all_non_mb_inodes.is_empty() {
-                continue;
-            }
-
-            // Sort: non-zero counts DESC first, then zero-count variants
-            // (MB-authoritative forms) at the end.
-            non_mb_variant_counts.sort_by(|a, b| b.1.cmp(&a.1));
-
-            let inodes = all_non_mb_inodes;
-            let variants = non_mb_variant_counts;
-
-            let key = format!("{}:{}", collision.tag_name, collision.normalized_key);
-            let signal = TypedSignalWrite::TagCanonicity(TagCanonicitySignal {
-                key: key.clone(),
-                tag_name: collision.tag_name,
-                data: TagCanonicityData { variants, inodes },
-            });
-            computed.push(ComputedAggregateSignal::new(key, signal));
-        }
-    };
-
-    if let Ok(collisions) = get_artist_collisions(read_only_db) {
-        collect_collision_signals(collisions);
-    }
-    if let Ok(collisions) = get_album_artist_collisions(read_only_db) {
-        collect_collision_signals(collisions);
-    }
-    if let Ok(collisions) = get_album_collisions(read_only_db, strip_format_suffixes, mb_release_tag_name) {
-        collect_collision_signals(collisions);
-    }
-    if let Ok(collisions) = get_genre_collisions(read_only_db) {
-        collect_collision_signals(collisions);
-    }
-
-    let stats = reconcile_aggregate_signals::<TagCanonicitySignal>(
+    let stats = reconcile_aggregate_signals_scoped::<TagCanonicitySignal>(
         read_only_db,
         &sender,
         computed,
         witness,
+        |key| key.starts_with(canon_prefix::ALBUM),
     );
 
-    log_general(format!(
-        "[COMPUTE] DetectTagCanonicalizations: {}",
-        stats,
-    ));
+    log_general(format!("[COMPUTE] DetectAlbumTagCanonicalizations: {}", stats));
+
+    Result::success(computation, Vec::new())
+}
+
+/// Execute DetectGenreTagCanonicalizations.
+///
+/// Detects collisions on the `genre` tag. Reconciles only `TagCanonicitySignal`
+/// keys prefixed `genre:`.
+pub fn execute_detect_genre_canonicalizations(ctx: &ComputationContext<'_>) -> Result {
+    use crate::corpus::health::collision::get_genre_collisions;
+
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
+    let computation = Computation::DetectGenreTagCanonicalizations;
+    let sender = require_sender!(computation);
+    let config = require_config!(ctx, computation);
+
+    let mb_tagged_inodes = load_mb_tagged_inodes(read_only_db, config);
+    let collisions = get_genre_collisions(read_only_db).unwrap_or_default();
+    let computed = compute_canonicity_signals(read_only_db, collisions, &mb_tagged_inodes);
+
+    let stats = reconcile_aggregate_signals_scoped::<TagCanonicitySignal>(
+        read_only_db,
+        &sender,
+        computed,
+        witness,
+        |key| key.starts_with(canon_prefix::GENRE),
+    );
+
+    log_general(format!("[COMPUTE] DetectGenreTagCanonicalizations: {}", stats));
 
     Result::success(computation, Vec::new())
 }

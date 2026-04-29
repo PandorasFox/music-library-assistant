@@ -115,14 +115,18 @@ pub struct FetchRequest {
 // Shared Constants
 // ============================================================================
 
-/// Computation types that use per-inode spawning and need dirty tracking.
-/// Other computations use bulk SQL queries and don't need this optimization.
-///
-/// Used by:
-/// - Post-execution pipeline (dirty marking after mutations)
-/// - Migration seeding (re-seed dirty inodes after schema changes)
-pub const PER_INODE_COMPUTATIONS: &[&str] =
+/// Tag-scope per-inode computations: dirty-marked when a mutation's
+/// recomputation scope contains `TAGS`. Their outputs depend on tag content.
+pub const PER_INODE_TAG_SCOPE_COMPUTATIONS: &[&str] =
     &["compound_tag", "lossless_remux", "sidecar_deploy", "release_packing"];
+
+/// Dirty-tracking key for `DeriveCorpusDeployStatus`.
+///
+/// Distinct from the tag-scope set because corpus deploy status reacts to
+/// TAGS, FILES, and DEPLOY scope mutations: a new corpus inode (FILES) needs
+/// a `DeployReady` signal, a library file move (DEPLOY) flips
+/// `DeployedHealthy`↔`DeployReady`, and tag edits (TAGS) change the deploy path.
+pub const CORPUS_DEPLOY_STATUS_COMPUTATION: &str = "corpus_deploy_status";
 
 // ============================================================================
 // Unified Computation Enum (for daemon's queue)

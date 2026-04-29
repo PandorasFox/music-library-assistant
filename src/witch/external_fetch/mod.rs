@@ -156,6 +156,7 @@ async fn scheduler_loop(
                             let sanctity = item.sanctity;
                             let wanted_types = cab.wanted_types.clone();
                             let release_id = item.release_id.clone();
+                            let release_group_id = item.release_group_id.clone();
 
                             let target_dir = item.target_dir.clone();
                             let existing_front = item.existing_front;
@@ -163,7 +164,8 @@ async fn scheduler_loop(
 
                             caa_in_flight.spawn(async move {
                                 let result = execute_cover_art_fetch(
-                                    &client, &release_id, &target_dir, &corpus_root,
+                                    &client, &release_id, release_group_id.as_deref(),
+                                    &target_dir, &corpus_root,
                                     sanctity, &wanted_types, existing_front, existing_back,
                                 ).await;
                                 (result, release_id)
@@ -456,6 +458,11 @@ struct CoverArtBatch {
 /// Cover art queue item: one release to fetch art for.
 struct CaaQueueItem {
     release_id: String,
+    /// Release-group MBID for fallback when the release has no CAA art.
+    /// Populated from `mb_release_cache.raw_json`'s `release-group.id` field
+    /// when present; `None` if the cached entry is stale (lacks the field) or
+    /// no MB lookup has been done.
+    release_group_id: Option<String>,
     /// Corpus-relative directory containing the release's audio files.
     target_dir: String,
     /// Resolved sanctity for this directory.
@@ -1062,6 +1069,30 @@ fn populate_cover_art_queue(
         });
     }
 
+    // Bulk-extract release-group IDs from the cached MB JSON for every release
+    // we're about to enqueue. Older cache entries pre-date the
+    // `inc=release-groups` URL parameter and lack the field; we accept None for
+    // those (the fallback simply won't fire until the cache entry refreshes).
+    let mut release_group_ids: HashMap<String, String> = HashMap::new();
+    let rg_sql = r#"
+        SELECT release_id,
+               json_extract(CAST(raw_json AS TEXT), '$."release-group".id')
+        FROM mb_release_cache
+        WHERE json_extract(CAST(raw_json AS TEXT), '$."release-group".id') IS NOT NULL
+    "#;
+    if let Ok(mut stmt) = db.conn().prepare(rg_sql) {
+        let _ = stmt.query_map([], |row| {
+            let release_id: String = row.get(0)?;
+            let rg_id: String = row.get(1)?;
+            Ok((release_id, rg_id))
+        }).and_then(|rows| {
+            for row in rows.flatten() {
+                release_group_ids.insert(row.0, row.1);
+            }
+            Ok(())
+        });
+    }
+
     let wants_front = wanted_types.iter().any(|t| t == "Front");
     let wants_back = wanted_types.iter().any(|t| t == "Back");
 
@@ -1095,8 +1126,11 @@ fn populate_cover_art_queue(
             }
         }
 
+        let release_group_id = release_group_ids.get(&release_id).cloned();
+
         queue.push_back(CaaQueueItem {
             release_id,
+            release_group_id,
             target_dir: dir,
             sanctity,
             existing_front,
@@ -1143,6 +1177,7 @@ fn get_existing_art_dims(db: &Database, dir: &str, role: &str) -> Option<(u32, u
 async fn execute_cover_art_fetch(
     client: &CoverArtClient,
     release_id: &str,
+    release_group_id: Option<&str>,
     target_dir: &str,
     corpus_root: &std::path::Path,
     sanctity: CoverArtSanctity,
@@ -1150,15 +1185,50 @@ async fn execute_cover_art_fetch(
     existing_front: Option<(u32, u32)>,
     existing_back: Option<(u32, u32)>,
 ) -> CoverArtResult {
-    // Fetch listing
-    let listing = match client.fetch_listing(release_id).await {
-        Ok(Some(listing)) => listing,
+    // Fetch listing — fall back to the release-group endpoint if the release
+    // has no art and we know its release-group MBID. CAA's release-group
+    // endpoint resolves to whichever release in the group has art uploaded;
+    // sibling releases (different editions of the same album) typically share
+    // or share-derive cover art.
+    let (listing, source_kind) = match client.fetch_listing(release_id).await {
+        Ok(Some(listing)) => (listing, "release"),
         Ok(None) => {
-            return CoverArtResult {
-                images_written: 0, images_skipped: 0, images_upgraded: 0,
-                cache_status: "not_found", cache_json: None, image_count: 0,
-                sidecar_replacements: Vec::new(),
-            };
+            if let Some(rg) = release_group_id {
+                match client.fetch_release_group_listing(rg).await {
+                    Ok(Some(listing)) => {
+                        crate::logging::log_general(format!(
+                            "[FETCH] CAA via release-group fallback: \
+                             release={} release_group={}",
+                            release_id, rg
+                        ));
+                        (listing, "release_group")
+                    }
+                    Ok(None) => {
+                        return CoverArtResult {
+                            images_written: 0, images_skipped: 0, images_upgraded: 0,
+                            cache_status: "not_found", cache_json: None, image_count: 0,
+                            sidecar_replacements: Vec::new(),
+                        };
+                    }
+                    Err(e) => {
+                        crate::logging::log_error(format!(
+                            "[FETCH] CAA release-group listing failed for {} (rg={}): {:#}",
+                            release_id, rg, e
+                        ));
+                        return CoverArtResult {
+                            images_written: 0, images_skipped: 0, images_upgraded: 0,
+                            cache_status: "error", cache_json: None, image_count: 0,
+                            sidecar_replacements: Vec::new(),
+                        };
+                    }
+                }
+            } else {
+                return CoverArtResult {
+                    images_written: 0, images_skipped: 0, images_upgraded: 0,
+                    cache_status: "not_found", cache_json: None, image_count: 0,
+                    sidecar_replacements: Vec::new(),
+                };
+            }
         }
         Err(e) => {
             crate::logging::log_error(format!(
@@ -1171,6 +1241,7 @@ async fn execute_cover_art_fetch(
             };
         }
     };
+    let _ = source_kind; // for future telemetry; emitted via the log line above
 
     let cache_json = serde_json::to_string(&listing).ok();
     let image_count = listing.images.len() as i64;

@@ -43,6 +43,22 @@ pub fn all_data_migrations() -> Vec<DataMigrationEntry> {
             },
         },
         DataMigrationEntry {
+            id: "2026-04-wipe-mb-cache-missing-release-group",
+            description: "Drop mb_release_cache entries that pre-date the release-group inc parameter (so the CAA release-group fallback can find sibling-release art on refetch)",
+            apply: |db| {
+                let dropped = db.conn().execute(
+                    "DELETE FROM mb_release_cache \
+                     WHERE json_extract(CAST(raw_json AS TEXT), '$.\"release-group\".id') IS NULL",
+                    [],
+                )?;
+                crate::logging::log_general(format!(
+                    "[MIGRATION] Dropped {} stale mb_release_cache rows lacking release-group",
+                    dropped
+                ));
+                Ok(())
+            },
+        },
+        DataMigrationEntry {
             id: "2026-04-drop-edit-history-tables",
             description: "Drop tag_edit_history and edit_sessions tables (feature removed)",
             apply: |db| {

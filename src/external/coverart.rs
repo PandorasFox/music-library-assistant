@@ -164,9 +164,28 @@ impl CoverArtClient {
     /// Returns `Ok(None)` if the release has no cover art (404).
     pub async fn fetch_listing(&self, release_id: &str) -> Result<Option<CaaListing>> {
         let url = format!("{}/release/{}/", CAA_BASE_URL, release_id);
+        self.fetch_listing_url(&url, release_id).await
+    }
+
+    /// Fetch the CAA image listing for a MusicBrainz release-group.
+    ///
+    /// Returns `Ok(None)` if the release-group has no cover art (404). CAA
+    /// resolves the listing to whichever release in the group has art uploaded;
+    /// sibling releases share or share-derive cover art for the bulk of cases.
+    /// Used as a fallback when `fetch_listing` returns `Ok(None)` for the
+    /// primary release.
+    pub async fn fetch_release_group_listing(
+        &self,
+        release_group_id: &str,
+    ) -> Result<Option<CaaListing>> {
+        let url = format!("{}/release-group/{}/", CAA_BASE_URL, release_group_id);
+        self.fetch_listing_url(&url, release_group_id).await
+    }
+
+    async fn fetch_listing_url(&self, url: &str, mbid: &str) -> Result<Option<CaaListing>> {
         let resp = self
             .client
-            .get(&url)
+            .get(url)
             .send()
             .await
             .context("CAA listing request failed")?;
@@ -181,7 +200,7 @@ impl CoverArtClient {
             }
             404 => Ok(None),
             status => {
-                anyhow::bail!("CAA listing returned unexpected status {status} for {release_id}");
+                anyhow::bail!("CAA listing returned unexpected status {status} for {mbid}");
             }
         }
     }

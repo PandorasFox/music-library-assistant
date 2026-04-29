@@ -78,6 +78,42 @@ pub fn safe_slice(s: &str, start: usize, end: usize) -> &str {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Plural suffix helpers
+// ---------------------------------------------------------------------------
+
+/// English plural suffix: `""` for `count == 1`, `"s"` otherwise.
+///
+/// ```
+/// # use mm_utils::strings::plural_s;
+/// assert_eq!(plural_s(0), "s");
+/// assert_eq!(plural_s(1), "");
+/// assert_eq!(plural_s(2), "s");
+/// ```
+#[inline]
+pub const fn plural_s(count: usize) -> &'static str {
+    if count == 1 {
+        ""
+    } else {
+        "s"
+    }
+}
+
+/// Render `"<count> <noun>[s]"` with regular-English pluralization (suffix `s`).
+///
+/// For irregular plurals (mouse/mice, etc.), format manually.
+///
+/// ```
+/// # use mm_utils::strings::count_noun;
+/// assert_eq!(count_noun(0, "release"), "0 releases");
+/// assert_eq!(count_noun(1, "release"), "1 release");
+/// assert_eq!(count_noun(42, "track"), "42 tracks");
+/// ```
+#[inline]
+pub fn count_noun(count: usize, noun: &str) -> String {
+    format!("{} {}{}", count, noun, plural_s(count))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

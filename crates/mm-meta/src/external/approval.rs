@@ -6,19 +6,40 @@
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::config::{CreditRoutingConfig, MbTagNameConfig};
 use crate::external::musicbrainz::MbCacheBundle;
 use crate::external::tag_generation::{generate_tag_ops, MbTagInput};
 use crate::mutations::TagOp;
 use crate::views::external_matches::{ApprovalDecision, ReleaseApprovalInput};
 
+/// Per-release/per-track breakdown of an approval build pass.
+///
+/// `staged_releases` is the count of decisions produced (one per release
+/// that successfully generated at least one tag op). `staged_tracks` is the
+/// total number of per-inode tag-op groups across all decisions. The
+/// skipped counts capture data that wasn't usable due to missing MB cache.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalSummary {
+    /// Releases that produced at least one decision.
+    pub staged_releases: usize,
+    /// Total individual track-tag groups staged across all decisions.
+    pub staged_tracks: usize,
+    /// Tracks dropped because their MB recording cache entry was missing.
+    pub skipped_tracks: usize,
+    /// Releases dropped because their MB release cache entry was missing OR
+    /// every track in them had a missing recording (so no decision could be
+    /// produced).
+    pub skipped_releases: usize,
+}
+
 /// Build approval decisions from selected releases + staging data.
 ///
 /// Pure function — TUI, web, and the in-witch batch handler call this
-/// with the same inputs and get the same outputs.
-///
-/// Returns `(approved, skipped)` — approved decisions + count of
-/// tracks skipped due to missing MB cache data.
+/// with the same inputs and get the same outputs. Returns the decisions
+/// plus a summary of staged/skipped counts at both release and track
+/// granularity (so callers can render an unambiguous status line).
 pub fn build_release_approval_decisions(
     releases: &[ReleaseApprovalInput],
     bundle: &MbCacheBundle,
@@ -26,13 +47,14 @@ pub fn build_release_approval_decisions(
     locales: &[String],
     routing: &CreditRoutingConfig,
     tag_names: &MbTagNameConfig,
-) -> (Vec<ApprovalDecision>, usize) {
+) -> (Vec<ApprovalDecision>, ApprovalSummary) {
     let mut decisions = Vec::new();
-    let mut skipped = 0usize;
+    let mut summary = ApprovalSummary::default();
 
     for rd in releases {
         let Some(release) = bundle.releases.get(&rd.release_id) else {
-            skipped += rd.tracks.len();
+            summary.skipped_releases += 1;
+            summary.skipped_tracks += rd.tracks.len();
             continue;
         };
         let total_media = release.media.len() as u32;
@@ -40,7 +62,7 @@ pub fn build_release_approval_decisions(
         let mut per_inode_ops: Vec<Vec<TagOp>> = Vec::new();
         for t in &rd.tracks {
             let Some(recording) = bundle.recordings.get(&t.recording_id) else {
-                skipped += 1;
+                summary.skipped_tracks += 1;
                 continue;
             };
             let input = MbTagInput {
@@ -68,6 +90,9 @@ pub fn build_release_approval_decisions(
         }
 
         if per_inode_ops.is_empty() {
+            // All tracks had missing recording cache (or generated no ops).
+            // Counts as a skipped release; per-track increments already happened above.
+            summary.skipped_releases += 1;
             continue;
         }
 
@@ -75,6 +100,7 @@ pub fn build_release_approval_decisions(
             "Approve MB release: {}",
             &rd.release_id[..8.min(rd.release_id.len())]
         );
+        summary.staged_tracks += per_inode_ops.len();
         decisions.push(ApprovalDecision {
             release_id: rd.release_id.clone(),
             label,
@@ -82,5 +108,6 @@ pub fn build_release_approval_decisions(
         });
     }
 
-    (decisions, skipped)
+    summary.staged_releases = decisions.len();
+    (decisions, summary)
 }

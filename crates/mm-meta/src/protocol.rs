@@ -277,10 +277,12 @@ pub enum TransactionResponse {
     Details(Vec<DecisionDetail>),
     /// Transaction was discarded.
     Discarded(DiscardSummary),
-    /// Result of `BatchApproveReleases`: number of decisions staged into
-    /// the new transaction and number of tracks skipped due to missing
-    /// MB cache data.
-    BatchApprovalStaged { staged: usize, skipped: usize },
+    /// Result of `BatchApproveReleases`: full breakdown of staged vs
+    /// skipped at both release and track granularity. `staged_releases`
+    /// is the number of decisions added to the new transaction;
+    /// `staged_tracks` is the total per-inode tag-op groups across them.
+    /// Skipped counts cover entries dropped due to missing MB cache.
+    BatchApprovalStaged(crate::external::approval::ApprovalSummary),
     /// Transaction-specific error.
     Error(TransactionError),
 }

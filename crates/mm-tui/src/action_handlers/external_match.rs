@@ -563,8 +563,8 @@ impl App {
         // a gesture (decisions are constructed server-side).
         let _ = gesture;
         match self.batch_approve_releases(release_ids) {
-            Ok((staged, skipped)) => {
-                self.status_message = Some(format_approval_message(staged, skipped));
+            Ok(summary) => {
+                self.status_message = Some(format_approval_summary(&summary));
                 self.after_staging_decisions();
             }
             Err(e) => {
@@ -617,7 +617,7 @@ impl App {
             });
 
         // Use shared approval builder (same logic for TUI and web)
-        let (decisions, skipped) = build_release_approval_decisions(
+        let (decisions, summary) = build_release_approval_decisions(
             &approval_inputs,
             &staging.bundle,
             &staging.inode_tags,
@@ -632,7 +632,6 @@ impl App {
             return;
         }
 
-        let approved = decisions.len();
         for ad in decisions {
             let key = mm_ui::decision_keys::mb_release_approval(ad.release_id);
             let mutations: Vec<Mutation> = ad
@@ -653,24 +652,32 @@ impl App {
             );
         }
 
-        self.status_message = Some(format_approval_message(approved, skipped));
+        self.status_message = Some(format_approval_summary(&summary));
         self.after_staging_decisions();
     }
 }
 
-fn format_approval_message(approved: usize, skipped: usize) -> String {
-    if skipped > 0 {
-        format!(
-            "Approved {} release{} ({} files skipped \u{2014} missing cache)",
-            approved,
-            if approved == 1 { "" } else { "s" },
-            skipped,
-        )
+/// Render a status line from an `ApprovalSummary`.
+///
+/// Format: `Staged 3699 releases [12345 tracks]; skipped 3034 tracks across 1 release`
+/// (the second clause is omitted when nothing was skipped).
+fn format_approval_summary(
+    summary: &mm_meta::external::approval::ApprovalSummary,
+) -> String {
+    use mm_utils::count_noun;
+    let staged = format!(
+        "Staged {} [{}]",
+        count_noun(summary.staged_releases, "release"),
+        count_noun(summary.staged_tracks, "track"),
+    );
+    if summary.skipped_tracks == 0 && summary.skipped_releases == 0 {
+        staged
     } else {
         format!(
-            "Approved {} release{}",
-            approved,
-            if approved == 1 { "" } else { "s" },
+            "{}; skipped {} across {}",
+            staged,
+            count_noun(summary.skipped_tracks, "track"),
+            count_noun(summary.skipped_releases, "release"),
         )
     }
 }

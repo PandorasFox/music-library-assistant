@@ -429,12 +429,12 @@ impl super::Witch {
     /// opens a fresh one, and streams all decisions in via `add_decision`.
     /// Does NOT confirm — operator reviews and confirms separately.
     ///
-    /// Returns `(staged, skipped)` — number of decisions added to the new
-    /// transaction and number of tracks skipped due to missing MB cache data.
+    /// Returns the full `ApprovalSummary` (staged + skipped at both release
+    /// and track granularity) so callers can render an unambiguous status.
     pub fn batch_approve_releases(
         &mut self,
         release_ids: Vec<String>,
-    ) -> Result<(usize, usize), TransactionError> {
+    ) -> Result<mm_meta::external::approval::ApprovalSummary, TransactionError> {
         if release_ids.is_empty() {
             return Err(TransactionError::Other(
                 "no release IDs supplied".to_string(),
@@ -540,22 +540,21 @@ impl super::Witch {
         ));
 
         // 6. Build decisions (pure transformation, no DB).
-        let (decisions, skipped): (
-            Vec<crate::meta::views::external_matches::ApprovalDecision>,
-            usize,
-        ) = mm_meta::external::approval::build_release_approval_decisions(
-            &approval_inputs,
-            &staging.bundle,
-            &staging.inode_tags,
-            &locales,
-            &routing,
-            &tag_names,
-        );
-        let staged = decisions.len();
-        if staged == 0 {
+        let (decisions, summary) =
+            mm_meta::external::approval::build_release_approval_decisions(
+                &approval_inputs,
+                &staging.bundle,
+                &staging.inode_tags,
+                &locales,
+                &routing,
+                &tag_names,
+            );
+        if decisions.is_empty() {
             return Err(TransactionError::Other(format!(
-                "no tag operations produced (skipped {skipped} tracks — \
-                 likely missing recording data in MB cache)"
+                "no tag operations produced (skipped {} across {} — \
+                 likely missing recording data in MB cache)",
+                mm_utils::count_noun(summary.skipped_tracks, "track"),
+                mm_utils::count_noun(summary.skipped_releases, "release"),
             )));
         }
 
@@ -572,14 +571,18 @@ impl super::Witch {
             let _ = self.discard_transaction();
         }
         let label = format!(
-            "Approve {staged} release{}",
-            if staged == 1 { "" } else { "s" }
+            "Approve {}",
+            mm_utils::count_noun(summary.staged_releases, "release"),
         );
         self.start_transaction(&label)?;
 
         crate::logging::log_general(format!(
-            "[BATCH_APPROVE] streaming {} decisions into transaction (skipped {})",
-            staged, skipped
+            "[BATCH_APPROVE] streaming {} releases [{} tracks] into transaction \
+             (skipped {} tracks across {} releases)",
+            summary.staged_releases,
+            summary.staged_tracks,
+            summary.skipped_tracks,
+            summary.skipped_releases,
         ));
 
         for ad in decisions {
@@ -605,6 +608,6 @@ impl super::Witch {
             )?;
         }
 
-        Ok((staged, skipped))
+        Ok(summary)
     }
 }

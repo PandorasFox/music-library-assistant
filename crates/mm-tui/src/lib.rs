@@ -964,17 +964,16 @@ impl App {
 
     /// Server-side bulk approval. Single round-trip: server loads review +
     /// staging data, builds decisions, discards any open txn, opens a fresh
-    /// one, and stages all decisions. Returns `(staged, skipped)`.
+    /// one, and stages all decisions. Returns the full `ApprovalSummary`.
     pub(crate) fn batch_approve_releases(
         &mut self,
         release_ids: Vec<String>,
-    ) -> Result<(usize, usize), mm_meta::protocol::ProtocolError> {
+    ) -> Result<mm_meta::external::approval::ApprovalSummary, mm_meta::protocol::ProtocolError>
+    {
         match self.send_transaction(
             mm_meta::protocol::TransactionPayload::BatchApproveReleases { release_ids },
         ) {
-            mm_meta::protocol::TransactionResponse::BatchApprovalStaged { staged, skipped } => {
-                Ok((staged, skipped))
-            }
+            mm_meta::protocol::TransactionResponse::BatchApprovalStaged(summary) => Ok(summary),
             mm_meta::protocol::TransactionResponse::Error(e) => {
                 Err(mm_meta::protocol::ProtocolError::Transaction(e))
             }

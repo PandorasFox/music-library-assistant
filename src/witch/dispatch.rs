@@ -195,11 +195,8 @@ impl super::Witch {
                                 }
                                 TransactionPayload::BatchApproveReleases { release_ids } => {
                                     match w.batch_approve_releases(release_ids) {
-                                        Ok((staged, skipped)) => {
-                                            TransactionResponse::BatchApprovalStaged {
-                                                staged,
-                                                skipped,
-                                            }
+                                        Ok(summary) => {
+                                            TransactionResponse::BatchApprovalStaged(summary)
                                         }
                                         Err(e) => TransactionResponse::Error(e),
                                     }

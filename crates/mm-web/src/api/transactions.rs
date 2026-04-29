@@ -49,9 +49,12 @@ fn tx_to_json(tr: TransactionResponse) -> Result<Json<serde_json::Value>, ApiErr
         TransactionResponse::Discarded(_) => {
             Ok(Json(serde_json::json!({"discarded": true})))
         }
-        TransactionResponse::BatchApprovalStaged { staged, skipped } => Ok(Json(
-            serde_json::json!({"staged": staged, "skipped": skipped}),
-        )),
+        TransactionResponse::BatchApprovalStaged(s) => Ok(Json(serde_json::json!({
+            "staged_releases": s.staged_releases,
+            "staged_tracks": s.staged_tracks,
+            "skipped_tracks": s.skipped_tracks,
+            "skipped_releases": s.skipped_releases,
+        }))),
         TransactionResponse::Error(e) => Err(ProtocolError::Transaction(e).into()),
     }
 }
@@ -199,9 +202,12 @@ pub async fn approve_releases(
     )
     .await?;
     match tr {
-        TransactionResponse::BatchApprovalStaged { staged, skipped } => Ok(Json(
-            serde_json::json!({ "staged": staged, "skipped": skipped }),
-        )),
+        TransactionResponse::BatchApprovalStaged(s) => Ok(Json(serde_json::json!({
+            "staged_releases": s.staged_releases,
+            "staged_tracks": s.staged_tracks,
+            "skipped_tracks": s.skipped_tracks,
+            "skipped_releases": s.skipped_releases,
+        }))),
         TransactionResponse::Error(e) => Err(ProtocolError::Transaction(e).into()),
         other => Err(ApiError::Internal(format!(
             "unexpected response from BatchApproveReleases: {other:?}"

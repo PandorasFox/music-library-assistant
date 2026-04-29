@@ -11,6 +11,29 @@ import type {
   ReviewableRelease,
 } from "../api/generated/types";
 
+// -- Helpers --
+
+function pluralS(n: number): string {
+  return n === 1 ? "" : "s";
+}
+
+function countNoun(n: number, noun: string): string {
+  return `${n} ${noun}${pluralS(n)}`;
+}
+
+function formatApprovalSummary(s: {
+  staged_releases: number;
+  staged_tracks: number;
+  skipped_tracks: number;
+  skipped_releases: number;
+}): string {
+  const staged = `Staged ${countNoun(s.staged_releases, "release")} [${countNoun(s.staged_tracks, "track")}]`;
+  if (s.skipped_tracks === 0 && s.skipped_releases === 0) {
+    return staged;
+  }
+  return `${staged}; skipped ${countNoun(s.skipped_tracks, "track")} across ${countNoun(s.skipped_releases, "release")}`;
+}
+
 // -- Summary page --
 
 function PackingRow({
@@ -237,15 +260,13 @@ function ReleaseReview({
     setApproving(true);
     setMessage(null);
     try {
-      const res = await post<{ staged: number; skipped: number }>(
-        "/tx/approve-releases",
-        { release_ids: ids },
-      );
-      setMessage(
-        res.skipped > 0
-          ? `Staged ${res.staged} release(s); skipped ${res.skipped} track(s) — missing MB cache`
-          : `Staged ${res.staged} release(s)`
-      );
+      const res = await post<{
+        staged_releases: number;
+        staged_tracks: number;
+        skipped_tracks: number;
+        skipped_releases: number;
+      }>("/tx/approve-releases", { release_ids: ids });
+      setMessage(formatApprovalSummary(res));
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
     } finally {

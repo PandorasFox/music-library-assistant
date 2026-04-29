@@ -1175,120 +1175,110 @@ async fn execute_cover_art_fetch(
     let cache_json = serde_json::to_string(&listing).ok();
     let image_count = listing.images.len() as i64;
 
+    // Phase 1: Select best candidate per wanted type.
+    // When multiple images claim the same type, probe thumbnails and prefer
+    // the most square (closest to 1:1 aspect ratio) — filters out combined
+    // front+back scans that uploaders sometimes tag as "Front".
+    let selected = select_best_candidates(client, release_id, &listing, wanted_types).await;
+
     let mut written = 0usize;
     let mut skipped = 0usize;
     let mut upgraded = 0usize;
     let mut sidecar_replacements = Vec::new();
 
-    for image in &listing.images {
-        for wanted_type in wanted_types {
-            if !image.types.iter().any(|t| t == wanted_type) {
-                continue;
-            }
+    // Phase 2: Process selected candidates with sanctity logic.
+    for (wanted_type, image) in &selected {
+        let (sidecar_name, existing_dims) = match wanted_type.as_str() {
+            "Front" => ("cover", existing_front),
+            "Back" => ("back", existing_back),
+            _ => continue,
+        };
 
-            let (sidecar_name, existing_dims) = match wanted_type.as_str() {
-                "Front" => ("cover", existing_front),
-                "Back" => ("back", existing_back),
-                _ => continue,
-            };
-
-            // Existing art: behavior depends on sanctity setting
-            if existing_dims.is_some() {
-                match sanctity {
-                    CoverArtSanctity::DontTouch => {
-                        skipped += 1;
-                        continue;
-                    }
-                    CoverArtSanctity::ReplaceIfBetter | CoverArtSanctity::ReplaceAlways => {
-                        // Need to download to compare or replace
-                    }
-                }
-            }
-
-            // Download the original image
-            let downloaded = match client.download_image(&image.image).await {
-                Ok(img) => img,
-                Err(e) => {
-                    crate::logging::log_error(format!(
-                        "[FETCH] CAA download failed for {} ({}): {:#}",
-                        release_id, wanted_type, e
-                    ));
+        // Existing art: behavior depends on sanctity setting
+        if existing_dims.is_some() {
+            match sanctity {
+                CoverArtSanctity::DontTouch => {
                     skipped += 1;
                     continue;
                 }
-            };
+                CoverArtSanctity::ReplaceIfBetter | CoverArtSanctity::ReplaceAlways => {
+                    // Need to download to compare or replace
+                }
+            }
+        }
 
-            let ext = downloaded.format.extension();
-            let filename = format!("{}.{}", sidecar_name, ext);
-            let abs_dir = corpus_root.join(target_dir);
-            let abs_path = abs_dir.join(&filename);
+        // Download the full-size image
+        let downloaded = match client.download_image(&image.image).await {
+            Ok(img) => img,
+            Err(e) => {
+                crate::logging::log_error(format!(
+                    "[FETCH] CAA download failed for {} ({}): {:#}",
+                    release_id, wanted_type, e
+                ));
+                skipped += 1;
+                continue;
+            }
+        };
 
-            // Handle existing art replacement
-            if existing_dims.is_some() {
-                let existing_path = find_existing_sidecar(&abs_dir, sidecar_name);
-                if let Some(ref ep) = existing_path {
-                    if sanctity == CoverArtSanctity::ReplaceIfBetter {
-                        // Perceptual comparison: only replace if visually identical
-                        match std::fs::read(ep) {
-                            Ok(existing_bytes) => {
-                                match crate::corpus::image_hash::is_visual_match(&existing_bytes, &downloaded.bytes) {
-                                    Ok(true) => {} // proceed to stash + write below
-                                    Ok(false) => {
-                                        crate::logging::log_general(format!(
-                                            "[FETCH] CAA art for {} differs visually from existing, skipping",
-                                            release_id
-                                        ));
-                                        skipped += 1;
-                                        continue;
-                                    }
-                                    Err(e) => {
-                                        crate::logging::log_error(format!(
-                                            "[FETCH] Visual comparison failed for {}: {:#}",
-                                            release_id, e
-                                        ));
-                                        skipped += 1;
-                                        continue;
-                                    }
+        let ext = downloaded.format.extension();
+        let filename = format!("{}.{}", sidecar_name, ext);
+        let abs_dir = corpus_root.join(target_dir);
+        let abs_path = abs_dir.join(&filename);
+
+        // Handle existing art replacement
+        if existing_dims.is_some() {
+            let existing_path = find_existing_sidecar(&abs_dir, sidecar_name);
+            if let Some(ref ep) = existing_path {
+                if sanctity == CoverArtSanctity::ReplaceIfBetter {
+                    // Perceptual comparison: only replace if visually identical
+                    match std::fs::read(ep) {
+                        Ok(existing_bytes) => {
+                            match crate::corpus::image_hash::is_visual_match(&existing_bytes, &downloaded.bytes) {
+                                Ok(true) => {} // proceed to stash + write below
+                                Ok(false) => {
+                                    crate::logging::log_general(format!(
+                                        "[FETCH] CAA art for {} differs visually from existing, skipping",
+                                        release_id
+                                    ));
+                                    skipped += 1;
+                                    continue;
+                                }
+                                Err(e) => {
+                                    crate::logging::log_error(format!(
+                                        "[FETCH] Visual comparison failed for {}: {:#}",
+                                        release_id, e
+                                    ));
+                                    skipped += 1;
+                                    continue;
                                 }
                             }
-                            Err(e) => {
-                                crate::logging::log_error(format!(
-                                    "[FETCH] Failed to read existing sidecar {}: {:#}",
-                                    ep.display(), e
-                                ));
-                                skipped += 1;
-                                continue;
-                            }
+                        }
+                        Err(e) => {
+                            crate::logging::log_error(format!(
+                                "[FETCH] Failed to read existing sidecar {}: {:#}",
+                                ep.display(), e
+                            ));
+                            skipped += 1;
+                            continue;
                         }
                     }
-                    // ReplaceAlways: skip comparison, just stash and replace.
-                    // ReplaceIfBetter: comparison passed, stash and replace.
-                    // Defer to StashAndReplaceSidecars computation for proper
-                    // lifecycle: stash old → write new → clear signals → drop index.
-                    sidecar_replacements.push(
-                        mm_meta::computations::derivation::SidecarReplacement {
-                            existing_path: ep.clone(),
-                            new_path: abs_path.clone(),
-                            new_bytes: downloaded.bytes,
-                        },
-                    );
-                    upgraded += 1;
-                    continue;
                 }
-                // existing_dims indicated art exists but file wasn't found on disk —
-                // just write the new sidecar directly (no stash needed).
-                if let Err(e) = write_sidecar(&abs_path, &downloaded.bytes) {
-                    crate::logging::log_error(format!(
-                        "[FETCH] Failed to write cover art to {}: {:#}", abs_path.display(), e
-                    ));
-                    skipped += 1;
-                    continue;
-                }
-                written += 1;
+                // ReplaceAlways: skip comparison, just stash and replace.
+                // ReplaceIfBetter: comparison passed, stash and replace.
+                // Defer to StashAndReplaceSidecars computation for proper
+                // lifecycle: stash old → write new → clear signals → drop index.
+                sidecar_replacements.push(
+                    mm_meta::computations::derivation::SidecarReplacement {
+                        existing_path: ep.clone(),
+                        new_path: abs_path.clone(),
+                        new_bytes: downloaded.bytes,
+                    },
+                );
+                upgraded += 1;
                 continue;
             }
-
-            // Write new sidecar (no existing art)
+            // existing_dims indicated art exists but file wasn't found on disk —
+            // just write the new sidecar directly (no stash needed).
             if let Err(e) = write_sidecar(&abs_path, &downloaded.bytes) {
                 crate::logging::log_error(format!(
                     "[FETCH] Failed to write cover art to {}: {:#}", abs_path.display(), e
@@ -1296,12 +1286,23 @@ async fn execute_cover_art_fetch(
                 skipped += 1;
                 continue;
             }
-
-            crate::logging::log_general(format!(
-                "[FETCH] Wrote cover art: {}/{}", target_dir, filename
-            ));
             written += 1;
+            continue;
         }
+
+        // Write new sidecar (no existing art)
+        if let Err(e) = write_sidecar(&abs_path, &downloaded.bytes) {
+            crate::logging::log_error(format!(
+                "[FETCH] Failed to write cover art to {}: {:#}", abs_path.display(), e
+            ));
+            skipped += 1;
+            continue;
+        }
+
+        crate::logging::log_general(format!(
+            "[FETCH] Wrote cover art: {}/{}", target_dir, filename
+        ));
+        written += 1;
     }
 
     CoverArtResult {
@@ -1313,6 +1314,89 @@ async fn execute_cover_art_fetch(
         image_count,
         sidecar_replacements,
     }
+}
+
+/// Select the best candidate image for each wanted type from a CAA listing.
+///
+/// When multiple images match a type (e.g. two images both claiming "Front"),
+/// downloads the smallest available thumbnail for each to check dimensions,
+/// then picks the most square one. This filters out combined front+back scans
+/// that uploaders sometimes tag as just "Front".
+async fn select_best_candidates<'a>(
+    client: &CoverArtClient,
+    release_id: &str,
+    listing: &'a crate::external::coverart::CaaListing,
+    wanted_types: &[String],
+) -> Vec<(String, &'a crate::external::coverart::CaaImage)> {
+    let mut selected = Vec::new();
+
+    for wanted_type in wanted_types {
+        let candidates: Vec<_> = listing
+            .images
+            .iter()
+            .filter(|img| img.types.iter().any(|t| t == wanted_type))
+            .collect();
+
+        if candidates.is_empty() {
+            continue;
+        }
+
+        if candidates.len() == 1 {
+            selected.push((wanted_type.clone(), candidates[0]));
+            continue;
+        }
+
+        // Multiple candidates — probe thumbnails to find most square.
+        let best = select_most_square(client, release_id, wanted_type, &candidates).await;
+        selected.push((wanted_type.clone(), best));
+    }
+
+    selected
+}
+
+/// From multiple candidate images, select the one with aspect ratio closest
+/// to 1:1 by probing the smallest available thumbnail for each.
+async fn select_most_square<'a>(
+    client: &CoverArtClient,
+    release_id: &str,
+    wanted_type: &str,
+    candidates: &[&'a crate::external::coverart::CaaImage],
+) -> &'a crate::external::coverart::CaaImage {
+    use crate::external::coverart::aspect_ratio_score;
+
+    let mut best = candidates[0];
+    let mut best_score = f64::MAX;
+
+    for &candidate in candidates {
+        let Some(url) = candidate.thumbnails.smallest() else {
+            continue; // No thumbnail available, can't probe
+        };
+
+        match client.probe_dimensions(url).await {
+            Ok((w, h)) => {
+                let score = aspect_ratio_score(w, h);
+                if score < best_score {
+                    best_score = score;
+                    best = candidate;
+                }
+            }
+            Err(e) => {
+                crate::logging::log_general(format!(
+                    "[FETCH] Thumbnail probe failed for {} image {}: {:#}",
+                    release_id, candidate.id, e
+                ));
+            }
+        }
+    }
+
+    if best_score < f64::MAX {
+        crate::logging::log_general(format!(
+            "[FETCH] Selected most-square {} image (id {}, score {:.2}) from {} candidates for {}",
+            wanted_type, best.id, best_score, candidates.len(), release_id
+        ));
+    }
+
+    best
 }
 
 /// Write bytes to a sidecar file path, creating parent directories if needed.

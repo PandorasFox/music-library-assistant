@@ -119,6 +119,32 @@ pub fn detect_format_from_magic(bytes: &[u8]) -> ImageFormat {
     }
 }
 
+/// Extract image dimensions from raw bytes using header-only parsing.
+pub fn dimensions_from_bytes(bytes: &[u8]) -> Result<(u32, u32)> {
+    let size = imagesize::blob_size(bytes)
+        .map_err(|e| anyhow::anyhow!("failed to read image dimensions: {e:?}"))?;
+    Ok((size.width as u32, size.height as u32))
+}
+
+impl CaaThumbnails {
+    /// Return the smallest available thumbnail URL (250 → 500 → 1200).
+    pub fn smallest(&self) -> Option<&str> {
+        self.small
+            .as_deref()
+            .or(self.medium.as_deref())
+            .or(self.large.as_deref())
+    }
+}
+
+/// Aspect-ratio score: 0.0 = perfect square, higher = more rectangular.
+pub fn aspect_ratio_score(w: u32, h: u32) -> f64 {
+    if h == 0 || w == 0 {
+        return f64::MAX;
+    }
+    let ratio = w as f64 / h as f64;
+    (ratio - 1.0).abs()
+}
+
 // ============================================================================
 // Client
 // ============================================================================
@@ -158,6 +184,29 @@ impl CoverArtClient {
                 anyhow::bail!("CAA listing returned unexpected status {status} for {release_id}");
             }
         }
+    }
+
+    /// Probe an image URL (typically a thumbnail) to determine its dimensions
+    /// without keeping the full image in memory. Downloads the image, extracts
+    /// dimensions from the header, then discards the bytes.
+    pub async fn probe_dimensions(&self, url: &str) -> Result<(u32, u32)> {
+        let resp = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .context("thumbnail probe request failed")?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!("thumbnail probe returned status {} for {url}", resp.status());
+        }
+
+        let bytes = resp
+            .bytes()
+            .await
+            .context("failed to read thumbnail bytes")?;
+
+        dimensions_from_bytes(&bytes)
     }
 
     /// Download a cover art image from its full URL.

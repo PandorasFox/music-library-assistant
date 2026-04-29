@@ -478,8 +478,10 @@ fn seed_dirty_inodes_all(conn: &Connection) -> Result<()> {
             INSERT OR IGNORE INTO dirty_inodes (inode, computation_type, dirtied_at)
             SELECT a.inode, ?1, ?2
             FROM audio_info a
-            JOIN files f ON a.inode = f.inode
-            WHERE f.zone = 'corpus'
+            WHERE EXISTS (
+                SELECT 1 FROM inode_paths p
+                WHERE p.inode = a.inode AND p.zone = 'corpus'
+            )
             "#,
             params![comp_type, now],
         )?;
@@ -628,13 +630,19 @@ mod tests {
             )",
         ));
 
-        // Also need files/audio_info for the dirty inode seeding
+        // Also need inodes/inode_paths/audio_info/dirty_inodes for the dirty inode seeding
         t!(conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS files (
-                inode INTEGER NOT NULL, zone TEXT NOT NULL, path TEXT NOT NULL,
+            "CREATE TABLE IF NOT EXISTS inodes (
+                inode INTEGER PRIMARY KEY,
                 is_dir INTEGER NOT NULL, mtime_secs INTEGER NOT NULL,
                 mtime_nanos INTEGER NOT NULL, file_size INTEGER NOT NULL,
-                scanned_at INTEGER NOT NULL, PRIMARY KEY (inode, zone, path)
+                scanned_at INTEGER NOT NULL
+            )",
+        ));
+        t!(conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS inode_paths (
+                inode INTEGER NOT NULL, zone TEXT NOT NULL, path TEXT NOT NULL,
+                PRIMARY KEY (inode, zone, path)
             )",
         ));
         t!(conn.execute_batch(
@@ -652,7 +660,8 @@ mod tests {
         // Create all other tables normally
         for entry in schema_inventory() {
             if entry.name == "signal_file_in_corpus"
-                || entry.name == "files"
+                || entry.name == "inodes"
+                || entry.name == "inode_paths"
                 || entry.name == "audio_info"
                 || entry.name == "dirty_inodes"
             {

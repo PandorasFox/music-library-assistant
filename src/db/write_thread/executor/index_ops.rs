@@ -147,23 +147,31 @@ pub(super) fn execute_index_audio_file(
     // Wrap all operations in a single transaction
     let tx = db.conn().unchecked_transaction()?;
 
-    // Insert or replace files row
+    // Upsert inode-level metadata (mtime, size, etc.).
     tx.execute(
         r#"
-        INSERT OR REPLACE INTO files
-        (inode, zone, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        INSERT INTO inodes (inode, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
+        VALUES (?1, 0, ?2, ?3, ?4, ?5)
+        ON CONFLICT(inode) DO UPDATE SET
+            is_dir = excluded.is_dir,
+            mtime_secs = excluded.mtime_secs,
+            mtime_nanos = excluded.mtime_nanos,
+            file_size = excluded.file_size,
+            scanned_at = excluded.scanned_at
         "#,
         params![
             file_data.inode,
-            &file_data.zone,
-            path,
-            0i32, // is_dir = false for audio files
             file_data.mtime_secs,
             file_data.mtime_nanos,
             file_data.file_size,
             scanned_at,
         ],
+    )?;
+
+    // Insert path mapping (idempotent on conflict).
+    tx.execute(
+        "INSERT OR IGNORE INTO inode_paths (inode, zone, path) VALUES (?1, ?2, ?3)",
+        params![file_data.inode, &file_data.zone, path],
     )?;
 
     // Convert fingerprint to BLOB if present
@@ -218,20 +226,24 @@ pub(super) fn execute_index_audio_file(
 /// preventing cross-zone collateral damage.
 pub(super) fn execute_drop_from_index(db: &Database, inode: i64, zone: &str) -> anyhow::Result<()> {
 
-    // Delete the file entry scoped to zone (audio_info, corpus_tags cascade automatically)
+    // Delete the path mapping scoped to zone (audio_info, corpus_tags cascade
+    // via the inode FK once the inodes row is removed below).
     db.conn().execute(
-        "DELETE FROM files WHERE inode = ?1 AND zone = ?2",
+        "DELETE FROM inode_paths WHERE inode = ?1 AND zone = ?2",
         params![inode, zone],
     )?;
 
-    // If no other file entries reference this inode, clean up audio_info
-    // (FK CASCADE should handle this, but be explicit)
+    // If no other paths reference this inode, clean up the inode row and the
+    // associated audio metadata. inode_paths CASCADEs from inodes, so removing
+    // the inode row also drops any remaining paths (defensive — should be 0).
     let count: i64 = db.conn().query_row(
-        "SELECT COUNT(*) FROM files WHERE inode = ?1",
+        "SELECT COUNT(*) FROM inode_paths WHERE inode = ?1",
         params![inode],
         |row| row.get(0),
     )?;
     if count == 0 {
+        db.conn()
+            .execute("DELETE FROM inodes WHERE inode = ?1", params![inode])?;
         db.conn()
             .execute("DELETE FROM audio_info WHERE inode = ?1", params![inode])?;
         // Cascade to external matching data (ghost AcoustID matches, retries)
@@ -372,10 +384,31 @@ pub(super) fn execute_update_track_path_with_metadata(
     // Wrap all operations in a single transaction
     let tx = db.conn().unchecked_transaction()?;
 
-    // Update files table using inode+zone for precise targeting
+    // Update inode-level metadata for the new inode (file_size, scanned_at).
+    // The new inode row may not exist yet if this is a fresh transcode target;
+    // upsert it. Preserve mtime from the old inode if present.
+    let (old_mtime_secs, old_mtime_nanos): (i64, i64) = tx
+        .query_row(
+            "SELECT mtime_secs, mtime_nanos FROM inodes WHERE inode = ?1",
+            params![old_inode],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap_or((0, 0));
+
+    tx.execute(
+        "INSERT INTO inodes (inode, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
+         VALUES (?1, 0, ?2, ?3, ?4, ?5)
+         ON CONFLICT(inode) DO UPDATE SET
+             file_size = excluded.file_size,
+             scanned_at = excluded.scanned_at",
+        params![new_inode, old_mtime_secs, old_mtime_nanos, new_file_size, scanned_at],
+    )?;
+
+    // Update the path mapping: rebind (zone, old_path) → (zone, new_path) and,
+    // if the inode changed, point the row at the new inode.
     let rows_updated = tx.execute(
-        "UPDATE files SET path = ?1, inode = ?2, file_size = ?3, scanned_at = ?4 WHERE inode = ?5 AND zone = ?6",
-        params![new_path, new_inode, new_file_size, scanned_at, old_inode, zone],
+        "UPDATE inode_paths SET path = ?1, inode = ?2 WHERE inode = ?3 AND zone = ?4",
+        params![new_path, new_inode, old_inode, zone],
     )?;
 
     if rows_updated == 0 {
@@ -417,11 +450,15 @@ pub(super) fn execute_update_track_path_with_metadata(
     // Clean up old inode if orphaned
     if old_inode != new_inode {
         let count: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM files WHERE inode = ?1",
+            "SELECT COUNT(*) FROM inode_paths WHERE inode = ?1",
             params![old_inode],
             |row| row.get(0),
         )?;
         if count == 0 {
+            tx.execute(
+                "DELETE FROM inodes WHERE inode = ?1",
+                params![old_inode],
+            )?;
             tx.execute(
                 "DELETE FROM audio_info WHERE inode = ?1",
                 params![old_inode],
@@ -469,12 +506,13 @@ pub(super) fn execute_upsert_file_entry(
 ) -> anyhow::Result<()> {
     let scanned_at = current_unix_secs();
 
-    // Upsert into files table
+    // Upsert inode-level metadata.
     db.conn().execute(
         r#"
-        INSERT INTO files (inode, zone, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
-        VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7)
-        ON CONFLICT(inode, zone, path) DO UPDATE SET
+        INSERT INTO inodes (inode, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
+        VALUES (?1, 0, ?2, ?3, ?4, ?5)
+        ON CONFLICT(inode) DO UPDATE SET
+            is_dir = excluded.is_dir,
             mtime_secs = excluded.mtime_secs,
             mtime_nanos = excluded.mtime_nanos,
             file_size = excluded.file_size,
@@ -482,13 +520,17 @@ pub(super) fn execute_upsert_file_entry(
         "#,
         params![
             file_entry.inode,
-            zone,
-            path,
             file_entry.mtime_secs,
             file_entry.mtime_nanos,
             file_entry.file_size,
             scanned_at,
         ],
+    )?;
+
+    // Insert path mapping (idempotent on conflict).
+    db.conn().execute(
+        "INSERT OR IGNORE INTO inode_paths (inode, zone, path) VALUES (?1, ?2, ?3)",
+        params![file_entry.inode, zone, path],
     )?;
 
     Ok(())
@@ -506,14 +548,25 @@ pub(super) fn execute_index_directory(
 ) -> anyhow::Result<()> {
     let scanned_at = current_unix_secs();
 
-    // Insert or replace directory entry
+    // Upsert inode-level metadata for the directory.
     db.conn().execute(
         r#"
-        INSERT OR REPLACE INTO files
-        (inode, zone, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
-        VALUES (?1, ?2, ?3, 1, ?4, ?5, 0, ?6)
+        INSERT INTO inodes (inode, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
+        VALUES (?1, 1, ?2, ?3, 0, ?4)
+        ON CONFLICT(inode) DO UPDATE SET
+            is_dir = excluded.is_dir,
+            mtime_secs = excluded.mtime_secs,
+            mtime_nanos = excluded.mtime_nanos,
+            file_size = excluded.file_size,
+            scanned_at = excluded.scanned_at
         "#,
-        params![inode, zone, path, mtime_secs, mtime_nanos, scanned_at,],
+        params![inode, mtime_secs, mtime_nanos, scanned_at],
+    )?;
+
+    // Insert path mapping (idempotent on conflict).
+    db.conn().execute(
+        "INSERT OR IGNORE INTO inode_paths (inode, zone, path) VALUES (?1, ?2, ?3)",
+        params![inode, zone, path],
     )?;
 
     Ok(())
@@ -531,17 +584,25 @@ pub(super) fn execute_index_image_file(
 ) -> anyhow::Result<()> {
     let scanned_at = current_unix_secs();
 
+    // Upsert inode-level metadata.
     db.conn().execute(
         r#"
-        INSERT INTO files (inode, zone, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
-        VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7)
-        ON CONFLICT(inode, zone, path) DO UPDATE SET
+        INSERT INTO inodes (inode, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
+        VALUES (?1, 0, ?2, ?3, ?4, ?5)
+        ON CONFLICT(inode) DO UPDATE SET
+            is_dir = excluded.is_dir,
             mtime_secs = excluded.mtime_secs,
             mtime_nanos = excluded.mtime_nanos,
             file_size = excluded.file_size,
             scanned_at = excluded.scanned_at
         "#,
-        params![inode, zone, path, mtime_secs, mtime_nanos, file_size, scanned_at],
+        params![inode, mtime_secs, mtime_nanos, file_size, scanned_at],
+    )?;
+
+    // Insert path mapping (idempotent on conflict).
+    db.conn().execute(
+        "INSERT OR IGNORE INTO inode_paths (inode, zone, path) VALUES (?1, ?2, ?3)",
+        params![inode, zone, path],
     )?;
 
     Ok(())

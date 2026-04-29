@@ -1009,10 +1009,10 @@ fn populate_cover_art_queue(
     // assignment — release_packing_scores has ALL candidates including losers.
     let mut release_dirs: HashMap<String, String> = HashMap::new();
     let sql = r#"
-        SELECT DISTINCT rps.release_id, f.path
+        SELECT DISTINCT rps.release_id, p.path
         FROM release_packing_scores rps
-        JOIN files f ON rps.inode = f.inode
-        WHERE rps.is_optimal = 1 AND f.zone = 'corpus'
+        JOIN inode_paths p ON rps.inode = p.inode
+        WHERE rps.is_optimal = 1 AND p.zone = 'corpus'
           AND rps.release_id IN (
             SELECT substr(key, instr(key, ':') + 1) FROM signal_packed_release
           )
@@ -1038,11 +1038,11 @@ fn populate_cover_art_queue(
     // Also pick up release IDs from MUSICBRAINZ_ALBUMID tags (e.g. CD rips
     // matched via CDTOC that bypass the AcoustID → release packing pipeline).
     let tag_sql = r#"
-        SELECT DISTINCT ct.tag_value, f.path
+        SELECT DISTINCT ct.tag_value, p.path
         FROM corpus_tags ct
-        JOIN files f ON ct.inode = f.inode
+        JOIN inode_paths p ON ct.inode = p.inode
         WHERE ct.tag_name = 'MUSICBRAINZ_ALBUMID'
-          AND f.zone = 'corpus'
+          AND p.zone = 'corpus'
     "#;
     if let Ok(mut stmt) = db.conn().prepare(tag_sql) {
         let _ = stmt.query_map([], |row| {
@@ -1111,11 +1111,11 @@ fn get_existing_art_dims(db: &Database, dir: &str, role: &str) -> Option<(u32, u
     let sql = r#"
         SELECT ii.width, ii.height
         FROM image_info ii
-        JOIN files f ON ii.inode = f.inode
-        WHERE f.zone = 'corpus'
+        JOIN inode_paths p ON ii.inode = p.inode
+        WHERE p.zone = 'corpus'
           AND ii.role = ?1
-          AND f.path LIKE ?2
-          AND f.path NOT LIKE ?3
+          AND p.path LIKE ?2
+          AND p.path NOT LIKE ?3
         LIMIT 1
     "#;
     // Match files in this directory but not in subdirectories

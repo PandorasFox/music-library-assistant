@@ -87,10 +87,10 @@ impl Database {
         source_key: i64,
     ) -> Result<Vec<ExternalMatchRow>> {
         let mut stmt = self.conn().prepare(
-            r#"SELECT em.inode, em.recording_id, em.confidence, em.raw_response, f.path
+            r#"SELECT em.inode, em.recording_id, em.confidence, em.raw_response, p.path
                FROM external_matches em
-               JOIN files f ON em.inode = f.inode
-               WHERE f.zone = 'corpus' AND em.source = ?1
+               JOIN inode_paths p ON em.inode = p.inode
+               WHERE p.zone = 'corpus' AND em.source = ?1
                ORDER BY em.inode, em.confidence DESC"#,
         )?;
 
@@ -114,10 +114,10 @@ impl Database {
     /// of AcoustID JSON per row.
     pub fn get_external_matches_slim(&self, source_key: i64) -> Result<Vec<ExternalMatchRow>> {
         let mut stmt = self.conn().prepare(
-            r#"SELECT em.inode, em.recording_id, em.confidence, NULL, f.path
+            r#"SELECT em.inode, em.recording_id, em.confidence, NULL, p.path
                FROM external_matches em
-               JOIN files f ON em.inode = f.inode
-               WHERE f.zone = 'corpus' AND em.source = ?1
+               JOIN inode_paths p ON em.inode = p.inode
+               WHERE p.zone = 'corpus' AND em.source = ?1
                ORDER BY em.inode, em.confidence DESC"#,
         )?;
 
@@ -156,7 +156,7 @@ impl Database {
             let conditions: Vec<String> = excluded_prefixes
                 .iter()
                 .enumerate()
-                .map(|(i, _)| format!("f.path NOT LIKE ?{} ESCAPE '\\'", i + 3))
+                .map(|(i, _)| format!("p.path NOT LIKE ?{} ESCAPE '\\'", i + 3))
                 .collect();
             format!("AND {}", conditions.join(" AND "))
         };
@@ -164,8 +164,8 @@ impl Database {
         let sql = format!(
             r#"SELECT a.inode, a.fingerprint, a.duration_ms
                FROM audio_info a
-               JOIN files f ON a.inode = f.inode
-               WHERE f.zone = 'corpus'
+               JOIN inode_paths p ON a.inode = p.inode
+               WHERE p.zone = 'corpus'
                  AND a.fingerprint IS NOT NULL
                  AND a.duration_ms IS NOT NULL
                  {exclusion_clause}
@@ -384,9 +384,9 @@ impl Database {
         let sql = r#"
             SELECT DISTINCT em.recording_id
             FROM external_matches em
-            JOIN files f ON em.inode = f.inode
+            JOIN inode_paths p ON em.inode = p.inode
             LEFT JOIN mb_recording_cache mrc ON em.recording_id = mrc.recording_id
-            WHERE f.zone = 'corpus' AND em.source = 1
+            WHERE p.zone = 'corpus' AND em.source = 1
               AND (mrc.recording_id IS NULL OR mrc.fetched_at < ?1)
         "#;
 
@@ -578,9 +578,9 @@ impl Database {
         let mut stmt = self.conn().prepare(
             "SELECT DISTINCT inode, path FROM release_packing_candidates \
              UNION \
-             SELECT DISTINCT s.inode, f.path FROM release_packing_scores s \
-             JOIN files f ON s.inode = f.inode \
-             WHERE f.zone = 'corpus' AND s.match_method = 1",
+             SELECT DISTINCT s.inode, p.path FROM release_packing_scores s \
+             JOIN inode_paths p ON s.inode = p.inode \
+             WHERE p.zone = 'corpus' AND s.match_method = 1",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
@@ -673,13 +673,14 @@ impl Database {
         assigned_inodes: &std::collections::HashSet<i64>,
     ) -> Result<Vec<UnassignedAudioFile>> {
         let mut stmt = self.conn().prepare(
-            "SELECT f.inode, f.path, hex(a.fingerprint), a.duration_ms \
-             FROM files f \
-             JOIN audio_info a ON f.inode = a.inode \
-             WHERE f.zone = 'corpus' AND f.is_dir = 0 \
-             AND f.path LIKE ?1 \
-             AND f.path NOT LIKE ?2 \
-             ORDER BY f.path",
+            "SELECT p.inode, p.path, hex(a.fingerprint), a.duration_ms \
+             FROM inode_paths p \
+             JOIN inodes i ON p.inode = i.inode \
+             JOIN audio_info a ON p.inode = a.inode \
+             WHERE p.zone = 'corpus' AND i.is_dir = 0 \
+             AND p.path LIKE ?1 \
+             AND p.path NOT LIKE ?2 \
+             ORDER BY p.path",
         )?;
         // Match files directly in parent_dir (not in subdirectories)
         let prefix = format!("{}/%", parent_dir);
@@ -717,7 +718,7 @@ impl Database {
             let conditions: Vec<String> = excluded_prefixes
                 .iter()
                 .enumerate()
-                .map(|(i, _)| format!("f.path NOT LIKE ?{} ESCAPE '\\'", i + 3))
+                .map(|(i, _)| format!("p.path NOT LIKE ?{} ESCAPE '\\'", i + 3))
                 .collect();
             format!("AND {}", conditions.join(" AND "))
         };
@@ -726,9 +727,9 @@ impl Database {
             r#"SELECT er.inode, er.fingerprint, a.duration_ms
                FROM external_retry er
                JOIN audio_info a ON er.inode = a.inode
-               JOIN files f ON er.inode = f.inode
+               JOIN inode_paths p ON er.inode = p.inode
                WHERE er.source = ?1
-                 AND f.zone = 'corpus'
+                 AND p.zone = 'corpus'
                  AND a.duration_ms IS NOT NULL
                  {exclusion_clause}
                ORDER BY er.retry_count ASC, er.failed_at ASC
@@ -769,9 +770,10 @@ impl Database {
     /// the release packing candidate pipeline (no AcoustID match).
     pub fn get_fingerprinted_corpus_inodes(&self) -> Result<Vec<(i64, String)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT f.inode, f.path FROM files f
-             JOIN audio_info a ON f.inode = a.inode
-             WHERE f.zone = 'corpus' AND f.is_dir = 0 AND a.fingerprint IS NOT NULL",
+            "SELECT p.inode, p.path FROM inode_paths p
+             JOIN inodes i ON p.inode = i.inode
+             JOIN audio_info a ON p.inode = a.inode
+             WHERE p.zone = 'corpus' AND i.is_dir = 0 AND a.fingerprint IS NOT NULL",
         )?;
         let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         Ok(rows.flatten().collect())

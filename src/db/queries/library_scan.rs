@@ -26,7 +26,7 @@ impl Database {
         let pattern = dir_like_pattern_str(library_name);
         let mut stmt = self.conn.prepare(
             r"SELECT path, inode
-             FROM files
+             FROM inode_paths
              WHERE zone = 'library' AND path LIKE ?1 ESCAPE '\'
              ORDER BY path",
         )?;
@@ -58,7 +58,11 @@ impl Database {
     ) -> bool {
         self.conn
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM files WHERE inode=?1 AND zone=?2 AND is_dir=1 AND mtime_secs=?3 AND mtime_nanos=?4)",
+                "SELECT EXISTS(\
+                   SELECT 1 FROM inode_paths p \
+                   JOIN inodes i ON p.inode = i.inode \
+                   WHERE p.inode=?1 AND p.zone=?2 AND i.is_dir=1 \
+                     AND i.mtime_secs=?3 AND i.mtime_nanos=?4)",
                 params![inode, zone, mtime_secs, mtime_nanos],
                 |row| row.get::<_, bool>(0),
             )
@@ -73,8 +77,9 @@ impl Database {
         &self,
     ) -> Result<std::collections::HashMap<String, (i64, i64, i64, i64)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT path, inode, mtime_secs, mtime_nanos, file_size
-             FROM files WHERE zone='library' AND is_dir=0",
+            "SELECT p.path, p.inode, i.mtime_secs, i.mtime_nanos, i.file_size
+             FROM inode_paths p JOIN inodes i ON p.inode = i.inode
+             WHERE p.zone='library' AND i.is_dir=0",
         )?;
 
         let mut map = std::collections::HashMap::new();
@@ -102,7 +107,7 @@ impl Database {
     pub fn get_all_library_files(&self) -> Result<Vec<LibraryScanEntry>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT path, inode FROM files WHERE zone = 'library' ORDER BY path")?;
+            .prepare("SELECT path, inode FROM inode_paths WHERE zone = 'library' ORDER BY path")?;
 
         let entries = stmt
             .query_map(params![], |row| {

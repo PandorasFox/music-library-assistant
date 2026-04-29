@@ -165,8 +165,12 @@ impl Database {
 
         // Only initialize schema on truly new databases (no tables yet).
         // Existing databases get schema changes through the migration system.
+        // Probe for the `inodes` table — the new schema's primary entity table —
+        // OR the legacy `files` table, so older databases that still need the
+        // split migration aren't re-initialized as if they were fresh.
         let table_count: i64 = db.conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'files'",
+            "SELECT COUNT(*) FROM sqlite_master \
+             WHERE type = 'table' AND name IN ('inodes', 'files')",
             [],
             |row| row.get(0),
         )?;

@@ -182,4 +182,4 @@ Signal tables scanned: UnindexedFile, MissingFile, MovedFile, HealthyFile, Corru
 
 ### Non-Signal Tracking: Sidecar Image Files
 
-Sidecar cover images (cover.jpg, folder.png, etc.) are tracked via the `files` table (zone='corpus') and `image_info` table (format, width, height, role) rather than signals. Image metadata is populated by the `IndexImageFile` computation. Deployment of sidecar images alongside audio files is handled by `HardLink` mutation. This follows the principle that signals are for actionable corpus health facts, not for inventory tracking that is better served by direct table storage.
+Sidecar cover images (cover.jpg, folder.png, etc.) are tracked via the `inode_paths` table (zone='corpus') joined with `inodes` (mtime, size) and `image_info` (format, width, height, role) rather than signals. Image metadata is populated by the `IndexImageFile` computation. Deployment of sidecar images alongside audio files is handled by `HardLink` mutation. This follows the principle that signals are for actionable corpus health facts, not for inventory tracking that is better served by direct table storage.

@@ -33,29 +33,30 @@ There Shall Not be any other ways to interface with the DB. We have very nice re
 
 ### Corpus vs Library File Queries
 
-**CRITICAL: The `files` table contains BOTH corpus files AND library files.** They are distinguished by the `zone` column (`'corpus'` vs `'library'`). The `audio_info` table contains audio metadata for files from BOTH zones.
+**CRITICAL: Path metadata is split across two tables — `inodes` (per-inode state: mtime, size, is_dir) and `inode_paths` (one row per (inode, zone, path) — multiple rows per inode possible for hardlinks across zones).** They are distinguished by the `zone` column on `inode_paths` (`'corpus'` vs `'library'`). The `audio_info` table contains audio metadata for files from BOTH zones (keyed by inode).
 
 **Health detection queries MUST filter by `zone = 'corpus'`.** Computations like duplicate detection, missing tag detection, and overlap analysis should only operate on corpus files. Library files are deployment targets, not sources of truth.
 
 **Correct pattern for corpus-only queries:**
 ```sql
--- When joining files with audio_info for health detection:
-SELECT ... FROM files f
-JOIN audio_info a ON f.inode = a.inode
-WHERE f.zone = 'corpus' AND ...
+-- When joining inode metadata + paths + audio_info for health detection:
+SELECT ... FROM inode_paths p
+JOIN inodes i ON p.inode = i.inode
+JOIN audio_info a ON p.inode = a.inode
+WHERE p.zone = 'corpus' AND i.is_dir = 0 AND ...
 
--- When querying audio_info directly, JOIN with files to filter:
+-- When querying audio_info directly, JOIN with inode_paths to filter by zone:
 SELECT a.fingerprint, GROUP_CONCAT(a.inode)
 FROM audio_info a
-JOIN files f ON a.inode = f.inode
-WHERE a.fingerprint IS NOT NULL AND f.zone = 'corpus'
+JOIN inode_paths p ON a.inode = p.inode
+WHERE a.fingerprint IS NOT NULL AND p.zone = 'corpus'
 GROUP BY a.fingerprint
 ```
 
 **Anti-patterns:**
-- Querying `audio_info` without joining `files` for zone filtering
-- Assuming all files in `files` table are corpus files
-- Using `files` queries without `WHERE zone = 'corpus'` in health detection
+- Querying `audio_info` without joining `inode_paths` for zone filtering
+- Assuming all rows in `inodes` are corpus inodes (they're not — library inodes coexist)
+- Using `inode_paths` queries without `WHERE zone = 'corpus'` in health detection
 
 **When library files ARE needed:**
 - `get_library_files()` - for deploy health checking

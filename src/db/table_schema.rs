@@ -57,25 +57,40 @@ pub fn schema_inventory() -> Vec<TableEntry> {
     // Core tables (irreplaceable data)
     // =================================================================
 
+    // Inode-level state: one row per filesystem inode. Path-independent
+    // metadata (mtime, size, is_dir) lives here; `inode_paths` maps inodes
+    // to one or more (zone, path) pairs.
     tables.push(TableEntry {
-        name: "files",
+        name: "inodes",
         kind: TableKind::Core,
-        create_sql: "CREATE TABLE IF NOT EXISTS files (
-            inode INTEGER NOT NULL,
-            zone TEXT NOT NULL,
-            path TEXT NOT NULL,
+        create_sql: "CREATE TABLE IF NOT EXISTS inodes (
+            inode INTEGER PRIMARY KEY,
             is_dir INTEGER NOT NULL,
             mtime_secs INTEGER NOT NULL,
             mtime_nanos INTEGER NOT NULL,
             file_size INTEGER NOT NULL,
-            scanned_at INTEGER NOT NULL,
+            scanned_at INTEGER NOT NULL
+        )",
+        index_sql: &[
+            "CREATE INDEX IF NOT EXISTS idx_inodes_is_dir ON inodes(is_dir)",
+        ],
+    });
+
+    // Path mapping: N rows per inode, possibly across zones. Hardlinks
+    // (corpus + library, or two paths within one zone) are first-class.
+    tables.push(TableEntry {
+        name: "inode_paths",
+        kind: TableKind::Core,
+        create_sql: "CREATE TABLE IF NOT EXISTS inode_paths (
+            inode INTEGER NOT NULL REFERENCES inodes(inode) ON DELETE CASCADE,
+            zone TEXT NOT NULL,
+            path TEXT NOT NULL,
             PRIMARY KEY (inode, zone, path)
         )",
         index_sql: &[
-            "CREATE INDEX IF NOT EXISTS idx_files_zone ON files(zone)",
-            "CREATE INDEX IF NOT EXISTS idx_files_inode ON files(inode)",
-            "CREATE INDEX IF NOT EXISTS idx_files_is_dir ON files(is_dir)",
-            "CREATE INDEX IF NOT EXISTS idx_files_path ON files(path)",
+            "CREATE INDEX IF NOT EXISTS idx_inode_paths_zone ON inode_paths(zone)",
+            "CREATE INDEX IF NOT EXISTS idx_inode_paths_path ON inode_paths(path)",
+            "CREATE INDEX IF NOT EXISTS idx_inode_paths_zone_path ON inode_paths(zone, path)",
         ],
     });
 

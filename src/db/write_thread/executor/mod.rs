@@ -156,18 +156,23 @@ fn execute_upsert_library_file(
 ) -> anyhow::Result<()> {
     let scanned_at = index_ops::current_unix_secs();
 
+    // Upsert inode-level metadata (mtime, size, etc.).
     db.conn().execute(
-        "INSERT OR REPLACE INTO files
-         (inode, zone, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
-         VALUES (?1, 'library', ?2, 0, ?3, ?4, ?5, ?6)",
-        params![
-            inode,
-            stored_path,
-            mtime_secs,
-            mtime_nanos,
-            file_size,
-            scanned_at
-        ],
+        "INSERT INTO inodes (inode, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
+         VALUES (?1, 0, ?2, ?3, ?4, ?5)
+         ON CONFLICT(inode) DO UPDATE SET
+             is_dir = excluded.is_dir,
+             mtime_secs = excluded.mtime_secs,
+             mtime_nanos = excluded.mtime_nanos,
+             file_size = excluded.file_size,
+             scanned_at = excluded.scanned_at",
+        params![inode, mtime_secs, mtime_nanos, file_size, scanned_at],
+    )?;
+
+    // Insert path mapping (idempotent on conflict).
+    db.conn().execute(
+        "INSERT OR IGNORE INTO inode_paths (inode, zone, path) VALUES (?1, 'library', ?2)",
+        params![inode, stored_path],
     )?;
 
     Ok(())
@@ -175,11 +180,32 @@ fn execute_upsert_library_file(
 
 /// Execute DeleteLibraryFile: remove a stale library file from the files table.
 fn execute_delete_library_file(db: &Database, stored_path: &str) -> anyhow::Result<()> {
+    // Find the inode for this library path before deleting, so we can clean
+    // up the inode row if no paths remain.
+    let inode_opt: Option<i64> = db.conn().query_row(
+        "SELECT inode FROM inode_paths WHERE zone = 'library' AND path = ?1",
+        params![stored_path],
+        |row| row.get(0),
+    ).ok();
 
     db.conn().execute(
-        "DELETE FROM files WHERE zone = 'library' AND path = ?1",
+        "DELETE FROM inode_paths WHERE zone = 'library' AND path = ?1",
         params![stored_path],
     )?;
+
+    if let Some(inode) = inode_opt {
+        let remaining: i64 = db.conn().query_row(
+            "SELECT COUNT(*) FROM inode_paths WHERE inode = ?1",
+            params![inode],
+            |row| row.get(0),
+        )?;
+        if remaining == 0 {
+            db.conn().execute(
+                "DELETE FROM inodes WHERE inode = ?1",
+                params![inode],
+            )?;
+        }
+    }
 
     Ok(())
 }
@@ -305,10 +331,12 @@ pub(super) fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             mtime_nanos,
         } => {
             with_retry("update_file_mtime", zone, || {
+                // mtime is now inode-level. The zone parameter is preserved in
+                // the API but no longer used in the WHERE clause.
                 let rows_affected = db.conn()
                     .execute(
-                        "UPDATE files SET mtime_secs = ?1, mtime_nanos = ?2 WHERE zone = ?3 AND inode = ?4",
-                        params![mtime_secs, mtime_nanos, zone, inode],
+                        "UPDATE inodes SET mtime_secs = ?1, mtime_nanos = ?2 WHERE inode = ?3",
+                        params![mtime_secs, mtime_nanos, inode],
                     )
                     .map_err(|e: rusqlite::Error| anyhow::anyhow!(e))?;
                 if rows_affected == 0 {

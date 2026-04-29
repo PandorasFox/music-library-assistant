@@ -290,9 +290,10 @@ impl Database {
     pub(super) fn get_file_type_breakdown(&self) -> Result<Vec<(String, usize)>> {
         let mut stmt = self.conn.prepare(
             r#"SELECT a.file_type, COUNT(*) as cnt
-               FROM files f
-               JOIN audio_info a ON f.inode = a.inode
-               WHERE f.zone = 'corpus' AND f.is_dir = 0
+               FROM inode_paths p
+               JOIN inodes i ON p.inode = i.inode
+               JOIN audio_info a ON p.inode = a.inode
+               WHERE p.zone = 'corpus' AND i.is_dir = 0
                GROUP BY a.file_type
                ORDER BY cnt DESC"#,
         )?;

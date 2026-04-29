@@ -38,7 +38,7 @@ impl Database {
                    COALESCE(date.tag_value, '') as date,
                    COALESCE(mb_release.tag_value, '') as mb_release_id
                FROM corpus_tags album
-               INNER JOIN files f ON album.inode = f.inode AND f.zone = 'corpus'
+               INNER JOIN inode_paths p ON album.inode = p.inode AND p.zone = 'corpus'
                LEFT JOIN corpus_tags album_artist
                    ON album.inode = album_artist.inode
                    AND UPPER(album_artist.tag_name) IN {album_artist_in}
@@ -98,7 +98,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             r#"SELECT ct_track.inode
                FROM corpus_tags ct_track
-               INNER JOIN files f ON ct_track.inode = f.inode AND f.zone = 'corpus'
+               INNER JOIN inode_paths p ON ct_track.inode = p.inode AND p.zone = 'corpus'
                INNER JOIN corpus_tags ct_release
                    ON ct_track.inode = ct_release.inode
                    AND UPPER(ct_release.tag_name) = UPPER(?2)
@@ -128,7 +128,7 @@ impl Database {
         let sql = format!(
             r#"SELECT t.tag_value, COUNT(DISTINCT t.inode) as file_count
                FROM {} t
-               INNER JOIN files f ON t.inode = f.inode AND f.zone = ?1
+               INNER JOIN inode_paths p ON t.inode = p.inode AND p.zone = ?1
                WHERE UPPER(t.tag_name) = UPPER(?2) AND t.tag_value IS NOT NULL AND t.tag_value != ''
                GROUP BY t.tag_value
                ORDER BY file_count DESC"#,
@@ -165,7 +165,7 @@ impl Database {
         let placeholders: Vec<&str> = values.iter().map(|_| "?").collect();
         let sql = format!(
             r#"SELECT DISTINCT t.inode FROM {} t
-               INNER JOIN files f ON t.inode = f.inode AND f.zone = ?1
+               INNER JOIN inode_paths p ON t.inode = p.inode AND p.zone = ?1
                WHERE REPLACE(REPLACE(REPLACE(REPLACE(UPPER(t.tag_name), '_', ''), '-', ''), ' ', ''), '.', '') = ?2
                AND t.tag_value IN ({})"#,
             Z::TAG_TABLE,
@@ -209,7 +209,7 @@ impl Database {
         let placeholders: Vec<&str> = values.iter().map(|_| "?").collect();
         let sql = format!(
             r#"SELECT DISTINCT t.tag_value, t.inode FROM {} t
-               INNER JOIN files f ON t.inode = f.inode AND f.zone = ?1
+               INNER JOIN inode_paths p ON t.inode = p.inode AND p.zone = ?1
                WHERE REPLACE(REPLACE(REPLACE(REPLACE(UPPER(t.tag_name), '_', ''), '-', ''), ' ', ''), '.', '') = ?2
                AND t.tag_value IN ({})"#,
             Z::TAG_TABLE,
@@ -256,7 +256,7 @@ impl Database {
     pub fn get_album_values_with_inodes(&self) -> Result<Vec<(i64, String)>> {
         let mut stmt = self.conn.prepare(
             r#"SELECT ct.inode, ct.tag_value FROM corpus_tags ct
-               INNER JOIN files f ON ct.inode = f.inode AND f.zone = 'corpus'
+               INNER JOIN inode_paths p ON ct.inode = p.inode AND p.zone = 'corpus'
                WHERE UPPER(ct.tag_name) = 'ALBUM' AND ct.tag_value IS NOT NULL AND ct.tag_value != ''"#,
         )?;
 
@@ -285,7 +285,7 @@ impl Database {
                                 WHERE ct4.inode = ct.inode AND UPPER(ct4.tag_name) = 'ALBUMARTIST'
                                 LIMIT 1), '')
                FROM corpus_tags ct
-               INNER JOIN files f ON ct.inode = f.inode AND f.zone = 'corpus'
+               INNER JOIN inode_paths p ON ct.inode = p.inode AND p.zone = 'corpus'
                WHERE UPPER(ct.tag_name) = 'TRACKNUMBER' AND ct.tag_value IS NOT NULL AND ct.tag_value != ''"#,
         )?;
 
@@ -330,7 +330,7 @@ impl Database {
         {
             let mut stmt = self.conn.prepare(
                 "SELECT s.inode, s.path FROM signal_mtime_only_mismatch s
-                 INNER JOIN files f ON f.inode = s.inode AND f.zone = 'corpus'
+                 INNER JOIN inode_paths p ON p.inode = s.inode AND p.zone = 'corpus'
                  ORDER BY s.path",
             )?;
             let rows = stmt.query_map(params![], |row| {
@@ -350,7 +350,7 @@ impl Database {
         {
             let mut stmt = self.conn.prepare(
                 "SELECT s.inode, s.path, s.data FROM signal_oob_tag_sync s
-                 INNER JOIN files f ON f.inode = s.inode AND f.zone = 'corpus'
+                 INNER JOIN inode_paths p ON p.inode = s.inode AND p.zone = 'corpus'
                  ORDER BY s.path",
             )?;
             let rows = stmt.query_map(params![], |row| {
@@ -385,7 +385,7 @@ impl Database {
         {
             let mut stmt = self.conn.prepare(
                 "SELECT s.inode, s.path, s.data FROM signal_oob_tag_conflict s
-                 INNER JOIN files f ON f.inode = s.inode AND f.zone = 'corpus'
+                 INNER JOIN inode_paths p ON p.inode = s.inode AND p.zone = 'corpus'
                  ORDER BY s.path",
             )?;
             let rows = stmt.query_map(params![], |row| {

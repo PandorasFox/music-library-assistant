@@ -338,9 +338,10 @@ When opening read-only from outside the container, SQLite reads the WAL automati
 These are the primary data tables — the ones you'll query most often:
 
 ```sql
--- files: Every file in the corpus and library zones
--- Key columns: inode, zone ('corpus'/'library'), path, file_size, mtime_secs
-SELECT zone, COUNT(*) FROM files GROUP BY zone;
+-- inodes: per-inode state (mtime, size, is_dir).
+-- inode_paths: maps inodes to one or more (zone, path) pairs.
+-- Hardlinks (corpus + library) share an inode; one row per (inode, zone, path).
+SELECT zone, COUNT(*) FROM inode_paths GROUP BY zone;
 
 -- audio_info: Audio metadata keyed by inode
 -- Key columns: inode, file_type, duration_ms, bitrate_kbps, sample_rate, has_pictures

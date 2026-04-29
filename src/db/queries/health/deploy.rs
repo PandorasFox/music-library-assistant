@@ -252,7 +252,7 @@ impl Database {
         for lib_name in configured_libraries {
             let pattern = super::super::dir_like_pattern_str(lib_name);
             let count: usize = self.conn.query_row(
-                "SELECT COUNT(*) FROM files WHERE zone = 'library' AND path LIKE ?1 ESCAPE '\\'",
+                "SELECT COUNT(*) FROM inode_paths WHERE zone = 'library' AND path LIKE ?1 ESCAPE '\\'",
                 params![pattern],
                 |row| row.get(0),
             )?;

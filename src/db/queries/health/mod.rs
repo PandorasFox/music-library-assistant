@@ -196,8 +196,9 @@ impl Database {
         use std::path::PathBuf;
 
         let mut stmt = self.conn.prepare(
-            r#"SELECT path, inode FROM files
-               WHERE is_dir = 1 AND zone = 'corpus'"#,
+            r#"SELECT p.path, p.inode FROM inode_paths p
+               JOIN inodes i ON p.inode = i.inode
+               WHERE i.is_dir = 1 AND p.zone = 'corpus'"#,
         )?;
         let rows = stmt.query_map(params![], |row| {
             let path: String = row.get(0)?;

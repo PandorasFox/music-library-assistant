@@ -29,61 +29,16 @@ pub struct DataMigrationEntry {
 /// Returns all registered data migrations.
 pub fn all_data_migrations() -> Vec<DataMigrationEntry> {
     vec![
-        DataMigrationEntry {
-            id: "2026-02-reseed-album-art-info",
-            description: "Re-seed album_art_info dirty inodes (fix: backfill was using unresolved relative paths)",
-            apply: |db| {
-                use rusqlite::params;
-                use std::time::{SystemTime, UNIX_EPOCH};
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
-                db.conn().execute(
-                    r#"
-                    INSERT OR IGNORE INTO dirty_inodes (inode, computation_type, dirtied_at)
-                    SELECT a.inode, 'album_art_info', ?1
-                    FROM audio_info a
-                    JOIN files f ON a.inode = f.inode
-                    WHERE f.zone = 'corpus' AND a.has_pictures = 1
-                    "#,
-                    params![now],
-                )?;
-                Ok(())
-            },
-        },
+        // The legacy `files`-targeting migrations (zone-prefix strip, inbox-zone
+        // removal, album_art_info reseed) ran in production months ago and are
+        // already recorded in `app_metadata`. They were removed during the
+        // inode-primary refactor (2026-04) because the `files` table no longer
+        // exists in fresh installs.
         DataMigrationEntry {
             id: "2026-03-clear-release-cache-for-tracklists",
             description: "Clear MB release cache to re-fetch with tracklist data (inc=recordings+media)",
             apply: |db| {
                 db.conn().execute("DELETE FROM mb_release_cache", [])?;
-                Ok(())
-            },
-        },
-        DataMigrationEntry {
-            id: "2026-03-strip-zone-prefix-from-paths",
-            description: "Strip zone prefix from file paths (zone is metadata, not path)",
-            apply: |db| {
-                let conn = db.conn();
-                // Corpus: strip "corpus/" prefix (7 chars, SUBSTR 1-based → start at 8)
-                conn.execute(
-                    "UPDATE files SET path = SUBSTR(path, 8) \
-                     WHERE zone = 'corpus' AND path LIKE 'corpus/%'",
-                    [],
-                )?;
-                // Inbox: strip "inbox/" prefix (6 chars → start at 7)
-                conn.execute(
-                    "UPDATE files SET path = SUBSTR(path, 7) \
-                     WHERE zone = 'inbox' AND path LIKE 'inbox/%'",
-                    [],
-                )?;
-                // Library: delete buggy "library/"-prefixed entries (sidecar images).
-                // Correct entries already exist from ReconcileLibraryFiles.
-                conn.execute(
-                    "DELETE FROM files \
-                     WHERE zone = 'library' AND path LIKE 'library/%'",
-                    [],
-                )?;
                 Ok(())
             },
         },
@@ -99,21 +54,103 @@ pub fn all_data_migrations() -> Vec<DataMigrationEntry> {
             },
         },
         DataMigrationEntry {
-            id: "2026-03-remove-inbox-zone",
-            description: "Remove inbox zone: delete inbox files and drop orphan inbox signal/tag tables",
+            id: "2026-04-split-files-into-inodes-and-inode-paths",
+            description: "Split files table into inodes (entity state) + inode_paths (1-to-many path mapping)",
             apply: |db| {
                 let conn = db.conn();
-                conn.execute("DELETE FROM files WHERE zone = 'inbox'", [])?;
-                conn.execute_batch(
-                    "DROP TABLE IF EXISTS inbox_tags;
-                     DROP TABLE IF EXISTS signal_file_in_inbox;
-                     DROP TABLE IF EXISTS signal_inbox_unindexed;
-                     DROP TABLE IF EXISTS signal_inbox_healthy;
-                     DROP TABLE IF EXISTS signal_inbox_corpus_match;
-                     DROP TABLE IF EXISTS signal_inbox_compound_tag;
-                     DROP TABLE IF EXISTS signal_inbox_tag_canonicity;
-                     DROP TABLE IF EXISTS signal_inbox_missing_tag;",
+
+                // No-op on fresh installs where `files` never existed.
+                let files_exists: bool = conn.query_row(
+                    "SELECT COUNT(*) > 0 FROM sqlite_master \
+                     WHERE type = 'table' AND name = 'files'",
+                    [],
+                    |row| row.get(0),
                 )?;
+                if !files_exists {
+                    crate::logging::log_general(
+                        "[MIGRATION] Split files table: no legacy `files` table; skipping",
+                    );
+                    return Ok(());
+                }
+
+                // Backfill `inodes`: one row per distinct inode. For hardlinks
+                // (same inode in multiple files rows) the data should agree, but
+                // we pick the row with the newest scanned_at as the canonical
+                // entity state and log when divergence is detected.
+                conn.execute(
+                    r#"
+                    INSERT OR IGNORE INTO inodes (inode, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
+                    SELECT inode, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at
+                    FROM files f1
+                    WHERE scanned_at = (
+                        SELECT MAX(scanned_at) FROM files f2 WHERE f2.inode = f1.inode
+                    )
+                    "#,
+                    [],
+                )?;
+
+                // Detect divergence (different mtime/size for same inode) and warn.
+                let divergent: i64 = conn.query_row(
+                    r#"
+                    SELECT COUNT(*) FROM (
+                        SELECT inode FROM files
+                        GROUP BY inode
+                        HAVING COUNT(DISTINCT mtime_secs) > 1
+                            OR COUNT(DISTINCT file_size) > 1
+                    )
+                    "#,
+                    [],
+                    |row| row.get(0),
+                ).unwrap_or(0);
+                if divergent > 0 {
+                    crate::logging::log_general(format!(
+                        "[MIGRATION] {} inodes had divergent mtime/size across files rows; \
+                         picked newest scanned_at as canonical",
+                        divergent
+                    ));
+                }
+
+                // Backfill `inode_paths`: every (inode, zone, path) row.
+                conn.execute(
+                    r#"
+                    INSERT OR IGNORE INTO inode_paths (inode, zone, path)
+                    SELECT inode, zone, path FROM files
+                    "#,
+                    [],
+                )?;
+
+                // Verify row counts before dropping the source table.
+                let files_count: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM files", [], |row| row.get(0),
+                )?;
+                let paths_count: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM inode_paths", [], |row| row.get(0),
+                )?;
+                let inodes_count: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM inodes", [], |row| row.get(0),
+                )?;
+                let distinct_inodes: i64 = conn.query_row(
+                    "SELECT COUNT(DISTINCT inode) FROM files", [], |row| row.get(0),
+                )?;
+
+                anyhow::ensure!(
+                    paths_count == files_count,
+                    "Path-row count mismatch: files={}, inode_paths={}",
+                    files_count, paths_count,
+                );
+                anyhow::ensure!(
+                    inodes_count == distinct_inodes,
+                    "Inode count mismatch: distinct(files.inode)={}, inodes={}",
+                    distinct_inodes, inodes_count,
+                );
+
+                crate::logging::log_general(format!(
+                    "[MIGRATION] Split files table: {} rows -> {} inodes + {} paths",
+                    files_count, inodes_count, paths_count,
+                ));
+
+                conn.execute_batch("DROP TABLE files")?;
+
                 Ok(())
             },
         },
@@ -161,4 +198,145 @@ pub fn mark_migration_applied(db: &Database, id: &str) -> Result<()> {
         [&key],
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mm_utils::t;
+
+    fn split_migration() -> &'static DataMigrationEntry {
+        all_data_migrations()
+            .into_iter()
+            .find(|m| m.id == "2026-04-split-files-into-inodes-and-inode-paths")
+            .map(Box::new)
+            .map(Box::leak)
+            .expect("migration registered")
+    }
+
+    fn fresh_test_db() -> Database {
+        Database::open_in_memory()
+    }
+
+    fn create_legacy_files_table(db: &Database) {
+        t!(db.conn().execute_batch(
+            "CREATE TABLE files (
+                inode INTEGER NOT NULL,
+                zone TEXT NOT NULL,
+                path TEXT NOT NULL,
+                is_dir INTEGER NOT NULL,
+                mtime_secs INTEGER NOT NULL,
+                mtime_nanos INTEGER NOT NULL,
+                file_size INTEGER NOT NULL,
+                scanned_at INTEGER NOT NULL,
+                PRIMARY KEY (inode, zone, path)
+            )",
+        ));
+    }
+
+    fn count(db: &Database, sql: &str) -> i64 {
+        t!(db.conn().query_row(sql, [], |row| row.get::<_, i64>(0)))
+    }
+
+    #[test]
+    fn test_split_migration_no_op_on_fresh_db() {
+        // Fresh in-memory DB has the new schema (inodes + inode_paths) and no `files` table.
+        let db = fresh_test_db();
+        let migration = split_migration();
+        // Should succeed and do nothing — `files` doesn't exist.
+        t!((migration.apply)(&db));
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM inodes"), 0);
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM inode_paths"), 0);
+    }
+
+    #[test]
+    fn test_split_migration_backfills_simple_files() {
+        let db = fresh_test_db();
+        create_legacy_files_table(&db);
+
+        // Three distinct inodes, single path each.
+        t!(db.conn().execute_batch(
+            "INSERT INTO files VALUES (100, 'corpus', 'a.flac', 0, 1, 0, 1024, 1000);
+             INSERT INTO files VALUES (101, 'corpus', 'b.flac', 0, 2, 0, 2048, 1001);
+             INSERT INTO files VALUES (102, 'library', 'lib/c.flac', 0, 3, 0, 3072, 1002);",
+        ));
+
+        let migration = split_migration();
+        t!((migration.apply)(&db));
+
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM inodes"), 3);
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM inode_paths"), 3);
+
+        // Verify a sample row shape.
+        let (mtime_secs, file_size): (i64, i64) = t!(db.conn().query_row(
+            "SELECT mtime_secs, file_size FROM inodes WHERE inode = 101",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ));
+        assert_eq!((mtime_secs, file_size), (2, 2048));
+
+        let path: String = t!(db.conn().query_row(
+            "SELECT path FROM inode_paths WHERE inode = 102 AND zone = 'library'",
+            [],
+            |row| row.get(0),
+        ));
+        assert_eq!(path, "lib/c.flac");
+
+        // Legacy table dropped.
+        let table_exists: i64 = t!(db.conn().query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='files'",
+            [],
+            |row| row.get(0),
+        ));
+        assert_eq!(table_exists, 0);
+    }
+
+    #[test]
+    fn test_split_migration_dedupes_hardlinks_across_zones() {
+        let db = fresh_test_db();
+        create_legacy_files_table(&db);
+
+        // Same inode 200 at corpus + library paths (cross-zone hardlink).
+        t!(db.conn().execute_batch(
+            "INSERT INTO files VALUES
+                (200, 'corpus',  'corpus/track.flac',  0, 5, 0, 4096, 1100),
+                (200, 'library', 'library/track.flac', 0, 5, 0, 4096, 1100);",
+        ));
+
+        let migration = split_migration();
+        t!((migration.apply)(&db));
+
+        // One inode entity, two paths.
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM inodes"), 1);
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM inode_paths"), 2);
+        assert_eq!(
+            count(&db, "SELECT COUNT(*) FROM inode_paths WHERE inode = 200"),
+            2,
+        );
+    }
+
+    #[test]
+    fn test_split_migration_picks_newest_scanned_at_on_divergence() {
+        let db = fresh_test_db();
+        create_legacy_files_table(&db);
+
+        // Same inode but with divergent mtime/size in two rows. Expected: pick
+        // the row with the larger scanned_at as the canonical entity.
+        t!(db.conn().execute_batch(
+            "INSERT INTO files VALUES
+                (300, 'corpus',  'old.flac', 0, 10, 0, 100, 500),
+                (300, 'library', 'new.flac', 0, 20, 0, 200, 999);",
+        ));
+
+        let migration = split_migration();
+        t!((migration.apply)(&db));
+
+        let (mtime_secs, file_size, scanned_at): (i64, i64, i64) = t!(db.conn().query_row(
+            "SELECT mtime_secs, file_size, scanned_at FROM inodes WHERE inode = 300",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ));
+        assert_eq!((mtime_secs, file_size, scanned_at), (20, 200, 999));
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM inode_paths"), 2);
+    }
 }

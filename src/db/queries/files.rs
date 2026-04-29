@@ -38,12 +38,12 @@ pub fn fingerprint_to_text(fp: &[u32]) -> String {
         .join(",")
 }
 
-// Column list for AudioFile queries (files JOIN audio_info).
+// Column list for AudioFile queries (inode_paths JOIN inodes JOIN audio_info).
 // The fingerprint column is parameterized because some callers use NULL
 // to avoid transferring ~7KB/file of fingerprint BLOBs needlessly.
 fn audio_file_select(fp_col: &str) -> String {
     format!(
-        r#"f.inode, f.zone, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
+        r#"p.inode, p.zone, p.path, i.is_dir, i.mtime_secs, i.mtime_nanos, i.file_size, i.scanned_at,
                 a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, {fp_col}, a.needs_tag_flush"#
     )
 }
@@ -62,8 +62,9 @@ impl Database {
     /// Use this for files that may not have been successfully indexed (e.g., corrupt files).
     pub fn get_file_entry_by_path(&self, path: &str, zone: &str) -> Result<Option<FileEntry>> {
         let result = self.conn.query_row(
-            "SELECT inode, zone, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at
-             FROM files WHERE path = ?1 AND zone = ?2",
+            "SELECT p.inode, p.zone, p.path, i.is_dir, i.mtime_secs, i.mtime_nanos, i.file_size, i.scanned_at
+             FROM inode_paths p JOIN inodes i ON p.inode = i.inode
+             WHERE p.path = ?1 AND p.zone = ?2",
             params![path, zone],
             Self::row_to_file_entry,
         );
@@ -86,9 +87,12 @@ impl Database {
         }
 
         let placeholders = (0..inodes.len()).map(|_| "?").collect::<Vec<_>>().join(",");
+        // mtime is inode-level. Filter by zone via inode_paths to make sure we
+        // only return inodes that have a path in the requested zone.
         let query = format!(
-            "SELECT inode, mtime_secs, mtime_nanos FROM files
-             WHERE zone = ? AND inode IN ({})",
+            "SELECT DISTINCT i.inode, i.mtime_secs, i.mtime_nanos
+             FROM inodes i JOIN inode_paths p ON p.inode = i.inode
+             WHERE p.zone = ? AND i.inode IN ({})",
             placeholders
         );
 
@@ -122,7 +126,10 @@ impl Database {
         &self,
         zone: Zone,
     ) -> Result<HashMap<i64, (i64, i64)>> {
-        let query = "SELECT inode, mtime_secs, mtime_nanos FROM files WHERE zone = ? AND is_dir = 0";
+        // mtime is inode-level. Filter by zone via inode_paths.
+        let query = "SELECT DISTINCT i.inode, i.mtime_secs, i.mtime_nanos
+                     FROM inodes i JOIN inode_paths p ON p.inode = i.inode
+                     WHERE p.zone = ? AND i.is_dir = 0";
         let mut stmt = self.conn.prepare(query)?;
         let zone_str = zone.as_str();
         let mut result = HashMap::new();
@@ -149,7 +156,7 @@ impl Database {
     /// corpus, so including library would produce ambiguous results.
     pub fn get_file_zone_and_path_by_inode(&self, inode: i64) -> Result<Option<(String, String)>> {
         let result = self.conn.query_row(
-            "SELECT zone, path FROM files WHERE inode = ?1 AND zone != 'library'",
+            "SELECT zone, path FROM inode_paths WHERE inode = ?1 AND zone != 'library'",
             [inode],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         );
@@ -168,7 +175,7 @@ impl Database {
 
         let placeholders = (0..inodes.len()).map(|_| "?").collect::<Vec<_>>().join(",");
         let query = format!(
-            "SELECT inode, path FROM files
+            "SELECT inode, path FROM inode_paths
              WHERE zone = ? AND inode IN ({})",
             placeholders
         );
@@ -217,7 +224,10 @@ impl Database {
     /// Get audio file (combined file entry + audio info) by path.
     pub fn get_audio_file_by_path(&self, path: &str) -> Result<Option<AudioFile>> {
         let sql = format!(
-            "SELECT {} FROM files f JOIN audio_info a ON f.inode = a.inode WHERE f.path = ?1",
+            "SELECT {} FROM inode_paths p \
+             JOIN inodes i ON p.inode = i.inode \
+             JOIN audio_info a ON p.inode = a.inode \
+             WHERE p.path = ?1",
             audio_file_select(FP_COL),
         );
         let result = self.conn.query_row(&sql, params![path], Self::row_to_audio_file);
@@ -241,8 +251,10 @@ impl Database {
     ) -> Result<Vec<AudioFile>> {
         let fp_col = if with_fingerprints { FP_COL } else { "NULL" };
         let sql = format!(
-            "SELECT {} FROM files f JOIN audio_info a ON f.inode = a.inode \
-             WHERE f.zone = ?1 AND f.is_dir = 0 ORDER BY f.path",
+            "SELECT {} FROM inode_paths p \
+             JOIN inodes i ON p.inode = i.inode \
+             JOIN audio_info a ON p.inode = a.inode \
+             WHERE p.zone = ?1 AND i.is_dir = 0 ORDER BY p.path",
             audio_file_select(fp_col),
         );
 
@@ -258,8 +270,10 @@ impl Database {
     /// in multiple zones (corpus and library for hard-linked files).
     pub fn get_audio_file_by_inode(&self, inode: i64, zone: Zone) -> Result<Option<AudioFile>> {
         let sql = format!(
-            "SELECT {} FROM files f JOIN audio_info a ON f.inode = a.inode \
-             WHERE f.inode = ?1 AND f.zone = ?2 AND f.is_dir = 0",
+            "SELECT {} FROM inode_paths p \
+             JOIN inodes i ON p.inode = i.inode \
+             JOIN audio_info a ON p.inode = a.inode \
+             WHERE p.inode = ?1 AND p.zone = ?2 AND i.is_dir = 0",
             audio_file_select(FP_COL),
         );
         let result = self.conn.query_row(&sql, params![inode, zone.as_str()], Self::row_to_audio_file);
@@ -284,8 +298,10 @@ impl Database {
         let placeholders: Vec<String> = (1..=inodes.len()).map(|i| format!("?{}", i)).collect();
 
         let sql = format!(
-            "SELECT {} FROM files f JOIN audio_info a ON f.inode = a.inode \
-             WHERE f.inode IN ({}) AND f.zone = '{}' AND f.is_dir = 0 ORDER BY f.path",
+            "SELECT {} FROM inode_paths p \
+             JOIN inodes i ON p.inode = i.inode \
+             JOIN audio_info a ON p.inode = a.inode \
+             WHERE p.inode IN ({}) AND p.zone = '{}' AND i.is_dir = 0 ORDER BY p.path",
             audio_file_select(FP_COL),
             placeholders.join(", "),
             zone.as_str(),
@@ -310,8 +326,10 @@ impl Database {
         let pattern = super::dir_like_pattern_str(path_prefix);
 
         let sql = format!(
-            "SELECT {} FROM files f JOIN audio_info a ON f.inode = a.inode \
-             WHERE f.zone = 'corpus' AND f.path LIKE ?1 ESCAPE '\\' AND f.is_dir = 0 ORDER BY f.path",
+            "SELECT {} FROM inode_paths p \
+             JOIN inodes i ON p.inode = i.inode \
+             JOIN audio_info a ON p.inode = a.inode \
+             WHERE p.zone = 'corpus' AND p.path LIKE ?1 ESCAPE '\\' AND i.is_dir = 0 ORDER BY p.path",
             audio_file_select(FP_COL),
         );
         let mut stmt = self.conn.prepare(&sql)?;
@@ -328,8 +346,10 @@ impl Database {
         let pattern = super::dir_like_pattern(dir_path);
 
         let sql = format!(
-            "SELECT {} FROM files f JOIN audio_info a ON f.inode = a.inode \
-             WHERE f.zone = 'corpus' AND f.path LIKE ?1 ESCAPE '\\' AND f.is_dir = 0 ORDER BY f.path",
+            "SELECT {} FROM inode_paths p \
+             JOIN inodes i ON p.inode = i.inode \
+             JOIN audio_info a ON p.inode = a.inode \
+             WHERE p.zone = 'corpus' AND p.path LIKE ?1 ESCAPE '\\' AND i.is_dir = 0 ORDER BY p.path",
             audio_file_select(FP_COL),
         );
         let mut stmt = self.conn.prepare(&sql)?;
@@ -345,10 +365,10 @@ impl Database {
     /// Returns: Vec<(inode, comma_separated_paths)>
     pub fn get_duplicate_inode_groups(&self) -> Result<Vec<(i64, String)>> {
         // Only detect duplicate inodes within corpus files
-        let query = r#"SELECT inode, GROUP_CONCAT(path) as paths
-                       FROM files
-                       WHERE is_dir = 0 AND zone = 'corpus'
-                       GROUP BY inode
+        let query = r#"SELECT p.inode, GROUP_CONCAT(p.path) as paths
+                       FROM inode_paths p JOIN inodes i ON p.inode = i.inode
+                       WHERE i.is_dir = 0 AND p.zone = 'corpus'
+                       GROUP BY p.inode
                        HAVING COUNT(*) > 1"#;
 
         let mut stmt = self.conn.prepare(query)?;
@@ -370,16 +390,17 @@ impl Database {
     ) -> Result<Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>)>>
     {
         let query = format!(
-            r#"SELECT f.inode, f.path,
-                   (SELECT tag_value FROM {tag_table} WHERE inode = f.inode AND UPPER(tag_name) = 'ALBUM' LIMIT 1) as album,
+            r#"SELECT p.inode, p.path,
+                   (SELECT tag_value FROM {tag_table} WHERE inode = p.inode AND UPPER(tag_name) = 'ALBUM' LIMIT 1) as album,
                    GROUP_CONCAT(UPPER(t.tag_name), ',') as present_tags,
-                   (SELECT tag_value FROM {tag_table} WHERE inode = f.inode AND UPPER(tag_name) = 'ARTIST' LIMIT 1) as artist,
-                   (SELECT tag_value FROM {tag_table} WHERE inode = f.inode AND UPPER(tag_name) = 'TITLE' LIMIT 1) as title
-            FROM files f
-            JOIN audio_info a ON f.inode = a.inode
-            LEFT JOIN {tag_table} t ON f.inode = t.inode
-            WHERE f.is_dir = 0 AND f.zone = ?1
-            GROUP BY f.inode"#
+                   (SELECT tag_value FROM {tag_table} WHERE inode = p.inode AND UPPER(tag_name) = 'ARTIST' LIMIT 1) as artist,
+                   (SELECT tag_value FROM {tag_table} WHERE inode = p.inode AND UPPER(tag_name) = 'TITLE' LIMIT 1) as title
+            FROM inode_paths p
+            JOIN inodes i ON p.inode = i.inode
+            JOIN audio_info a ON p.inode = a.inode
+            LEFT JOIN {tag_table} t ON p.inode = t.inode
+            WHERE i.is_dir = 0 AND p.zone = ?1
+            GROUP BY p.inode"#
         );
         let mut stmt = self.conn.prepare(&query)?;
         let rows = stmt.query_map(params![zone], |row| {
@@ -404,11 +425,12 @@ impl Database {
             SELECT album FROM (
                 SELECT ct_album.tag_value AS album,
                        COUNT(DISTINCT ct_artist.tag_value) AS artist_count
-                FROM files f
-                JOIN audio_info a ON f.inode = a.inode
-                JOIN corpus_tags ct_album ON f.inode = ct_album.inode AND UPPER(ct_album.tag_name) = 'ALBUM'
-                JOIN corpus_tags ct_artist ON f.inode = ct_artist.inode AND UPPER(ct_artist.tag_name) = 'ARTIST'
-                WHERE f.is_dir = 0 AND f.zone = 'corpus'
+                FROM inode_paths p
+                JOIN inodes i ON p.inode = i.inode
+                JOIN audio_info a ON p.inode = a.inode
+                JOIN corpus_tags ct_album ON p.inode = ct_album.inode AND UPPER(ct_album.tag_name) = 'ALBUM'
+                JOIN corpus_tags ct_artist ON p.inode = ct_artist.inode AND UPPER(ct_artist.tag_name) = 'ARTIST'
+                WHERE i.is_dir = 0 AND p.zone = 'corpus'
                 GROUP BY ct_album.tag_value
                 HAVING artist_count > 1
             )
@@ -433,7 +455,11 @@ impl Database {
     fn get_all_inodes_for_zone(&self, zone: &str) -> Result<HashMap<i64, String>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT inode, path FROM files WHERE zone = ?1 AND is_dir = 0")?;
+            .prepare(
+                "SELECT p.inode, p.path FROM inode_paths p \
+                 JOIN inodes i ON p.inode = i.inode \
+                 WHERE p.zone = ?1 AND i.is_dir = 0",
+            )?;
         let rows = stmt.query_map(params![zone], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })?;
@@ -461,7 +487,9 @@ impl Database {
     /// Get the file path for a single inode in the given zone.
     pub fn get_path_for_inode<Z: crate::zones::AudioZone>(&self, inode: i64) -> Result<Option<String>> {
         let sql = format!(
-            "SELECT path FROM files WHERE inode = ?1 AND zone = '{}' AND is_dir = 0 LIMIT 1",
+            "SELECT p.path FROM inode_paths p \
+             JOIN inodes i ON p.inode = i.inode \
+             WHERE p.inode = ?1 AND p.zone = '{}' AND i.is_dir = 0 LIMIT 1",
             Z::ZONE_STR
         );
         let mut stmt = self.conn.prepare(&sql)?;
@@ -478,12 +506,13 @@ impl Database {
     pub fn get_all_tags_ordered(&self) -> Result<Vec<(i64, String, String)>> {
         // Only detect metadata duplicates within corpus files
         let query = r#"
-            SELECT f.inode, ct.tag_name, ct.tag_value
-            FROM files f
-            JOIN audio_info a ON f.inode = a.inode
-            JOIN corpus_tags ct ON f.inode = ct.inode
-            WHERE f.is_dir = 0 AND f.zone = 'corpus'
-            ORDER BY f.inode, UPPER(ct.tag_name)
+            SELECT p.inode, ct.tag_name, ct.tag_value
+            FROM inode_paths p
+            JOIN inodes i ON p.inode = i.inode
+            JOIN audio_info a ON p.inode = a.inode
+            JOIN corpus_tags ct ON p.inode = ct.inode
+            WHERE i.is_dir = 0 AND p.zone = 'corpus'
+            ORDER BY p.inode, UPPER(ct.tag_name)
         "#;
 
         let mut stmt = self.conn.prepare(query)?;
@@ -504,13 +533,13 @@ impl Database {
         let catalog_number_in = compound_tag_sql_in("CATALOG", "NUMBER");
 
         // Only detect inconsistent album artist within corpus files
-        // GROUP BY f.inode to collapse multi-value tags (e.g. a file with two
+        // GROUP BY p.inode to collapse multi-value tags (e.g. a file with two
         // artist tags) into one row per inode, preventing cross-product blowup
         // that would make a single file appear as multiple "tracks".
         let sql = format!(
             r#"
             SELECT
-                f.inode,
+                p.inode,
                 COALESCE(MIN(album.tag_value), '') as album,
                 COALESCE(MIN(artist.tag_value), '') as artist,
                 COALESCE(MIN(album_artist.tag_value), '') as album_artist,
@@ -518,24 +547,25 @@ impl Database {
                 COALESCE(MIN(isrc.tag_value), '') as isrc,
                 COALESCE(MIN(year.tag_value), '') as year,
                 COALESCE(MIN(flagcomp.tag_value), '') as flag_compilation
-            FROM files f
-            JOIN audio_info a ON f.inode = a.inode
+            FROM inode_paths p
+            JOIN inodes i ON p.inode = i.inode
+            JOIN audio_info a ON p.inode = a.inode
             LEFT JOIN corpus_tags album
-                ON f.inode = album.inode AND UPPER(album.tag_name) = 'ALBUM'
+                ON p.inode = album.inode AND UPPER(album.tag_name) = 'ALBUM'
             LEFT JOIN corpus_tags artist
-                ON f.inode = artist.inode AND UPPER(artist.tag_name) = 'ARTIST'
+                ON p.inode = artist.inode AND UPPER(artist.tag_name) = 'ARTIST'
             LEFT JOIN corpus_tags album_artist
-                ON f.inode = album_artist.inode AND UPPER(album_artist.tag_name) IN {album_artist_in}
+                ON p.inode = album_artist.inode AND UPPER(album_artist.tag_name) IN {album_artist_in}
             LEFT JOIN corpus_tags catalog
-                ON f.inode = catalog.inode AND UPPER(catalog.tag_name) IN {catalog_number_in}
+                ON p.inode = catalog.inode AND UPPER(catalog.tag_name) IN {catalog_number_in}
             LEFT JOIN corpus_tags isrc
-                ON f.inode = isrc.inode AND UPPER(isrc.tag_name) = 'ISRC'
+                ON p.inode = isrc.inode AND UPPER(isrc.tag_name) = 'ISRC'
             LEFT JOIN corpus_tags year
-                ON f.inode = year.inode AND UPPER(year.tag_name) = 'YEAR'
+                ON p.inode = year.inode AND UPPER(year.tag_name) = 'YEAR'
             LEFT JOIN corpus_tags flagcomp
-                ON f.inode = flagcomp.inode AND UPPER(flagcomp.tag_name) = 'COMPILATION'
-            WHERE f.is_dir = 0 AND f.zone = 'corpus' AND album.tag_value IS NOT NULL AND album.tag_value != ''
-            GROUP BY f.inode
+                ON p.inode = flagcomp.inode AND UPPER(flagcomp.tag_name) = 'COMPILATION'
+            WHERE i.is_dir = 0 AND p.zone = 'corpus' AND album.tag_value IS NOT NULL AND album.tag_value != ''
+            GROUP BY p.inode
         "#
         );
 
@@ -696,13 +726,19 @@ impl Database {
     pub fn get_audio_file_count(&self, zone: Option<&str>) -> Result<usize> {
         let count: i64 = if let Some(src) = zone {
             self.conn.query_row(
-                "SELECT COUNT(*) FROM files f JOIN audio_info a ON f.inode = a.inode WHERE f.zone = ?1 AND f.is_dir = 0",
+                "SELECT COUNT(*) FROM inode_paths p \
+                 JOIN inodes i ON p.inode = i.inode \
+                 JOIN audio_info a ON p.inode = a.inode \
+                 WHERE p.zone = ?1 AND i.is_dir = 0",
                 params![src],
                 |row| row.get(0),
             )?
         } else {
             self.conn.query_row(
-                "SELECT COUNT(*) FROM files f JOIN audio_info a ON f.inode = a.inode WHERE f.is_dir = 0",
+                "SELECT COUNT(*) FROM inode_paths p \
+                 JOIN inodes i ON p.inode = i.inode \
+                 JOIN audio_info a ON p.inode = a.inode \
+                 WHERE i.is_dir = 0",
                 params![],
                 |row| row.get(0),
             )?
@@ -714,13 +750,19 @@ impl Database {
     pub fn get_image_file_count(&self, zone: Option<&str>) -> Result<usize> {
         let count: i64 = if let Some(src) = zone {
             self.conn.query_row(
-                "SELECT COUNT(*) FROM files f JOIN image_info i ON f.inode = i.inode WHERE f.zone = ?1 AND f.is_dir = 0",
+                "SELECT COUNT(*) FROM inode_paths p \
+                 JOIN inodes i ON p.inode = i.inode \
+                 JOIN image_info ii ON p.inode = ii.inode \
+                 WHERE p.zone = ?1 AND i.is_dir = 0",
                 params![src],
                 |row| row.get(0),
             )?
         } else {
             self.conn.query_row(
-                "SELECT COUNT(*) FROM files f JOIN image_info i ON f.inode = i.inode WHERE f.is_dir = 0",
+                "SELECT COUNT(*) FROM inode_paths p \
+                 JOIN inodes i ON p.inode = i.inode \
+                 JOIN image_info ii ON p.inode = ii.inode \
+                 WHERE i.is_dir = 0",
                 params![],
                 |row| row.get(0),
             )?
@@ -768,8 +810,8 @@ impl Database {
     }
 
     /// Convert a joined row to an AudioFile struct.
-    /// Expected columns: f.inode, f.zone, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos,
-    ///                   f.file_size, f.scanned_at, a.file_type, a.duration_ms, a.bitrate_kbps,
+    /// Expected columns: p.inode, p.zone, p.path, i.is_dir, i.mtime_secs, i.mtime_nanos,
+    ///                   i.file_size, i.scanned_at, a.file_type, a.duration_ms, a.bitrate_kbps,
     ///                   a.sample_rate, a.fingerprint, a.needs_tag_flush
     fn row_to_audio_file(row: &rusqlite::Row) -> rusqlite::Result<AudioFile> {
         let zone_str: String = row.get(1)?;
@@ -815,9 +857,21 @@ impl Database {
         _witness: &impl crate::db::write_thread::SignalWitness,
     ) -> Result<usize> {
         let affected = self.conn.execute(
-            "DELETE FROM files WHERE zone = ?1 AND inode = ?2",
+            "DELETE FROM inode_paths WHERE zone = ?1 AND inode = ?2",
             params![zone, inode],
         )?;
+        // If no other paths reference this inode, also drop the inode row.
+        let remaining: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM inode_paths WHERE inode = ?1",
+            params![inode],
+            |row| row.get(0),
+        )?;
+        if remaining == 0 {
+            self.conn.execute(
+                "DELETE FROM inodes WHERE inode = ?1",
+                params![inode],
+            )?;
+        }
         Ok(affected)
     }
 
@@ -829,8 +883,10 @@ impl Database {
         new_path: &str,
         _witness: &impl crate::db::write_thread::SignalWitness,
     ) -> Result<()> {
+        // FLAG: if multiple paths exist for (inode, zone), this updates ALL of them.
+        // The old code had the same ambiguity; preserved for now.
         self.conn.execute(
-            "UPDATE files SET path = ?1 WHERE zone = ?2 AND inode = ?3",
+            "UPDATE inode_paths SET path = ?1 WHERE zone = ?2 AND inode = ?3",
             params![new_path, zone, inode],
         )?;
         Ok(())
@@ -849,9 +905,9 @@ impl Database {
     ) -> Result<()> {
         use crate::db::types::Zone;
 
-        // Update zone column
+        // Update zone column on the path mapping row(s)
         self.conn.execute(
-            "UPDATE files SET zone = ?1 WHERE zone = ?2 AND inode = ?3",
+            "UPDATE inode_paths SET zone = ?1 WHERE zone = ?2 AND inode = ?3",
             params![new_zone, old_zone, inode],
         )?;
 
@@ -934,8 +990,8 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT ct.inode
              FROM corpus_tags ct
-             JOIN files f ON ct.inode = f.inode
-             WHERE f.zone = 'corpus'
+             JOIN inode_paths p ON ct.inode = p.inode
+             WHERE p.zone = 'corpus'
                AND UPPER(ct.tag_name) = UPPER(?1)
                AND ct.tag_value LIKE ?2",
         )?;
@@ -960,9 +1016,10 @@ impl Database {
         let pattern = super::dir_like_pattern_str(corpus_dir);
 
         let result = self.conn.query_row(
-            r#"SELECT f.inode, f.path FROM files f
-               JOIN audio_info a ON f.inode = a.inode
-               WHERE f.zone = 'corpus' AND f.path LIKE ?1 ESCAPE '\' AND f.is_dir = 0
+            r#"SELECT p.inode, p.path FROM inode_paths p
+               JOIN inodes i ON p.inode = i.inode
+               JOIN audio_info a ON p.inode = a.inode
+               WHERE p.zone = 'corpus' AND p.path LIKE ?1 ESCAPE '\' AND i.is_dir = 0
                LIMIT 1"#,
             rusqlite::params![pattern],
             |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
@@ -1014,10 +1071,11 @@ impl Database {
     /// Used by sidecar deploy signal derivation for batch processing.
     pub fn get_all_corpus_images(&self) -> Result<Vec<CorpusImageEntry>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT f.inode, f.path, i.format, i.width, i.height, i.role
-             FROM files f
-             JOIN image_info i ON f.inode = i.inode
-             WHERE f.zone = 'corpus' AND f.is_dir = 0",
+            "SELECT p.inode, p.path, ii.format, ii.width, ii.height, ii.role
+             FROM inode_paths p
+             JOIN inodes i ON p.inode = i.inode
+             JOIN image_info ii ON p.inode = ii.inode
+             WHERE p.zone = 'corpus' AND i.is_dir = 0",
         )?;
 
         let rows = stmt.query_map(params![], |row| {
@@ -1058,14 +1116,15 @@ impl Database {
                 //   → directories "rock" (2 files), "jazz" (1 file)
                 let mut stmt = self.conn.prepare(
                     "SELECT
-                        CASE WHEN INSTR(path, '/') > 0
-                            THEN SUBSTR(path, 1, INSTR(path, '/') - 1)
-                            ELSE path
+                        CASE WHEN INSTR(p.path, '/') > 0
+                            THEN SUBSTR(p.path, 1, INSTR(p.path, '/') - 1)
+                            ELSE p.path
                         END AS top_dir,
                         COUNT(*) AS cnt
-                     FROM files f
-                     JOIN audio_info a ON f.inode = a.inode
-                     WHERE f.zone = ?1 AND f.is_dir = 0
+                     FROM inode_paths p
+                     JOIN inodes i ON p.inode = i.inode
+                     JOIN audio_info a ON p.inode = a.inode
+                     WHERE p.zone = ?1 AND i.is_dir = 0
                      GROUP BY top_dir
                      ORDER BY top_dir",
                 )?;
@@ -1092,13 +1151,14 @@ impl Database {
                 // Subdirectories: paths that start with prefix and have another '/' after it.
                 let mut dir_stmt = self.conn.prepare(
                     "SELECT
-                        SUBSTR(path, ?1 + 1, INSTR(SUBSTR(path, ?1 + 1), '/') - 1) AS child_dir,
+                        SUBSTR(p.path, ?1 + 1, INSTR(SUBSTR(p.path, ?1 + 1), '/') - 1) AS child_dir,
                         COUNT(*) AS cnt
-                     FROM files f
-                     JOIN audio_info a ON f.inode = a.inode
-                     WHERE f.zone = ?2 AND f.is_dir = 0
-                       AND path LIKE ?3 ESCAPE '\\'
-                       AND INSTR(SUBSTR(path, ?1 + 1), '/') > 0
+                     FROM inode_paths p
+                     JOIN inodes i ON p.inode = i.inode
+                     JOIN audio_info a ON p.inode = a.inode
+                     WHERE p.zone = ?2 AND i.is_dir = 0
+                       AND p.path LIKE ?3 ESCAPE '\\'
+                       AND INSTR(SUBSTR(p.path, ?1 + 1), '/') > 0
                      GROUP BY child_dir
                      ORDER BY child_dir",
                 )?;
@@ -1122,13 +1182,14 @@ impl Database {
 
                 // Direct child files (no further '/' after prefix).
                 let mut file_stmt = self.conn.prepare(
-                    "SELECT f.inode, f.path, a.duration_ms, a.bitrate_kbps
-                     FROM files f
-                     JOIN audio_info a ON f.inode = a.inode
-                     WHERE f.zone = ?1 AND f.is_dir = 0
-                       AND path LIKE ?2 ESCAPE '\\'
-                       AND INSTR(SUBSTR(path, ?3 + 1), '/') = 0
-                     ORDER BY f.path",
+                    "SELECT p.inode, p.path, a.duration_ms, a.bitrate_kbps
+                     FROM inode_paths p
+                     JOIN inodes i ON p.inode = i.inode
+                     JOIN audio_info a ON p.inode = a.inode
+                     WHERE p.zone = ?1 AND i.is_dir = 0
+                       AND p.path LIKE ?2 ESCAPE '\\'
+                       AND INSTR(SUBSTR(p.path, ?3 + 1), '/') = 0
+                     ORDER BY p.path",
                 )?;
                 let file_rows = file_stmt.query_map(
                     params![zone_str, like_pattern, prefix_len],
@@ -1181,26 +1242,28 @@ impl Database {
         let sql = r#"
             SELECT inode, path, artist, album, title FROM (
                 -- Path matches
-                SELECT f.inode, f.path,
-                    (SELECT tag_value FROM corpus_tags WHERE inode = f.inode AND UPPER(tag_name) = 'ARTIST' LIMIT 1) AS artist,
-                    (SELECT tag_value FROM corpus_tags WHERE inode = f.inode AND UPPER(tag_name) = 'ALBUM' LIMIT 1) AS album,
-                    (SELECT tag_value FROM corpus_tags WHERE inode = f.inode AND UPPER(tag_name) = 'TITLE' LIMIT 1) AS title
-                FROM files f
-                JOIN audio_info a ON f.inode = a.inode
-                WHERE f.zone = 'corpus' AND f.is_dir = 0
-                  AND f.path LIKE ?1 ESCAPE '\'
+                SELECT p.inode, p.path,
+                    (SELECT tag_value FROM corpus_tags WHERE inode = p.inode AND UPPER(tag_name) = 'ARTIST' LIMIT 1) AS artist,
+                    (SELECT tag_value FROM corpus_tags WHERE inode = p.inode AND UPPER(tag_name) = 'ALBUM' LIMIT 1) AS album,
+                    (SELECT tag_value FROM corpus_tags WHERE inode = p.inode AND UPPER(tag_name) = 'TITLE' LIMIT 1) AS title
+                FROM inode_paths p
+                JOIN inodes i ON p.inode = i.inode
+                JOIN audio_info a ON p.inode = a.inode
+                WHERE p.zone = 'corpus' AND i.is_dir = 0
+                  AND p.path LIKE ?1 ESCAPE '\'
 
                 UNION
 
                 -- Tag value matches
-                SELECT f.inode, f.path,
-                    (SELECT tag_value FROM corpus_tags WHERE inode = f.inode AND UPPER(tag_name) = 'ARTIST' LIMIT 1) AS artist,
-                    (SELECT tag_value FROM corpus_tags WHERE inode = f.inode AND UPPER(tag_name) = 'ALBUM' LIMIT 1) AS album,
-                    (SELECT tag_value FROM corpus_tags WHERE inode = f.inode AND UPPER(tag_name) = 'TITLE' LIMIT 1) AS title
-                FROM files f
-                JOIN audio_info a ON f.inode = a.inode
-                JOIN corpus_tags ct ON f.inode = ct.inode
-                WHERE f.zone = 'corpus' AND f.is_dir = 0
+                SELECT p.inode, p.path,
+                    (SELECT tag_value FROM corpus_tags WHERE inode = p.inode AND UPPER(tag_name) = 'ARTIST' LIMIT 1) AS artist,
+                    (SELECT tag_value FROM corpus_tags WHERE inode = p.inode AND UPPER(tag_name) = 'ALBUM' LIMIT 1) AS album,
+                    (SELECT tag_value FROM corpus_tags WHERE inode = p.inode AND UPPER(tag_name) = 'TITLE' LIMIT 1) AS title
+                FROM inode_paths p
+                JOIN inodes i ON p.inode = i.inode
+                JOIN audio_info a ON p.inode = a.inode
+                JOIN corpus_tags ct ON p.inode = ct.inode
+                WHERE p.zone = 'corpus' AND i.is_dir = 0
                   AND UPPER(ct.tag_name) IN ('ARTIST', 'ALBUM', 'TITLE')
                   AND ct.tag_value LIKE ?1 ESCAPE '\'
             )
@@ -1267,7 +1330,7 @@ impl Database {
                             WireComparisonOperator::Is => {
                                 params.push(Box::new(cond.search_value.to_lowercase()));
                                 format!(
-                                    "EXISTS (SELECT 1 FROM {tag_table} WHERE inode = f.inode \
+                                    "EXISTS (SELECT 1 FROM {tag_table} WHERE inode = p.inode \
                                      AND UPPER(tag_name) = ?{tag_idx} \
                                      AND LOWER(tag_value) = ?{val_idx})"
                                 )
@@ -1275,7 +1338,7 @@ impl Database {
                             WireComparisonOperator::Not => {
                                 params.push(Box::new(cond.search_value.to_lowercase()));
                                 format!(
-                                    "NOT EXISTS (SELECT 1 FROM {tag_table} WHERE inode = f.inode \
+                                    "NOT EXISTS (SELECT 1 FROM {tag_table} WHERE inode = p.inode \
                                      AND UPPER(tag_name) = ?{tag_idx} \
                                      AND LOWER(tag_value) = ?{val_idx})"
                                 )
@@ -1284,7 +1347,7 @@ impl Database {
                                 let like = format!("%{}%", super::escape_like_wildcards(&cond.search_value.to_lowercase()));
                                 params.push(Box::new(like));
                                 format!(
-                                    "EXISTS (SELECT 1 FROM {tag_table} WHERE inode = f.inode \
+                                    "EXISTS (SELECT 1 FROM {tag_table} WHERE inode = p.inode \
                                      AND UPPER(tag_name) = ?{tag_idx} \
                                      AND LOWER(tag_value) LIKE ?{val_idx} ESCAPE '\\')"
                                 )
@@ -1292,7 +1355,7 @@ impl Database {
                             WireComparisonOperator::Like => {
                                 params.push(Box::new(cond.search_value.to_lowercase()));
                                 format!(
-                                    "EXISTS (SELECT 1 FROM {tag_table} WHERE inode = f.inode \
+                                    "EXISTS (SELECT 1 FROM {tag_table} WHERE inode = p.inode \
                                      AND UPPER(tag_name) = ?{tag_idx} \
                                      AND LOWER(tag_value) LIKE ?{val_idx})"
                                 )
@@ -1394,14 +1457,15 @@ impl Database {
         }
 
         let sql = format!(
-            "SELECT f.inode, f.path,
-                (SELECT tag_value FROM {tag_table} WHERE inode = f.inode AND UPPER(tag_name) = 'ARTIST' LIMIT 1) AS artist,
-                (SELECT tag_value FROM {tag_table} WHERE inode = f.inode AND UPPER(tag_name) = 'ALBUM' LIMIT 1) AS album,
-                (SELECT tag_value FROM {tag_table} WHERE inode = f.inode AND UPPER(tag_name) = 'TITLE' LIMIT 1) AS title
-             FROM files f
-             JOIN audio_info a ON f.inode = a.inode
-             WHERE f.zone = ?1 AND f.is_dir = 0 AND {where_clause}
-             ORDER BY f.path
+            "SELECT p.inode, p.path,
+                (SELECT tag_value FROM {tag_table} WHERE inode = p.inode AND UPPER(tag_name) = 'ARTIST' LIMIT 1) AS artist,
+                (SELECT tag_value FROM {tag_table} WHERE inode = p.inode AND UPPER(tag_name) = 'ALBUM' LIMIT 1) AS album,
+                (SELECT tag_value FROM {tag_table} WHERE inode = p.inode AND UPPER(tag_name) = 'TITLE' LIMIT 1) AS title
+             FROM inode_paths p
+             JOIN inodes i ON p.inode = i.inode
+             JOIN audio_info a ON p.inode = a.inode
+             WHERE p.zone = ?1 AND i.is_dir = 0 AND {where_clause}
+             ORDER BY p.path
              LIMIT ?2"
         );
 

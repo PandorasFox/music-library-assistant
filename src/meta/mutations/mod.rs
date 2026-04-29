@@ -30,7 +30,6 @@ pub mod config_edit;
 pub mod dir_config_edit;
 pub mod file_ops;
 pub mod indexing;
-pub mod jettison;
 pub mod tag_edit;
 pub mod traits;
 pub mod transcode;

@@ -44,7 +44,6 @@ impl MutationExecutor for ApplyTagOpsMutation {
             ctx.read_db,
             &self.ops,
             self.zone,
-            ctx.session_id,
             ctx.witness,
         ) {
             Ok(spawned) => (Ok(()), spawned),
@@ -106,7 +105,6 @@ fn execute_apply_tag_ops(
     db: &ReadOnlyDb<'_>,
     ops: &[TagOp],
     zone: Zone,
-    session_id: &str,
     witness: &MutationExecutionWitness,
 ) -> Result<Vec<SpawnedMutation>> {
     let sender = write_thread::require_sender()?;
@@ -202,7 +200,7 @@ fn execute_apply_tag_ops(
 
         // Send ops directly to DB - TagOps map to INSERT/UPDATE/DELETE
         let tag_table = zone.tag_table().expect("zone must have tag table");
-        sender.apply_index_tag_ops(inode, file_path, validated_ops, tag_table, session_id, witness);
+        sender.apply_index_tag_ops(inode, file_path, validated_ops, tag_table, witness);
         sender.set_needs_disk_flush(inode, true, witness);
 
         // Spawn disk flush — carries expected_tags for post-drain validation

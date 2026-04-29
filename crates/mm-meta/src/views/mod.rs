@@ -486,48 +486,6 @@ pub struct DeployStatus {
     pub library_file_counts: Vec<(String, usize)>,
 }
 
-// ============================================================================
-// Edit History View Data Types
-// ============================================================================
-
-/// Summary of one edit session for the History list.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EditSessionSummary {
-    pub session_id: String,
-    pub earliest_at: String,
-    pub edit_count: usize,
-    pub inode_count: usize,
-}
-
-/// Single edit record within a session.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EditRecord {
-    pub id: i64,
-    pub inode: i64,
-    pub field_name: String,
-    pub old_value: Option<String>,
-    pub new_value: Option<String>,
-    pub edited_at: String,
-}
-
-/// Full edit history row for export (includes session_id).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EditHistoryExportRow {
-    pub id: i64,
-    pub inode: i64,
-    pub field_name: String,
-    pub old_value: Option<String>,
-    pub new_value: Option<String>,
-    pub edited_at: String,
-    pub session_id: String,
-}
-
-/// Data payload for the History view cache refresh.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct EditHistoryData {
-    pub sessions: Vec<EditSessionSummary>,
-}
-
 /// A file with a MovedFile signal (same inode, different path).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MovedFileInfo {

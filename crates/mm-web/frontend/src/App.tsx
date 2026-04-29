@@ -14,7 +14,6 @@ import { Config } from "./views/Config";
 import { Transaction } from "./views/Transaction";
 import { ExternalMatches } from "./views/ExternalMatches";
 import { Deploy } from "./views/Deploy";
-import { History } from "./views/History";
 import { Resolve } from "./views/Resolve";
 import { TagEditorRoute } from "./views/TagEditor";
 import {
@@ -96,7 +95,6 @@ const router = createHashRouter([
       { path: "config", element: <Config /> },
       { path: "external", element: <ExternalMatches /> },
       { path: "deploy", element: <Deploy /> },
-      { path: "history", element: <History /> },
       { path: "resolve/:type", element: <Resolve /> },
       { path: "tags", element: <TagEditorRoute /> },
       { path: "resolve/directory-clusters", element: <DirectoryCluster queryKey="directory-cluster-data" queryUrl="/queries/directory-cluster-data" title="Cross-Source Overlaps" /> },

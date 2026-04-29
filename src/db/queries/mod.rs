@@ -683,17 +683,6 @@ impl<'a> ReadOnlyDb<'a> {
     }
 
     // =========================================================================
-    // Edit History Queries
-    // =========================================================================
-
-    delegate_read! {
-        fn get_edit_sessions() -> Result<Vec<crate::meta::views::EditSessionSummary>>;
-        fn get_session_edits(session_id: &str) -> Result<Vec<crate::meta::views::EditRecord>>;
-        fn get_all_edit_history() -> Result<Vec<crate::meta::views::EditHistoryExportRow>>;
-        fn get_session_edit_history(session_id: &str) -> Result<Vec<crate::meta::views::EditHistoryExportRow>>;
-    }
-
-    // =========================================================================
     // Health / Cache Queries
     // =========================================================================
 

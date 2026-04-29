@@ -25,10 +25,6 @@ pub fn config_edit() -> DecisionKey {
     DecisionKey::ConfigEdit
 }
 
-pub fn jettison_edit_history() -> DecisionKey {
-    DecisionKey::JettisonEditHistory
-}
-
 pub fn edit_reversal(session_label: String) -> DecisionKey {
     DecisionKey::EditReversal { session_label }
 }

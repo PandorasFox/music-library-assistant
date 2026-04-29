@@ -120,35 +120,6 @@ pub fn schema_inventory() -> Vec<TableEntry> {
         ],
     });
 
-    tables.push(TableEntry {
-        name: "tag_edit_history",
-        kind: TableKind::Core,
-        create_sql: "CREATE TABLE IF NOT EXISTS tag_edit_history (
-            id INTEGER PRIMARY KEY,
-            inode INTEGER NOT NULL REFERENCES audio_info(inode) ON DELETE CASCADE,
-            field_name TEXT NOT NULL,
-            old_value TEXT,
-            new_value TEXT,
-            edited_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            session_id TEXT
-        )",
-        index_sql: &[
-            "CREATE INDEX IF NOT EXISTS idx_tag_history_inode ON tag_edit_history(inode)",
-            "CREATE INDEX IF NOT EXISTS idx_tag_history_session ON tag_edit_history(session_id)",
-        ],
-    });
-
-    tables.push(TableEntry {
-        name: "edit_sessions",
-        kind: TableKind::Core,
-        create_sql: "CREATE TABLE IF NOT EXISTS edit_sessions (
-            session_id TEXT PRIMARY KEY,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            edit_count INTEGER NOT NULL DEFAULT 0,
-            inode_count INTEGER NOT NULL DEFAULT 0
-        )",
-        index_sql: &[],
-    });
 
     tables.push(TableEntry {
         name: "corpus_health_stats",

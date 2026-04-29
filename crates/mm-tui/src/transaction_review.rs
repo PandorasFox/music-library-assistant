@@ -264,9 +264,7 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
             | Mutation::DropExternalMatch(_)
             | Mutation::ApplyConfigEdits(_)
             | Mutation::ApplyDirConfigEdit(_)
-            | Mutation::ApplyBatchDirConfigEdits(_)
-            | Mutation::ExportEditHistory(_)
-            | Mutation::ClearEditHistory(_) => {}
+            | Mutation::ApplyBatchDirConfigEdits(_) => {}
         }
     }
 

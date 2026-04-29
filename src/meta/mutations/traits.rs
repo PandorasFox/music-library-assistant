@@ -18,13 +18,12 @@ use super::types::{MutationResult, SignalClearScope, SignalToClear};
 /// Context provided to mutation executors at execution time.
 ///
 /// Contains everything a mutation needs to execute: read-only DB access,
-/// execution witness, Hades snapshot (config etc.), and session ID.
+/// execution witness, and Hades snapshot (config etc.).
 pub struct MutationContext<'a> {
     pub read_db: &'a ReadOnlyDb<'a>,
     pub witness: &'a MutationExecutionWitness,
     /// Hades phase-level data envelope (config, future proposals, etc.).
     pub snapshot: &'a HadesSnapshot,
-    pub session_id: &'a str,
 }
 
 /// Trait implemented by each mutation struct.

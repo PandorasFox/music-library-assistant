@@ -10,8 +10,6 @@ import type {
   AcoustidMatchEntry,
   DeployStatus,
   DeployModalData,
-  EditHistoryData,
-  SessionEditDetail,
   MissingFileModalData,
   MissingDirectoryModalData,
   CorruptFileModalData,
@@ -42,8 +40,6 @@ export const queryKeys = {
   releaseReview: (filter: string) => ["release-review", filter] as const,
   deployStatus: ["deploy-status"] as const,
   deployData: ["deploy-data"] as const,
-  editHistory: ["edit-history"] as const,
-  sessionDetail: (id: string) => ["session-detail", id] as const,
   packingKnots: ["packing-knots"] as const,
   missingFiles: ["missing-file-data"] as const,
   missingDirs: ["missing-directory-data"] as const,
@@ -108,25 +104,6 @@ export function useConfigKdl() {
   return useQuery({
     queryKey: queryKeys.configKdl,
     queryFn: () => get<string>("/config-kdl"),
-  });
-}
-
-export function useEditHistory() {
-  return useQuery({
-    queryKey: queryKeys.editHistory,
-    queryFn: () => get<EditHistoryData>("/queries/edit-history"),
-    refetchInterval: false,
-  });
-}
-
-export function useSessionDetail(sessionId: string | null) {
-  return useQuery({
-    queryKey: queryKeys.sessionDetail(sessionId ?? ""),
-    queryFn: () =>
-      get<SessionEditDetail>(
-        `/queries/session-edit-detail?session_id=${encodeURIComponent(sessionId ?? "")}`,
-      ),
-    enabled: sessionId !== null,
   });
 }
 

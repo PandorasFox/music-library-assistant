@@ -375,10 +375,7 @@ impl super::Witch {
                 .collect::<Vec<_>>()
         ));
 
-        // Generate a timestamped session label so tag_edit_history rows from this
-        // transaction are grouped into a unique session. Composite label is derived
-        // from the individual decision labels rather than the transaction label, so
-        // open_txn_mode ("Open") transactions still get descriptive history entries.
+        // Generate a timestamped session label for logging.
         let composite_label = if decision_labels.is_empty() {
             txn.label.clone()
         } else {

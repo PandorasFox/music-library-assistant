@@ -36,9 +36,9 @@ deployment operations.
 |-------|-------|-----------|
 | Config | 0 | ApplyConfigEdits, ApplyDirConfigEdit, ApplyBatchDirConfigEdits |
 | DB | 1 | ApplyTagOps, AcknowledgeMtimeOnly, EmitCanonicalTag, EmitExpectedOverlap, EmitExpectedDuplicate, EmitExpectedMissingTag, IndexFileFromPath, UpdateFilePath, ApplyDbTagsToDisk |
-| DiskFlush | 2 | Transcode, Move, StashFromZone, StashLeftovers, DropFromIndex, DropDirectoryFromIndex, ExportEditHistory |
+| DiskFlush | 2 | Transcode, Move, StashFromZone, StashLeftovers, DropFromIndex, DropDirectoryFromIndex |
 | DiskDeploy | 3 | HardLink, LibraryMove |
-| *(ChainEmitted)* | — | FlushTagsToDisk, AssimilateDiskTagsToDb, ClearEditHistory *(spawned during execution, never in transactions)* |
+| *(ChainEmitted)* | — | FlushTagsToDisk, AssimilateDiskTagsToDb *(spawned during execution, never in transactions)* |
 
 ---
 
@@ -165,15 +165,6 @@ The EmitExpectedMissingTag mutation is used when an operator confirms that certa
 | ApplyBatchDirConfigEdits | — | — | — | — | Atomically applies multiple dir config edits to dirs.kdl in a single read-modify-write. Produced by coalescing multiple ApplyDirConfigEdit mutations at transaction commit time — never directly staged. Recomputation scope: union of per-entry scopes |
 
 The ApplyConfigEdits mutation is created by the Config Editor view when the operator saves edited config fields. It carries the original KDL text, old config, and new config. On execution, it backs up `config.kdl` to `config.kdl.bak`, then applies field-level edits to the KDL document preserving comments and formatting. The new config is propagated back to the main thread via `TaskResult.config_update`, where `Witch::tick()` updates the `SharedConfig` (Arc<RwLock<Config>>). `is_db_only: false` (writes to filesystem), `signal_clear_scope: None`, `affected_inodes: empty`. No spawned computations or signal effects.
-
-### Edit History Operations
-
-| Mutation | Stage | Origin | Spawns | Signals | Notes |
-|----------|-------|--------|--------|---------|-------|
-| ExportEditHistory | DiskFlush | Staged | ClearEditHistory | — | Queries edit history rows via read-only DB, writes them to a timestamped TSV log file. On success, chain-emits ClearEditHistory. Two modes: single-session (`session_id: Some(id)`) or all-sessions (`session_id: None`). |
-| ClearEditHistory | DB | ChainEmitted | — | — | Deletes edit history rows from the database. Only spawned by ExportEditHistory after successful export. Delegates to `write_thread::clear_tag_edit_history[_session]()`. |
-
-Jettison goes through the standard transaction system with a witnessed decision (`DecisionKey::JettisonEditHistory`). The TUI's multi-phase confirmation UI (d/D shortcuts) gates the staging. The two-mutation chain ensures the export log is written before any rows are deleted — if the export fails, the chain-emission never happens and the database is untouched.
 
 ---
 

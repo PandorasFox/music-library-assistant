@@ -207,20 +207,10 @@ mod tests {
                 .next(false)
                 .next(false)
                 .next(false),
-            LateralView::History
-        );
-        assert_eq!(
-            view.next(false)
-                .next(false)
-                .next(false)
-                .next(false)
-                .next(false)
-                .next(false),
             LateralView::ExternalMatches
         );
         assert_eq!(
             view.next(false)
-                .next(false)
                 .next(false)
                 .next(false)
                 .next(false)
@@ -235,7 +225,7 @@ mod tests {
         assert_eq!(view.prev(false).prev(false), LateralView::ExternalMatches);
         assert_eq!(
             view.prev(false).prev(false).prev(false),
-            LateralView::History
+            LateralView::Deploy
         );
 
         // Test forward cycling with transactions: Health → Transaction → Deploy

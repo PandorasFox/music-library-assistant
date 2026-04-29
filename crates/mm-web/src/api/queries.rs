@@ -143,7 +143,7 @@ fn unwrap_domain_result(result: DomainQueryResult) -> Result<serde_json::Value, 
 /// like Vecs or nested structs).
 /// Queries that fire on a polling interval — not worth logging individually.
 fn is_polling_query(name: &str) -> bool {
-    matches!(name, "insights" | "deploy-status" | "external-matches" | "edit-history")
+    matches!(name, "insights" | "deploy-status" | "external-matches")
 }
 
 pub async fn domain_query(
@@ -242,7 +242,7 @@ macro_rules! dispatch_route {
 // -- Unit queries (no parameters) --
 
 unit_web_query!(
-    GetInsights, GetDeployStatus, GetEditHistory,
+    GetInsights, GetDeployStatus,
     GetExternalMatches, GetPackingDirs,
     GetMovedFiles,
     GetMissingAlbumSingleSignals, GetPackingKnots, GetPackingInodePaths,
@@ -265,12 +265,6 @@ body_web_query!(
 impl WebQuery for GetOobFiles {
     fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
         Ok(Self { bucket: parse_optional_enum(params, "bucket")? })
-    }
-}
-
-impl WebQuery for GetEditHistoryExport {
-    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
-        Ok(Self { session_id: params.get("session_id").cloned() })
     }
 }
 
@@ -316,12 +310,6 @@ impl WebQuery for GetAllAudioFilesWithTags {
             zone: parse_enum(params, "zone")?,
             include_library: parse_bool(params, "include_library"),
         })
-    }
-}
-
-impl WebQuery for GetSessionEditDetail {
-    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
-        Ok(Self { session_id: require_param(params, "session_id")? })
     }
 }
 
@@ -409,10 +397,10 @@ fn build_domain_payload(
         .ok_or_else(|| ApiError::BadRequest(format!("unknown query: '{name}'")))?;
 
     dispatch_route!(route, params, body;
-        GetInsights, GetDeployStatus, GetEditHistory,
+        GetInsights, GetDeployStatus,
         GetExternalMatches, GetPackingDirs,
         GetOobFiles,
-        GetMovedFiles, GetMissingAlbumSingleSignals, GetEditHistoryExport,
+        GetMovedFiles, GetMissingAlbumSingleSignals,
         GetPackingKnots, GetPackingInodePaths,
         GetDiscExtractionData,
         GetMissingFileData, GetMissingDirectoryData, GetCorruptFileData,
@@ -423,7 +411,7 @@ fn build_domain_payload(
         GetUnsolvedPackingData,
         GetAudioFilesByInodes, GetInodeDetails,
         GetMissingTagAudioFiles, GetAllAudioFilesWithTags,
-        GetSessionEditDetail, GetCurrentTagValues,
+        GetCurrentTagValues,
         GetRecordingBatchData, GetReleaseStagingData,
         GetTagEditorFiles, GetFileTagValues, GetBulkTagAggregate,
         GetDirectoryListing, SearchCorpusFiles, SearchWithConditions,

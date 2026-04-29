@@ -33,17 +33,6 @@ pub struct PackingBrowserData {
 }
 
 // ============================================================================
-// Session Edit Detail
-// ============================================================================
-
-/// Response for session edit detail.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionEditDetail {
-    pub edits: Vec<crate::views::EditRecord>,
-    pub inode_paths: HashMap<i64, String>,
-}
-
-// ============================================================================
 // Recording Batch Result
 // ============================================================================
 

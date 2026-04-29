@@ -82,10 +82,6 @@ pub struct GetInsights;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GetDeployStatus;
 
-/// Edit session list with timestamps and edit counts.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct GetEditHistory;
-
 /// External match data: confidence buckets, packing counts, untagged entries.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GetExternalMatches;
@@ -111,12 +107,6 @@ pub struct GetMovedFiles;
 /// Tracks missing an ALBUM tag but having ARTIST and TITLE (album-less singles).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetMissingAlbumSingleSignals;
-
-/// Edit history rows for export. `None` = all sessions; `Some(id)` = single session.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetEditHistoryExport {
-    pub session_id: Option<String>,
-}
 
 /// Packing knot data (conflict tangles requiring review).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -228,12 +218,6 @@ pub struct GetMissingTagAudioFiles;
 pub struct GetAllAudioFilesWithTags {
     pub zone: crate::db_types::Zone,
     pub include_library: bool,
-}
-
-/// Session edit detail: edits + resolved inode paths (for history expansion).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetSessionEditDetail {
-    pub session_id: String,
 }
 
 /// Resolve current tag values for a list of (inode, field_name) pairs.
@@ -447,7 +431,6 @@ domain_query_protocol! {
     // Summary queries
     GetInsights("insights") => crate::views::InsightsData,
     GetDeployStatus("deploy-status") => crate::views::DeployStatus,
-    GetEditHistory("edit-history") => crate::views::EditHistoryData,
     GetExternalMatches("external-matches") => crate::views::ExternalMatchesData,
     GetPackingDirs("packing-dirs") => crate::domain_query_types::PackingDirsData,
 
@@ -455,7 +438,6 @@ domain_query_protocol! {
     GetOobFiles("oob-files") => Vec<crate::views::OobFile>,
     GetMovedFiles("moved-files") => Vec<crate::views::MovedFileInfo>,
     GetMissingAlbumSingleSignals("missing-album-single-signals") => Vec<MissingAlbumSingleSignalWire>,
-    GetEditHistoryExport("edit-history-export") => Vec<crate::views::EditHistoryExportRow>,
     GetPackingKnots("packing-knots") => Vec<crate::signals::data::PackingKnotData>,
     GetPackingInodePaths("packing-inode-paths") => Vec<(i64, String)>,
 
@@ -482,7 +464,6 @@ domain_query_protocol! {
     GetInodeDetails("inode-details") => Vec<crate::views::inode_detail::InodeDetail>,
     GetMissingTagAudioFiles("missing-tag-audio-files") => Vec<crate::db_types::AudioFile>,
     GetAllAudioFilesWithTags("all-audio-files-with-tags") => Vec<crate::domain_query_types::AudioFileWithTags>,
-    GetSessionEditDetail("session-edit-detail") => crate::domain_query_types::SessionEditDetail,
     GetCurrentTagValues("current-tag-values") => Vec<Option<String>>,
 
     // Wave 5

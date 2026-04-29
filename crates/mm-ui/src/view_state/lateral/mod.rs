@@ -3,4 +3,3 @@
 pub mod deploy;
 pub mod external_matches;
 pub mod health;
-pub mod history;

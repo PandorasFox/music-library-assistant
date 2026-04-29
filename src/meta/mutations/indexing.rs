@@ -119,7 +119,6 @@ impl MutationExecutor for IndexFileFromPathMutation {
             ctx.read_db,
             &self.path,
             &self.zone,
-            ctx.session_id,
             ctx.witness,
         ) {
             Ok(result) => MutationResult {
@@ -241,7 +240,7 @@ impl_mutation_executor!(
     signal_clear_scope: SignalClearScope::MutableOnly,
     recomputation_scope: RecomputationScope::TAGS,
     execute: |s, ctx| execute_assimilate_disk_tags_to_db(
-        ctx.read_db, s.inode, &s.path, s.zone.as_deref(), ctx.session_id, ctx.witness,
+        ctx.read_db, s.inode, &s.path, s.zone.as_deref(), ctx.witness,
     ),
     affected_inodes: |s| vec![s.inode],
     paths_for_signal_updates: |s| vec![s.path.clone()],
@@ -310,7 +309,6 @@ fn index_track_from_metadata(
     path: &Path,
     zone: &str,
     metadata: &ExtractedMetadata,
-    session_id: &str,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
     use crate::db::write_thread::{self, AudioData, FileData};
@@ -358,7 +356,6 @@ fn index_track_from_metadata(
         file_data,
         audio_data,
         metadata.tags.clone(),
-        session_id,
         witness,
     );
 
@@ -385,7 +382,6 @@ pub fn execute_index_file_from_path(
     _db: &ReadOnlyDb<'_>,
     path: &Path,
     zone: &str,
-    session_id: &str,
     witness: &MutationExecutionWitness,
 ) -> Result<IndexFileResult> {
     use crate::corpus::metadata;
@@ -426,7 +422,7 @@ pub fn execute_index_file_from_path(
     let inode = extracted.inode;
 
     // Note: _db is unused - index_track_from_metadata routes through signal_sender
-    index_track_from_metadata(_db, path, zone, &extracted, session_id, witness)?;
+    index_track_from_metadata(_db, path, zone, &extracted, witness)?;
 
     Ok(IndexFileResult {
         inode,
@@ -853,7 +849,6 @@ pub fn execute_assimilate_disk_tags_to_db(
     inode: i64,
     abs_path: &std::path::Path,
     in_band_zone: Option<&str>,
-    session_id: &str,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
     use crate::corpus::paths;
@@ -895,7 +890,7 @@ pub fn execute_assimilate_disk_tags_to_db(
     // Update DB with disk tags via db_thread
     // Use inode directly (from mutation param) to avoid ambiguous path->inode resolution.
     // Use rel_path_str (from mutation param), not track.path (potentially stale).
-    sender.set_index_track_tags(inode, &rel_path_str, disk_tagset, tag_table, session_id, witness);
+    sender.set_index_track_tags(inode, &rel_path_str, disk_tagset, tag_table, witness);
 
     // Read disk metadata using portable API
     let file_metadata = std::fs::metadata(abs_path)

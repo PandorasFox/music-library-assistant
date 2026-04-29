@@ -24,7 +24,6 @@ pub enum Route {
     Search(SearchRoute),
     Files(FilesRoute),
     Health(HealthRoute),
-    History(HistoryRoute),
     Transaction(TransactionRoute),
     Deploy(DeployRoute),
     ExternalMatches(ExternalMatchesRoute),
@@ -77,12 +76,6 @@ pub struct FilesRoute {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct HealthRoute {
     pub cursor: Option<usize>,
-}
-
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct HistoryRoute {
-    /// Expanded session ID.
-    pub session: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -288,12 +281,6 @@ impl Route {
                 path.push_str("/health");
                 params.set_usize("cursor", r.cursor);
             }
-            Route::History(r) => {
-                path.push_str("/history");
-                if let Some(sid) = r.session {
-                    params.set_str("session", Some(&sid.to_string()));
-                }
-            }
             Route::Transaction(r) => {
                 path.push_str("/transaction");
                 params.set_usize("cursor", r.cursor);
@@ -399,9 +386,6 @@ impl Route {
             }
             "health" => Ok(Route::Health(HealthRoute {
                 cursor: params.get_usize("cursor"),
-            })),
-            "history" => Ok(Route::History(HistoryRoute {
-                session: params.get_string("session").and_then(|s| s.parse().ok()),
             })),
             "transaction" => Ok(Route::Transaction(TransactionRoute {
                 cursor: params.get_usize("cursor"),
@@ -531,7 +515,6 @@ impl Route {
             Route::Search(_) => Some(LateralView::Search),
             Route::Files(_) => Some(LateralView::Files),
             Route::Health(_) => Some(LateralView::Health),
-            Route::History(_) => Some(LateralView::History),
             Route::Transaction(_) => Some(LateralView::Transaction),
             Route::Deploy(_) => Some(LateralView::Deploy),
             Route::ExternalMatches(_) => Some(LateralView::ExternalMatches),
@@ -964,11 +947,6 @@ mod tests {
     #[test]
     fn round_trip_health() {
         assert_round_trip(&Route::Health(HealthRoute { cursor: Some(7) }));
-    }
-
-    #[test]
-    fn round_trip_history() {
-        assert_round_trip(&Route::History(HistoryRoute { session: Some(42) }));
     }
 
     #[test]

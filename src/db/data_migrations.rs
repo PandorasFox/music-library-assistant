@@ -88,15 +88,12 @@ pub fn all_data_migrations() -> Vec<DataMigrationEntry> {
             },
         },
         DataMigrationEntry {
-            id: "2026-03-backfill-edit-sessions",
-            description: "Backfill edit_sessions summary table from tag_edit_history",
+            id: "2026-04-drop-edit-history-tables",
+            description: "Drop tag_edit_history and edit_sessions tables (feature removed)",
             apply: |db| {
-                db.conn().execute(
-                    "INSERT OR IGNORE INTO edit_sessions (session_id, created_at, edit_count, inode_count)
-                     SELECT session_id, MIN(edited_at), COUNT(*), COUNT(DISTINCT inode)
-                     FROM tag_edit_history
-                     GROUP BY session_id",
-                    [],
+                db.conn().execute_batch(
+                    "DROP TABLE IF EXISTS tag_edit_history;
+                     DROP TABLE IF EXISTS edit_sessions;",
                 )?;
                 Ok(())
             },

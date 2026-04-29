@@ -237,7 +237,6 @@ The main data access endpoint is `GET /queries/{name}` (simple) or `POST /querie
 |-------|---------|
 | `insights` | Corpus health overview — file counts, signal counts, unindexed files |
 | `deploy-status` | Library deployment state |
-| `edit-history` | Recent tag edit sessions |
 | `external-matches` | AcoustID/MusicBrainz match overview |
 | `packing-dirs` | Release packing state per directory |
 
@@ -351,9 +350,6 @@ SELECT file_type, COUNT(*) FROM audio_info GROUP BY file_type;
 -- Key columns: inode, tag_name, tag_value
 SELECT tag_name, COUNT(DISTINCT tag_value) FROM corpus_tags GROUP BY tag_name ORDER BY 2 DESC;
 
--- tag_edit_history: Audit log of tag changes
--- Key columns: inode, field_name, old_value, new_value, edited_at, session_id
-SELECT * FROM tag_edit_history ORDER BY edited_at DESC LIMIT 20;
 ```
 
 ### Useful Queries

@@ -38,7 +38,6 @@ pub mod disc_extraction_modal;
 pub mod external_match_view;
 pub mod eye;
 pub mod helpers;
-pub mod history_view;
 pub mod insights_view;
 pub mod knot_browser;
 pub mod manual_review_modal;
@@ -371,12 +370,6 @@ impl App {
             ActiveView::KnotBrowser(s) => dispatch_input_raw!(KnotBrowser, s),
             ActiveView::AcoustidBrowse(s) => dispatch_input_raw!(AcoustidBrowse, s),
             ActiveView::ReleaseReview(s) => dispatch_input_raw!(ReleaseReview, s),
-            ActiveView::History(ref mut s) => {
-                match s.handle_input(&action) {
-                    Some(a) => ViewAction::History(a),
-                    None => ViewAction::None,
-                }
-            }
             ActiveView::TagCanonicityResolution(ref mut s) => dispatch_input!(TagCanonicityResolution, s),
             ActiveView::CompoundTagSplitResolution(ref mut s) => dispatch_input!(CompoundTagSplitResolution, s),
             ActiveView::MissingAlbumSingleResolution(ref mut s) => dispatch_input!(MissingAlbumSingleResolution, s),
@@ -492,12 +485,6 @@ impl App {
                     }
                 }
             }
-            ActiveView::History(_) => {
-                let history_data = self.query(mm_meta::domain_queries::GetEditHistory);
-                if let ActiveView::History(ref mut s) = self.view {
-                    s.update(Some(history_data));
-                }
-            }
             ActiveView::ExternalMatches(_) => {
                 let ext_data = self.query(mm_meta::domain_queries::GetExternalMatches);
                 if let ActiveView::ExternalMatches(ref mut s) = self.view {
@@ -583,14 +570,6 @@ impl App {
         self.sync_route();
     }
 
-    /// Start the history lateral view.
-    pub(crate) fn start_history_view(&mut self) {
-        self.last_lateral_view = widgets::LateralView::History;
-        let history_data = self.query(mm_meta::domain_queries::GetEditHistory);
-        self.view = ActiveView::History(history_view::HistoryViewState::with_data(history_data));
-        self.sync_route();
-    }
-
     /// Start the external matches lateral view.
     pub(crate) fn start_external_matches_view(&mut self) {
         self.last_lateral_view = widgets::LateralView::ExternalMatches;
@@ -627,10 +606,6 @@ impl App {
             Route::Health(ref r) => {
                 self.start_health_view();
                 if let ActiveView::Insights(ref mut s) = self.view { s.apply_route(r); }
-            }
-            Route::History(ref r) => {
-                self.start_history_view();
-                if let ActiveView::History(ref mut s) = self.view { s.apply_route(r); }
             }
             Route::Deploy(ref r) => {
                 self.start_deploy_view();

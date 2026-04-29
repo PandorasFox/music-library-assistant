@@ -113,8 +113,7 @@ export type DecisionKey =
   | { EditReversal: { session_label: string } }
   | "ConfigEdit"
   | { DirConfigEdit: { source_path: string } }
-  | { MbReleaseApproval: { release_id: string } }
-  | "JettisonEditHistory";
+  | { MbReleaseApproval: { release_id: string } };
 
 // -- Insights view types --
 
@@ -350,33 +349,6 @@ export interface DeployModalData {
 export interface DeployStatus {
   needs_action: boolean;
   library_file_counts: [string, number][];
-}
-
-// -- Edit history --
-
-export interface EditSessionSummary {
-  session_id: string;
-  earliest_at: string;
-  edit_count: number;
-  inode_count: number;
-}
-
-export interface EditHistoryData {
-  sessions: EditSessionSummary[];
-}
-
-export interface EditRecord {
-  id: number;
-  inode: number;
-  field_name: string;
-  old_value: string | null;
-  new_value: string | null;
-  edited_at: string;
-}
-
-export interface SessionEditDetail {
-  edits: EditRecord[];
-  inode_paths: Record<string, string>;
 }
 
 // -- Health resolution modal data --

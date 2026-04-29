@@ -77,8 +77,6 @@ pub(super) fn execute_mutation(
     // Create execution witness - proves we're inside the Witch's execution context
     let witness = MutationExecutionWitness::new();
 
-    let session_id: &str = &label;
-
     // Execute mutation via MutationExecutor trait dispatch.
     // All writes go through write_thread::signal_sender() (fire-and-forget).
     let result = with_read_only_db(|read_db| {
@@ -87,7 +85,6 @@ pub(super) fn execute_mutation(
             read_db,
             witness: &witness,
             snapshot,
-            session_id,
         };
         let r = executor.execute(&ctx);
         (
@@ -135,6 +132,8 @@ pub(super) fn execute_mutation(
         // Emit CorruptFile signal for failed IndexFileFromPath mutations.
         // These files failed to index (corrupt metadata/audio), so they should
         // be flagged for stashing rather than remaining as mere UnindexedFile signals.
+        // Also clear the UnindexedFile signal so auto-index doesn't re-queue
+        // the same corrupt file every cycle.
         if let Mutation::IndexFileFromPath(ref m) = &mutation {
             let path = &m.path;
             if let Some(sender) = write_thread::signal_sender() {
@@ -152,6 +151,12 @@ pub(super) fn execute_mutation(
                                     path: rel_str.to_string(),
                                 },
                             ),
+                            &witness,
+                        );
+                        // Clear UnindexedFile so auto-index stops retrying this file.
+                        // The CorruptFile signal is now the authoritative state.
+                        sender.clear_corpus_signal::<crate::meta::signals::data::UnindexedFileSignal>(
+                            inode,
                             &witness,
                         );
                         crate::logging::log_general(format!(

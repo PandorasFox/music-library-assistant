@@ -232,11 +232,10 @@ enum DbWriteOp {
         file_data: FileData,
         audio_data: AudioData,
         tags: TagSet,
-        session_id: String,
     },
 
     /// Drop file from index (file no longer exists or excluded).
-    /// Cascades to audio_info, corpus_tags, tag_edit_history.
+    /// Cascades to audio_info, corpus_tags.
     /// Zone-scoped DELETE avoids cross-zone collateral damage.
     DropFromIndex {
         inode: i64,
@@ -250,7 +249,6 @@ enum DbWriteOp {
         path: String,
         tags: TagSet,
         tag_table: String,
-        session_id: String,
     },
 
     /// Apply incremental tag operations directly.
@@ -260,7 +258,6 @@ enum DbWriteOp {
         path: String,
         ops: Vec<crate::meta::mutations::TagOp>,
         tag_table: String,
-        session_id: String,
     },
 
     /// Update track path and file metadata (for transcode/format conversion).
@@ -427,17 +424,6 @@ enum DbWriteOp {
         entity_type: String,
         discovered_from: Option<String>,
         discovered_at: i64,
-    },
-
-    // =========================================================================
-    // Edit History Purge Operations (operator-confirmed UI action)
-    // =========================================================================
-    /// Delete all rows from tag_edit_history.
-    ClearTagEditHistory,
-
-    /// Delete all rows from tag_edit_history for a single session.
-    ClearTagEditHistorySession {
-        session_id: String,
     },
 
     // =========================================================================

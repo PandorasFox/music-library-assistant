@@ -7,7 +7,6 @@ pub enum LateralView {
     Search,
     Files,
     Health,
-    History,
     Transaction,
     Deploy,
     ExternalMatches,
@@ -21,7 +20,6 @@ impl LateralView {
             LateralView::Search => "Search",
             LateralView::Files => "Files",
             LateralView::Health => "Health",
-            LateralView::History => "History",
             LateralView::Transaction => "Transaction",
             LateralView::Deploy => "Deploy",
             LateralView::ExternalMatches => "Ext. Authorities",
@@ -42,8 +40,7 @@ impl LateralView {
                 }
             }
             LateralView::Transaction => LateralView::Deploy,
-            LateralView::Deploy => LateralView::History,
-            LateralView::History => LateralView::ExternalMatches,
+            LateralView::Deploy => LateralView::ExternalMatches,
             LateralView::ExternalMatches => LateralView::Config,
         }
     }
@@ -63,8 +60,7 @@ impl LateralView {
                     LateralView::Health
                 }
             }
-            LateralView::History => LateralView::Deploy,
-            LateralView::ExternalMatches => LateralView::History,
+            LateralView::ExternalMatches => LateralView::Deploy,
         }
     }
 
@@ -76,7 +72,6 @@ impl LateralView {
             LateralView::Search => Route::Search(SearchRoute::default()),
             LateralView::Files => Route::Files(FilesRoute::default()),
             LateralView::Health => Route::Health(HealthRoute::default()),
-            LateralView::History => Route::History(HistoryRoute::default()),
             LateralView::Transaction => Route::Transaction(TransactionRoute::default()),
             LateralView::Deploy => Route::Deploy(DeployRoute::default()),
             LateralView::ExternalMatches => Route::ExternalMatches(ExternalMatchesRoute::default()),
@@ -95,7 +90,6 @@ impl LateralView {
             views.push(LateralView::Transaction);
         }
         views.push(LateralView::Deploy);
-        views.push(LateralView::History);
         views.push(LateralView::ExternalMatches);
         views
     }

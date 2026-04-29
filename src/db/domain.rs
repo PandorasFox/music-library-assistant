@@ -117,7 +117,7 @@ macro_rules! impl_domain_query {
 // ============================================================================
 
 use crate::meta::views::{
-    DeployStatus, EditHistoryData, EditHistoryExportRow, ExternalMatchesData,
+    DeployStatus, ExternalMatchesData,
     InsightsData, MovedFileInfo, OobFile,
 };
 
@@ -148,13 +148,6 @@ impl_domain_query! {
     GetDeployStatus => DeployStatus, |_db| {
         // Unreachable — dispatch_domain_query intercepts with server config.
         unreachable!("GetDeployStatus handled in dispatch_domain_query")
-    }
-}
-
-impl_domain_query! {
-    GetEditHistory => EditHistoryData, |db| {
-        let sessions = db.get_edit_sessions().unwrap_or_default();
-        EditHistoryData { sessions }
     }
 }
 
@@ -201,15 +194,6 @@ impl_domain_query! {
                 data: s.data,
             })
             .collect()
-    }
-}
-
-impl_domain_query! {
-    GetEditHistoryExport => Vec<EditHistoryExportRow>, |s, db| {
-        match s.session_id {
-            Some(ref sid) => db.get_session_edit_history(sid).unwrap_or_default(),
-            None => db.get_all_edit_history().unwrap_or_default(),
-        }
     }
 }
 
@@ -477,17 +461,6 @@ impl_domain_query! {
     GetAllAudioFilesWithTags => Vec<AudioFileWithTags>, |s, db| {
         db.get_all_audio_files_with_tags(s.zone, s.include_library)
             .unwrap_or_default()
-    }
-}
-
-impl_domain_query! {
-    GetSessionEditDetail => SessionEditDetail, |s, db| {
-        let edits = db.get_session_edits(&s.session_id).unwrap_or_default();
-        let inodes: Vec<i64> = edits.iter().map(|e| e.inode).collect();
-        let inode_paths = db
-            .get_file_paths_batch(crate::db::types::Zone::Corpus, &inodes)
-            .unwrap_or_default();
-        SessionEditDetail { edits, inode_paths }
     }
 }
 
@@ -1087,13 +1060,11 @@ macro_rules! dispatch_domain_query_impl {
 dispatch_domain_query_impl! {
     GetInsights,
     GetDeployStatus,
-    GetEditHistory,
     GetExternalMatches,
     GetPackingDirs,
     GetOobFiles,
     GetMovedFiles,
     GetMissingAlbumSingleSignals,
-    GetEditHistoryExport,
     GetPackingKnots,
     GetPackingInodePaths,
     GetDiscExtractionData,
@@ -1114,7 +1085,6 @@ dispatch_domain_query_impl! {
     GetInodeDetails,
     GetMissingTagAudioFiles,
     GetAllAudioFilesWithTags,
-    GetSessionEditDetail,
     GetCurrentTagValues,
     GetRecordingBatchData,
     GetReleaseStagingData,
@@ -1171,14 +1141,6 @@ mod tests {
         } else {
             panic!("unexpected result variant");
         }
-    }
-
-    #[test]
-    fn get_edit_history_empty_db() {
-        let db = test_db();
-        let read_db = ReadOnlyDb::new(&db);
-        let result = GetEditHistory.execute(&read_db);
-        assert!(result.sessions.is_empty());
     }
 
     #[test]
@@ -1239,25 +1201,6 @@ mod tests {
         let db = test_db();
         let read_db = ReadOnlyDb::new(&db);
         let result = GetMissingAlbumSingleSignals.execute(&read_db);
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn get_edit_history_export_session_empty_db() {
-        let db = test_db();
-        let read_db = ReadOnlyDb::new(&db);
-        let result = GetEditHistoryExport {
-            session_id: Some("nonexistent".to_string()),
-        }
-        .execute(&read_db);
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn get_edit_history_export_all_empty_db() {
-        let db = test_db();
-        let read_db = ReadOnlyDb::new(&db);
-        let result = GetEditHistoryExport { session_id: None }.execute(&read_db);
         assert!(result.is_empty());
     }
 
@@ -1423,15 +1366,6 @@ mod tests {
     }
 
     #[test]
-    fn get_session_edit_detail_empty_db() {
-        let db = test_db();
-        let read_db = ReadOnlyDb::new(&db);
-        let result = GetSessionEditDetail { session_id: "nonexistent".to_string() }.execute(&read_db);
-        assert!(result.edits.is_empty());
-        assert!(result.inode_paths.is_empty());
-    }
-
-    #[test]
     fn get_current_tag_values_empty_db() {
         let db = test_db();
         let read_db = ReadOnlyDb::new(&db);
@@ -1451,7 +1385,6 @@ mod tests {
 
         // Summary queries
         t!(serde_json::to_string(&GetInsights.execute(&read_db)));
-        t!(serde_json::to_string(&GetEditHistory.execute(&read_db)));
         // GetDeployStatus and GetExternalMatches are intercepted in dispatch — test via dispatch with no config.
         if let DomainQueryResult::GetDeployStatus(data) = dispatch_domain_query(
             DomainQueryPayload::GetDeployStatus(GetDeployStatus), &read_db, None,
@@ -1470,7 +1403,6 @@ mod tests {
         t!(serde_json::to_string(&GetOobFiles { bucket: Some(mm_meta::views::ConflictBucket::MtimeOnly) }.execute(&read_db)));
         t!(serde_json::to_string(&GetMovedFiles.execute(&read_db)));
         t!(serde_json::to_string(&GetMissingAlbumSingleSignals.execute(&read_db)));
-        t!(serde_json::to_string(&GetEditHistoryExport { session_id: None }.execute(&read_db)));
         t!(serde_json::to_string(&GetPackingKnots.execute(&read_db)));
         t!(serde_json::to_string(&GetPackingInodePaths.execute(&read_db)));
         t!(serde_json::to_string(&GetDiscExtractionData { map_letters_to_numbers: false }.execute(&read_db)));
@@ -1496,7 +1428,6 @@ mod tests {
             zone: crate::db::types::Zone::Corpus,
         }.execute(&read_db)));
         t!(serde_json::to_string(&GetMissingTagAudioFiles.execute(&read_db)));
-        t!(serde_json::to_string(&GetSessionEditDetail { session_id: "x".to_string() }.execute(&read_db)));
         t!(serde_json::to_string(&GetCurrentTagValues { queries: vec![] }.execute(&read_db)));
 
         // Packed resolution queries

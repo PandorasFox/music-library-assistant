@@ -29,55 +29,12 @@ fn increment_tags_version(conn: &rusqlite::Connection, inode: i64) -> anyhow::Re
     Ok(())
 }
 
-/// Write tag edit history entries for changed tags and maintain the
-/// `edit_sessions` summary row (pre-computed counts for the History view).
-fn write_tag_edit_history(
-    conn: &rusqlite::Connection,
-    inode: i64,
-    changes: &[(String, Option<String>, Option<String>)], // (field_name, old_value, new_value)
-    session_id: &str,
-) -> anyhow::Result<()> {
-    if changes.is_empty() {
-        return Ok(());
-    }
-
-    // Check whether this inode already has edits in this session (before inserting)
-    // so we can maintain an accurate distinct-inode count.
-    let inode_is_new: bool = !conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM tag_edit_history WHERE session_id = ?1 AND inode = ?2)",
-        params![session_id, inode],
-        |row| row.get::<_, bool>(0),
-    )?;
-
-    for (field_name, old_value, new_value) in changes {
-        conn.execute(
-            "INSERT INTO tag_edit_history (inode, field_name, old_value, new_value, session_id) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![inode, field_name, old_value, new_value, session_id],
-        )?;
-    }
-
-    // Upsert session summary: create on first use, accumulate counts.
-    let inode_increment: i64 = if inode_is_new { 1 } else { 0 };
-    conn.execute(
-        "INSERT INTO edit_sessions (session_id, edit_count, inode_count)
-         VALUES (?1, ?2, ?3)
-         ON CONFLICT(session_id) DO UPDATE SET
-           edit_count = edit_count + excluded.edit_count,
-           inode_count = inode_count + excluded.inode_count",
-        params![session_id, changes.len() as i64, inode_increment],
-    )?;
-
-    Ok(())
-}
-
 /// Convert fingerprint Vec<u32> to BLOB bytes (little-endian).
 fn fingerprint_to_blob(fp: &[u32]) -> Vec<u8> {
     fp.iter().flat_map(|n| n.to_le_bytes()).collect()
 }
 
 /// Result of applying a TagSet to an inode.
-///
-/// Contains the changes made for history writing.
 struct TagMutationResult {
     /// Tags removed: (field_name, old_value)
     removed: Vec<(String, String)>,
@@ -90,18 +47,6 @@ impl TagMutationResult {
     fn has_changes(&self) -> bool {
         !self.removed.is_empty() || !self.added.is_empty()
     }
-
-    /// Convert to history entries: (field_name, old_value, new_value).
-    fn to_history_entries(&self) -> Vec<(String, Option<String>, Option<String>)> {
-        let mut entries = Vec::with_capacity(self.removed.len() + self.added.len());
-        for (field, value) in &self.removed {
-            entries.push((field.clone(), Some(value.clone()), None));
-        }
-        for (field, value) in &self.added {
-            entries.push((field.clone(), None, Some(value.clone())));
-        }
-        entries
-    }
 }
 
 /// Apply a TagSet to an inode, computing and executing the minimal diff.
@@ -110,8 +55,7 @@ impl TagMutationResult {
 /// - DELETEs tags in existing but not in desired
 /// - INSERTs tags in desired but not in existing
 ///
-/// Returns the changes made for history writing. Does NOT:
-/// - Write history (caller decides if this is an edit vs discovery)
+/// Returns the changes made. Does NOT:
 /// - Increment tags_version (caller decides)
 /// - Mark inode dirty (caller decides)
 ///
@@ -189,14 +133,12 @@ fn apply_tagset_to_inode(
 ///
 /// All operations wrapped in a single transaction for atomicity.
 /// Uses apply_tagset_to_inode for atomic diff-based tag replacement.
-/// Writes tag_edit_history for discovered tags (old_value=None, new_value=tag).
 pub(super) fn execute_index_audio_file(
     db: &Database,
     path: &str,
     file_data: &FileData,
     audio_data: &AudioData,
     tags: &TagSet,
-    session_id: &str,
 ) -> anyhow::Result<()> {
     let scanned_at = current_unix_secs();
 
@@ -231,8 +173,6 @@ pub(super) fn execute_index_audio_file(
         .map(|fp| fingerprint_to_blob(fp));
 
     // Upsert audio_info row.
-    // IMPORTANT: Must use ON CONFLICT DO UPDATE (not INSERT OR REPLACE) because
-    // REPLACE triggers DELETE+INSERT which cascades to tag_edit_history via FK.
     tx.execute(
         r#"
         INSERT INTO audio_info
@@ -267,13 +207,7 @@ pub(super) fn execute_index_audio_file(
     )?;
 
     // Apply tags using the unified helper
-    let result = apply_tagset_to_inode(&tx, file_data.inode, tags, tag_table)?;
-
-    // Write history for discovered/changed tags
-    if result.has_changes() {
-        let changes = result.to_history_entries();
-        write_tag_edit_history(&tx, file_data.inode, &changes, session_id)?;
-    }
+    apply_tagset_to_inode(&tx, file_data.inode, tags, tag_table)?;
 
     tx.commit()?;
     Ok(())
@@ -283,12 +217,6 @@ pub(super) fn execute_index_audio_file(
 /// Zone-scoped: only deletes the file entry matching both inode AND zone,
 /// preventing cross-zone collateral damage.
 pub(super) fn execute_drop_from_index(db: &Database, inode: i64, zone: &str) -> anyhow::Result<()> {
-
-    // Delete tag_edit_history first (plain FK without CASCADE)
-    db.conn().execute(
-        "DELETE FROM tag_edit_history WHERE inode = ?1",
-        params![inode],
-    )?;
 
     // Delete the file entry scoped to zone (audio_info, corpus_tags cascade automatically)
     db.conn().execute(
@@ -330,7 +258,6 @@ pub(super) fn execute_drop_from_index(db: &Database, inode: i64, zone: &str) -> 
 /// Execute SetIndexTrackTags: replace all tags for a file (corpus_tags).
 ///
 /// Uses apply_tagset_to_inode for atomic diff-based replacement.
-/// Writes tag edit history for all changes (this IS an edit, not discovery).
 ///
 /// Used by AssimilateDiskTagsToDb when accepting disk changes.
 /// The inode is passed directly from the mutation (which resolved it via
@@ -340,7 +267,6 @@ pub(super) fn execute_set_index_track_tags(
     inode: i64,
     tags: &TagSet,
     tag_table: &str,
-    session_id: &str,
 ) -> anyhow::Result<()> {
     let tx = db.conn().unchecked_transaction()?;
 
@@ -350,10 +276,6 @@ pub(super) fn execute_set_index_track_tags(
     if result.has_changes() {
         // Increment tags_version using the helper
         increment_tags_version(&tx, inode)?;
-
-        // Write tag edit history using the caller-provided session identifier
-        let changes = result.to_history_entries();
-        write_tag_edit_history(&tx, inode, &changes, session_id)?;
     }
 
     tx.commit()?;
@@ -375,7 +297,6 @@ pub(super) fn execute_apply_index_tag_ops(
     inode: i64,
     ops: &[crate::meta::mutations::TagOp],
     tag_table: &str,
-    session_id: &str,
 ) -> anyhow::Result<()> {
 
     // Filter to non-nop operations
@@ -385,9 +306,6 @@ pub(super) fn execute_apply_index_tag_ops(
     }
 
     let tx = db.conn().unchecked_transaction()?;
-
-    // Collect history entries while applying operations
-    let mut history_entries: Vec<(String, Option<String>, Option<String>)> = Vec::new();
 
     for op in &effective_ops {
         let tag_name = op.tag_name.to_uppercase();
@@ -423,13 +341,7 @@ pub(super) fn execute_apply_index_tag_ops(
                 // No-op - should not reach here due to filter
             }
         }
-
-        // Collect history entry for this operation
-        history_entries.push((tag_name, op.old_value.clone(), op.new_value.clone()));
     }
-
-    // Write history entries using the caller-provided session identifier
-    write_tag_edit_history(&tx, inode, &history_entries, session_id)?;
 
     // Increment tags_version using the helper
     increment_tags_version(&tx, inode)?;
@@ -480,7 +392,6 @@ pub(super) fn execute_update_track_path_with_metadata(
         )?;
 
     // Upsert new audio_info with new file_type.
-    // Must use ON CONFLICT DO UPDATE (not REPLACE) to avoid CASCADE on tag_edit_history.
     tx.execute(
         r#"
         INSERT INTO audio_info

@@ -36,7 +36,6 @@ Currently 6 cached summary queries, each defined with scope-based invalidation:
 | `GetInsights` | `TAGS \| FILES` | 30s | — |
 | `GetInboxOverview` | `FILES \| INBOX` | 15s | — |
 | `GetDeployStatus` | `DEPLOY \| FILES` | 15s | — |
-| `GetEditHistory` | `TAGS` | 30s | — |
 | `GetExternalMatches` | `EXTERNAL` | 15s | 5s |
 | `GetPackingDirs` | `EXTERNAL \| FILES` | 30s | — |
 
@@ -86,7 +85,7 @@ Three touch points:
 
 ### Scope-Based Invalidation
 
-When mutations complete, the Witch sends `invalidate_scope(session_recomputation_scope)` — only cache slots whose `SCOPE` overlaps the mutation scope are invalidated. A tag edit doesn't re-query deploy status; a library deploy doesn't re-query edit history.
+When mutations complete, the Witch sends `invalidate_scope(session_recomputation_scope)` — only cache slots whose `SCOPE` overlaps the mutation scope are invalidated. A tag edit doesn't re-query deploy status; a library deploy doesn't re-query external matches.
 
 ### Demand-Not-Timing
 

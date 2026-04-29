@@ -255,7 +255,6 @@ impl SignalWriteSender {
         file_data: FileData,
         audio_data: AudioData,
         tags: crate::corpus::tags::TagSet,
-        session_id: &str,
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
@@ -264,7 +263,6 @@ impl SignalWriteSender {
             file_data,
             audio_data,
             tags,
-            session_id: session_id.to_string(),
         });
     }
 
@@ -294,7 +292,6 @@ impl SignalWriteSender {
         path: &str,
         tags: crate::corpus::tags::TagSet,
         tag_table: &str,
-        session_id: &str,
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
@@ -303,7 +300,6 @@ impl SignalWriteSender {
             path: path.to_string(),
             tags,
             tag_table: tag_table.to_string(),
-            session_id: session_id.to_string(),
         });
     }
 
@@ -323,7 +319,6 @@ impl SignalWriteSender {
         path: &str,
         ops: Vec<crate::meta::mutations::TagOp>,
         tag_table: &str,
-        session_id: &str,
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
@@ -332,7 +327,6 @@ impl SignalWriteSender {
             path: path.to_string(),
             ops,
             tag_table: tag_table.to_string(),
-            session_id: session_id.to_string(),
         });
     }
 
@@ -703,27 +697,6 @@ impl SignalWriteSender {
             entity_type: entity_type.to_string(),
             discovered_from: discovered_from.map(|s| s.to_string()),
             discovered_at,
-        });
-    }
-
-    // =========================================================================
-    // Edit History Purge Operations (operator-confirmed UI action)
-    // =========================================================================
-
-    /// Delete all tag edit history rows.
-    ///
-    /// Operator-confirmed action from the History view, not a corpus mutation,
-    /// so no witness is required.
-    pub fn clear_tag_edit_history(&self) {
-        self.mark_enqueued();
-        let _ = self.tx.send(DbWriteOp::ClearTagEditHistory);
-    }
-
-    /// Delete tag edit history rows for a single session.
-    pub fn clear_tag_edit_history_session(&self, session_id: &str) {
-        self.mark_enqueued();
-        let _ = self.tx.send(DbWriteOp::ClearTagEditHistorySession {
-            session_id: session_id.to_string(),
         });
     }
 

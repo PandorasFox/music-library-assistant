@@ -15,7 +15,6 @@ mod compound_split;
 mod deploy;
 mod disc_extraction;
 mod external_match;
-mod history;
 mod manual_review;
 mod missing_album;
 mod oob_resolution;
@@ -81,7 +80,6 @@ impl App {
             ViewAction::KnotBrowser(a) => a.handle(self, witness.as_ref()),
             ViewAction::AcoustidBrowse(a) => a.handle(self, witness.as_ref()),
             ViewAction::ReleaseReview(a) => a.handle(self, witness.as_ref()),
-            ViewAction::History(a) => a.handle(self, witness.as_ref()),
             ViewAction::TagCanonicityResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::CompoundTagSplitResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::ArtistPluralResolution(a) => a.handle(self, witness.as_ref()),
@@ -334,10 +332,6 @@ impl App {
             }
             ActiveView::UnifiedTagEditor(ref mut s) => click_dispatch!(void s),
             ActiveView::CorpusBrowser(ref mut s) => click_dispatch!(void s),
-            ActiveView::History(ref mut s) => {
-                s.handle_click(x, y);
-                None
-            }
             ActiveView::ExternalMatches(ref mut s) => {
                 s.interaction.list.handle_click(x, y, &s.data.flat_items);
                 None

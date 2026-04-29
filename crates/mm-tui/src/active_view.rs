@@ -7,7 +7,7 @@
 use crate::{
     acoustid_browse, artist_plural_modal, config_editor, corrupt_file_modal, deploy_modal,
     external_match_view, eye::Eye,
-    history_view, insights_view,
+    insights_view,
     lossless_remux_modal, missing_directory_modal, missing_file_modal,
     moved_file_modal, oob_conflict_modal, progress_screen, progressive_worker,
     release_review, subpar_duplicate_modal, tabbed_transaction_review,
@@ -27,7 +27,6 @@ pub(crate) enum ActiveView {
     // Lateral view ring
     ConfigEditor(config_editor::ConfigEditorState),
     Insights(insights_view::InsightsViewState),
-    History(history_view::HistoryViewState),
     CorpusBrowser(tree_browser::TreeBrowserState),
     TagSearch(tag_search::TagSearchState),
     TabbedTransactionReview(tabbed_transaction_review::TabbedTransactionReviewState),
@@ -135,7 +134,6 @@ impl ActiveView {
             Self::StartupMaintenance => Some("Startup"),
             Self::ConfigEditor(_) => Some("Config Editor"),
             Self::Insights(_) => Some("Corpus Insights"),
-            Self::History(_) => Some("Edit History"),
             Self::CorpusBrowser(_) => Some("Corpus Browser"),
             Self::TagSearch(_) => Some("Tag Search"),
             Self::TabbedTransactionReview(_) => Some("Transaction"),
@@ -209,7 +207,6 @@ impl ActiveView {
             Self::TagSearch(_) => Some(LateralView::Search),
             Self::CorpusBrowser(_) => Some(LateralView::Files),
             Self::Insights(_) => Some(LateralView::Health),
-            Self::History(_) => Some(LateralView::History),
             Self::TabbedTransactionReview(_) => Some(LateralView::Transaction),
             Self::Deploy(_) => Some(LateralView::Deploy),
             Self::ExternalMatches(_) => Some(LateralView::ExternalMatches),
@@ -235,7 +232,6 @@ impl ActiveView {
         use mm_ui::route::Route;
         match self {
             Self::Insights(s) => Some(Route::Health(s.to_route())),
-            Self::History(s) => Some(Route::History(s.to_route())),
             Self::Deploy(s) => Some(Route::Deploy(s.to_route())),
             Self::ExternalMatches(s) => Some(Route::ExternalMatches(s.to_route())),
             Self::ConfigEditor(_) => Some(Route::Config(Default::default())),
@@ -277,7 +273,6 @@ pub(crate) enum ViewAction {
     KnotBrowser(super::knot_browser::KnotBrowserAction),
     AcoustidBrowse(acoustid_browse::AcoustidBrowseAction),
     ReleaseReview(release_review::ReleaseReviewAction),
-    History(history_view::HistoryAction),
     TagCanonicityResolution(mm_ui::resolutions::tag_canonicity::CanonicityAction),
     CompoundTagSplitResolution(mm_ui::resolutions::compound_split::CompoundSplitAction),
     ArtistPluralResolution(artist_plural_modal::ArtistPluralAction),

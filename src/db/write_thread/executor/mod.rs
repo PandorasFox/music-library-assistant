@@ -329,10 +329,9 @@ pub(super) fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             file_data,
             audio_data,
             tags,
-            session_id,
         } => {
             with_retry("index_audio_file", path, || {
-                index_ops::execute_index_audio_file(db, path, file_data, audio_data, tags, session_id)
+                index_ops::execute_index_audio_file(db, path, file_data, audio_data, tags)
             });
         }
 
@@ -347,10 +346,9 @@ pub(super) fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             path,
             tags,
             tag_table,
-            session_id,
         } => {
             with_retry("set_index_track_tags", path, || {
-                index_ops::execute_set_index_track_tags(db, *inode, tags, tag_table, session_id)
+                index_ops::execute_set_index_track_tags(db, *inode, tags, tag_table)
             });
         }
 
@@ -359,10 +357,9 @@ pub(super) fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             path,
             ops,
             tag_table,
-            session_id,
         } => {
             with_retry("apply_index_tag_ops", path, || {
-                index_ops::execute_apply_index_tag_ops(db, *inode, ops, tag_table, session_id)
+                index_ops::execute_apply_index_tag_ops(db, *inode, ops, tag_table)
             });
         }
 
@@ -600,30 +597,6 @@ pub(super) fn execute_signal_op(db: &Database, op: &DbWriteOp) {
                     *image_count,
                     *fetched_at,
                 )
-            });
-        }
-
-        DbWriteOp::ClearTagEditHistory => {
-            with_retry("clear_tag_edit_history", "all", || {
-                let conn = db.conn();
-                conn.execute("DELETE FROM tag_edit_history", [])?;
-                conn.execute("DELETE FROM edit_sessions", [])?;
-                Ok(())
-            });
-        }
-
-        DbWriteOp::ClearTagEditHistorySession { session_id } => {
-            with_retry("clear_tag_edit_history_session", session_id, || {
-                let conn = db.conn();
-                conn.execute(
-                    "DELETE FROM tag_edit_history WHERE session_id = ?1",
-                    rusqlite::params![session_id],
-                )?;
-                conn.execute(
-                    "DELETE FROM edit_sessions WHERE session_id = ?1",
-                    rusqlite::params![session_id],
-                )?;
-                Ok(())
             });
         }
 

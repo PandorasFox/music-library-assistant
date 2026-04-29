@@ -316,6 +316,84 @@ mod tests {
     }
 
     #[test]
+    fn test_inode_paths_fk_cascade_on_inode_delete() {
+        // Verify the ON DELETE CASCADE FK on inode_paths(inode) → inodes(inode):
+        // dropping the inodes row should remove all matching inode_paths rows.
+        let db = fresh_test_db();
+
+        t!(db.conn().execute(
+            "INSERT INTO inodes (inode, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at) \
+             VALUES (500, 0, 1, 0, 100, 1000)",
+            [],
+        ));
+        t!(db.conn().execute_batch(
+            "INSERT INTO inode_paths VALUES (500, 'corpus', 'a.flac');
+             INSERT INTO inode_paths VALUES (500, 'library', 'lib/a.flac');",
+        ));
+
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM inode_paths WHERE inode = 500"), 2);
+
+        t!(db.conn().execute("DELETE FROM inodes WHERE inode = 500", []));
+
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM inode_paths WHERE inode = 500"), 0);
+    }
+
+    #[test]
+    fn test_inode_paths_zone_independent_deletes() {
+        // Deleting the corpus path should not affect a library path with the same inode.
+        let db = fresh_test_db();
+        t!(db.conn().execute(
+            "INSERT INTO inodes (inode, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at) \
+             VALUES (600, 0, 1, 0, 100, 1000)",
+            [],
+        ));
+        t!(db.conn().execute_batch(
+            "INSERT INTO inode_paths VALUES (600, 'corpus', 'corpus_path.flac');
+             INSERT INTO inode_paths VALUES (600, 'library', 'library_path.flac');",
+        ));
+        t!(db.conn().execute(
+            "DELETE FROM inode_paths WHERE inode = 600 AND zone = 'corpus'",
+            [],
+        ));
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM inode_paths WHERE inode = 600"), 1);
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM inodes WHERE inode = 600"), 1);
+        let remaining_zone: String = t!(db.conn().query_row(
+            "SELECT zone FROM inode_paths WHERE inode = 600",
+            [],
+            |row| row.get(0),
+        ));
+        assert_eq!(remaining_zone, "library");
+    }
+
+    #[test]
+    fn test_inode_paths_pk_rejects_duplicate_zone_path() {
+        // (inode, zone, path) is the PK — second insert of the same triple errors.
+        let db = fresh_test_db();
+        t!(db.conn().execute(
+            "INSERT INTO inodes (inode, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at) \
+             VALUES (700, 0, 1, 0, 100, 1000)",
+            [],
+        ));
+        t!(db.conn().execute(
+            "INSERT INTO inode_paths VALUES (700, 'corpus', 'p.flac')",
+            [],
+        ));
+        // Duplicate insert — must fail.
+        let dup = db.conn().execute(
+            "INSERT INTO inode_paths VALUES (700, 'corpus', 'p.flac')",
+            [],
+        );
+        assert!(dup.is_err(), "duplicate PK insert should fail");
+
+        // INSERT OR IGNORE skips the duplicate (used by the watcher upsert path).
+        t!(db.conn().execute(
+            "INSERT OR IGNORE INTO inode_paths VALUES (700, 'corpus', 'p.flac')",
+            [],
+        ));
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM inode_paths WHERE inode = 700"), 1);
+    }
+
+    #[test]
     fn test_split_migration_picks_newest_scanned_at_on_divergence() {
         let db = fresh_test_db();
         create_legacy_files_table(&db);

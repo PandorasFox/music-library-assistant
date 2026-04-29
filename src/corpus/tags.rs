@@ -345,9 +345,26 @@ pub fn write_file_tags(
     // Verify the file actually changed on disk
     match std::fs::metadata(path) {
         Ok(post) => {
+            let post_inode = post.ino() as i64;
             let post_mtime = post.mtime();
             let post_size = post.size();
-            if post_mtime == pre_mtime && post_size == pre_size {
+            if post_inode != inode {
+                // Lofty did an atomic-rename write (likely because the new tag
+                // payload didn't fit in existing ID3v2 padding) — the path now
+                // points at a fresh inode and any cross-zone hardlinks are
+                // severed. Sibling paths still pointing at the old inode are
+                // now orphaned with the old tag content; they'll surface as
+                // LibraryLeftover/Stale in the next deploy-health pass and the
+                // operator can re-deploy. Log loudly so we know how often this
+                // happens in production before deciding whether auto-relink is
+                // worth the unlink-vs-CLAUDE.md trade-off.
+                crate::logging::log_error(format!(
+                    "[TAG_WRITE] HARDLINK_SEVERED: tag write replaced inode at \
+                     path={}: old_inode={} new_inode={} (post: mtime={}, size={}). \
+                     Cross-zone hardlinks at the old inode are now orphaned.",
+                    path.display(), inode, post_inode, post_mtime, post_size,
+                ));
+            } else if post_mtime == pre_mtime && post_size == pre_size {
                 crate::logging::log_error(format!(
                     "[TAG_WRITE] WARNING: file unchanged after write! inode={} path={} \
                      (mtime={}, size={} — identical before and after)",

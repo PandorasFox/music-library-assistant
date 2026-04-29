@@ -962,6 +962,26 @@ impl App {
         }
     }
 
+    /// Server-side bulk approval. Single round-trip: server loads review +
+    /// staging data, builds decisions, discards any open txn, opens a fresh
+    /// one, and stages all decisions. Returns `(staged, skipped)`.
+    pub(crate) fn batch_approve_releases(
+        &mut self,
+        release_ids: Vec<String>,
+    ) -> Result<(usize, usize), mm_meta::protocol::ProtocolError> {
+        match self.send_transaction(
+            mm_meta::protocol::TransactionPayload::BatchApproveReleases { release_ids },
+        ) {
+            mm_meta::protocol::TransactionResponse::BatchApprovalStaged { staged, skipped } => {
+                Ok((staged, skipped))
+            }
+            mm_meta::protocol::TransactionResponse::Error(e) => {
+                Err(mm_meta::protocol::ProtocolError::Transaction(e))
+            }
+            _ => unreachable!("protocol bug: wrong transaction response"),
+        }
+    }
+
     /// Queue a background task. Returns `Ok(None)` on success, `Ok(Some(reason))` if
     /// the server rejected the command, or `Err` on protocol failure.
     pub(crate) fn queue_task(&mut self, task: mm_meta::protocol::BackgroundTask) -> Result<Option<String>, mm_meta::protocol::ProtocolError> {

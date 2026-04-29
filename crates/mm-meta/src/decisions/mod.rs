@@ -213,6 +213,9 @@ pub enum TransactionError {
     AlreadyActive,
     NoActiveTransaction,
     NotAcceptingMutations,
+    /// Operation-specific failure with an explanatory message
+    /// (e.g. "no matched tracks for selected releases" from `BatchApproveReleases`).
+    Other(String),
 }
 
 impl std::fmt::Display for TransactionError {
@@ -224,6 +227,7 @@ impl std::fmt::Display for TransactionError {
                 f,
                 "Not accepting mutations (eyeballing incomplete or read-only mode)"
             ),
+            TransactionError::Other(msg) => write!(f, "{}", msg),
         }
     }
 }

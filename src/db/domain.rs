@@ -585,31 +585,43 @@ fn load_recording_batch_data(
     RecordingBatchResult { summaries, details }
 }
 
+/// Free-function staging loader. Used by the `GetReleaseStagingData` domain
+/// query AND by in-witch handlers (e.g. `BatchApproveReleases`) that need
+/// the same data without going through the cache_thread protocol layer.
+pub fn load_release_staging_data(
+    db: &ReadOnlyDb<'_>,
+    release_ids: &[String],
+    recording_ids: &[String],
+    inodes: &[i64],
+) -> ReleaseStagingData {
+    use crate::external::musicbrainz::load_mb_cache_bundle;
+    let bundle = load_mb_cache_bundle(db, release_ids, recording_ids);
+
+    // Chunk well under SQLite's SQLITE_LIMIT_VARIABLE_NUMBER (32766).
+    const TAG_BATCH: usize = 8000;
+    let mut inode_tags: std::collections::HashMap<i64, Vec<(String, String)>> =
+        std::collections::HashMap::with_capacity(inodes.len());
+    for chunk in inodes.chunks(TAG_BATCH) {
+        let rows = db
+            .get_tags_batch_for_zone(chunk, crate::db::types::Zone::Corpus)
+            .unwrap_or_default();
+        for (inode, pairs) in rows {
+            inode_tags.insert(
+                inode,
+                pairs
+                    .into_iter()
+                    .map(|(name, value)| (name.to_uppercase(), value))
+                    .collect(),
+            );
+        }
+    }
+
+    ReleaseStagingData { bundle, inode_tags }
+}
+
 impl_domain_query! {
     GetReleaseStagingData => ReleaseStagingData, |s, db| {
-        use crate::external::musicbrainz::load_mb_cache_bundle;
-        let bundle = load_mb_cache_bundle(db, &s.release_ids, &s.recording_ids);
-
-        // Chunk well under SQLite's SQLITE_LIMIT_VARIABLE_NUMBER (32766).
-        const TAG_BATCH: usize = 8000;
-        let mut inode_tags: std::collections::HashMap<i64, Vec<(String, String)>> =
-            std::collections::HashMap::with_capacity(s.inodes.len());
-        for chunk in s.inodes.chunks(TAG_BATCH) {
-            let rows = db
-                .get_tags_batch_for_zone(chunk, crate::db::types::Zone::Corpus)
-                .unwrap_or_default();
-            for (inode, pairs) in rows {
-                inode_tags.insert(
-                    inode,
-                    pairs
-                        .into_iter()
-                        .map(|(name, value)| (name.to_uppercase(), value))
-                        .collect(),
-                );
-            }
-        }
-
-        ReleaseStagingData { bundle, inode_tags }
+        load_release_staging_data(db, &s.release_ids, &s.recording_ids, &s.inodes)
     }
 }
 
@@ -794,7 +806,7 @@ fn load_acoustid_matches(
 }
 
 /// Load packed releases filtered by review category, with inline track data.
-fn load_release_review(
+pub fn load_release_review(
     filter: mm_meta::views::external_matches::ReleaseReviewFilter,
     db: &ReadOnlyDb,
 ) -> mm_meta::views::external_matches::ReleaseReviewData {

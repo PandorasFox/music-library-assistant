@@ -421,4 +421,190 @@ impl super::Witch {
 
         Ok(DiscardSummary)
     }
+
+    /// Bulk-approve N releases server-side, eliminating per-decision round-trips.
+    ///
+    /// Loads the review/staging data, builds per-release decisions via
+    /// `build_release_approval_decisions`, discards any open transaction,
+    /// opens a fresh one, and streams all decisions in via `add_decision`.
+    /// Does NOT confirm — operator reviews and confirms separately.
+    ///
+    /// Returns `(staged, skipped)` — number of decisions added to the new
+    /// transaction and number of tracks skipped due to missing MB cache data.
+    pub fn batch_approve_releases(
+        &mut self,
+        release_ids: Vec<String>,
+    ) -> Result<(usize, usize), TransactionError> {
+        if release_ids.is_empty() {
+            return Err(TransactionError::Other(
+                "no release IDs supplied".to_string(),
+            ));
+        }
+
+        // 1. Snapshot config (lock-free).
+        let cfg = self
+            .read_config(|c| {
+                (
+                    c.opinions.external_matching.preferred_locales.clone(),
+                    c.opinions.external_matching.credit_routing.clone(),
+                    c.opinions.external_matching.mb_tag_names.clone(),
+                )
+            })
+            .ok_or_else(|| {
+                TransactionError::Other("config not yet initialized".to_string())
+            })?;
+        let (locales, routing, tag_names) = cfg;
+
+        // 2. Open a fresh read-only DB connection for the load phase.
+        let db_path = crate::config::get_db_path()
+            .map_err(|e| TransactionError::Other(format!("get_db_path: {e}")))?;
+        let db = crate::db::Database::open_read_only(&db_path)
+            .map_err(|e| TransactionError::Other(format!("open_read_only: {e}")))?;
+        let read_db = crate::db::ReadOnlyDb::new(&db);
+
+        // 3. Load the review set and filter to requested IDs.
+        //    `load_release_review` returns all reviewable releases; we
+        //    filter in-process. Future optimization: thread an
+        //    Option<&[String]> through the loader to query only the
+        //    requested IDs.
+        use crate::meta::views::external_matches::{
+            ApprovalTrackInput, ReleaseApprovalInput, ReleaseReviewFilter,
+        };
+        let review = crate::db::domain::load_release_review(
+            ReleaseReviewFilter::All,
+            &read_db,
+        );
+        let requested: HashSet<&str> =
+            release_ids.iter().map(String::as_str).collect();
+        let approval_inputs: Vec<ReleaseApprovalInput> = review
+            .releases
+            .iter()
+            .filter(|r| requested.contains(r.release_id.as_str()))
+            .map(|r| ReleaseApprovalInput {
+                release_id: r.release_id.clone(),
+                tracks: r
+                    .tracks
+                    .iter()
+                    .filter_map(|t| {
+                        let inode = t.matched_inode?;
+                        Some(ApprovalTrackInput {
+                            inode,
+                            recording_id: t.recording_id.clone(),
+                            track_title: t.mb_title.clone(),
+                            track_position: t.position as u32,
+                            medium_position: t.medium_position,
+                        })
+                    })
+                    .collect(),
+            })
+            .filter(|r| !r.tracks.is_empty())
+            .collect();
+        if approval_inputs.is_empty() {
+            return Err(TransactionError::Other(
+                "no matched tracks for selected releases".to_string(),
+            ));
+        }
+
+        // 4. Collect unique IDs needed for staging.
+        let mut all_release_ids: Vec<String> = Vec::new();
+        let mut all_recording_ids: Vec<String> = Vec::new();
+        let mut all_inodes: Vec<i64> = Vec::new();
+        let mut seen_r: HashSet<String> = HashSet::new();
+        let mut seen_rec: HashSet<String> = HashSet::new();
+        for rd in &approval_inputs {
+            if seen_r.insert(rd.release_id.clone()) {
+                all_release_ids.push(rd.release_id.clone());
+            }
+            for t in &rd.tracks {
+                all_inodes.push(t.inode);
+                if seen_rec.insert(t.recording_id.clone()) {
+                    all_recording_ids.push(t.recording_id.clone());
+                }
+            }
+        }
+
+        // 5. Load MB cache + current tags (chunked-batch staging loader).
+        let staging = crate::db::domain::load_release_staging_data(
+            &read_db,
+            &all_release_ids,
+            &all_recording_ids,
+            &all_inodes,
+        );
+
+        crate::logging::log_general(format!(
+            "[BATCH_APPROVE] staging loaded: {} releases, {} recordings, {} artists, {} inode_tags",
+            staging.bundle.releases.len(),
+            staging.bundle.recordings.len(),
+            staging.bundle.artists.len(),
+            staging.inode_tags.len(),
+        ));
+
+        // 6. Build decisions (pure transformation, no DB).
+        let (decisions, skipped): (
+            Vec<crate::meta::views::external_matches::ApprovalDecision>,
+            usize,
+        ) = mm_meta::external::approval::build_release_approval_decisions(
+            &approval_inputs,
+            &staging.bundle,
+            &staging.inode_tags,
+            &locales,
+            &routing,
+            &tag_names,
+        );
+        let staged = decisions.len();
+        if staged == 0 {
+            return Err(TransactionError::Other(format!(
+                "no tag operations produced (skipped {skipped} tracks — \
+                 likely missing recording data in MB cache)"
+            )));
+        }
+
+        // Drop the read-only DB handle before we start mutating; nothing
+        // below needs it, and the read snapshot becomes stale once the
+        // pending transaction confirms.
+        drop(read_db);
+        drop(db);
+
+        // 7. Reset transaction state — discard any open txn, then start
+        //    a fresh one. Streaming: add each decision directly without
+        //    intermediate buffering.
+        if self.pending_transaction.is_some() {
+            let _ = self.discard_transaction();
+        }
+        let label = format!(
+            "Approve {staged} release{}",
+            if staged == 1 { "" } else { "s" }
+        );
+        self.start_transaction(&label)?;
+
+        crate::logging::log_general(format!(
+            "[BATCH_APPROVE] streaming {} decisions into transaction (skipped {})",
+            staged, skipped
+        ));
+
+        for ad in decisions {
+            let key = DecisionKey::MbReleaseApproval {
+                release_id: ad.release_id,
+            };
+            let mutations: Vec<Mutation> = ad
+                .per_inode_ops
+                .into_iter()
+                .map(|ops| {
+                    Mutation::ApplyTagOps(ApplyTagOpsMutation {
+                        ops,
+                        zone: Zone::Corpus,
+                    })
+                })
+                .collect();
+            self.add_decision(
+                key,
+                Decision {
+                    label: ad.label,
+                    mutations,
+                },
+            )?;
+        }
+
+        Ok((staged, skipped))
+    }
 }

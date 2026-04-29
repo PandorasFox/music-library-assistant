@@ -260,6 +260,12 @@ pub enum TransactionPayload {
     Discard,
     /// Get full details for all decisions in the active transaction.
     GetDetails,
+    /// Server-side bulk approval. Loads review/staging data, builds
+    /// per-release decisions, discards any open transaction, opens a fresh
+    /// one, and stages all decisions in-process — eliminating the per-decision
+    /// AddDecision round-trip fan-out. Does NOT confirm; operator reviews
+    /// and confirms separately.
+    BatchApproveReleases { release_ids: Vec<String> },
 }
 
 /// Transaction operation response.
@@ -271,6 +277,10 @@ pub enum TransactionResponse {
     Details(Vec<DecisionDetail>),
     /// Transaction was discarded.
     Discarded(DiscardSummary),
+    /// Result of `BatchApproveReleases`: number of decisions staged into
+    /// the new transaction and number of tracks skipped due to missing
+    /// MB cache data.
+    BatchApprovalStaged { staged: usize, skipped: usize },
     /// Transaction-specific error.
     Error(TransactionError),
 }

@@ -527,19 +527,61 @@ impl App {
         self.run_approval(approval_inputs, gesture);
     }
 
-    /// Shared approval logic: load staging data, build decisions, stage them.
+    /// Shared approval logic.
+    ///
+    /// Closed-txn mode (default): single protocol round-trip via
+    /// `BatchApproveReleases`. The witch loads staging data, builds
+    /// decisions, discards any open txn, opens a fresh one, and stages
+    /// all decisions in-process.
+    ///
+    /// Open-txn mode: falls back to the per-decision flow so that
+    /// decisions append to the existing persistent transaction (the
+    /// batched endpoint always discards). Used for composite flows
+    /// where the operator is building up a multi-source transaction.
     fn run_approval(
+        &mut self,
+        approval_inputs: Vec<mm_meta::views::external_matches::ReleaseApprovalInput>,
+        gesture: &witness::ConfirmationGesture,
+    ) {
+        if approval_inputs.is_empty() {
+            self.status_message = Some("No releases selected".to_string());
+            return;
+        }
+
+        if self.open_txn_mode() {
+            self.run_approval_per_decision(approval_inputs, gesture);
+            return;
+        }
+
+        // Closed-txn fast path: single round-trip.
+        let release_ids: Vec<String> = approval_inputs
+            .iter()
+            .map(|r| r.release_id.clone())
+            .collect();
+        // Gesture has already authorized this approval via the action
+        // handler entry point; the protocol message itself doesn't carry
+        // a gesture (decisions are constructed server-side).
+        let _ = gesture;
+        match self.batch_approve_releases(release_ids) {
+            Ok((staged, skipped)) => {
+                self.status_message = Some(format_approval_message(staged, skipped));
+                self.after_staging_decisions();
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Approval failed: {e}"));
+            }
+        }
+    }
+
+    /// Per-decision approval flow. Used in open-txn mode where decisions
+    /// must append to an existing transaction without discarding it.
+    fn run_approval_per_decision(
         &mut self,
         approval_inputs: Vec<mm_meta::views::external_matches::ReleaseApprovalInput>,
         gesture: &witness::ConfirmationGesture,
     ) {
         use mm_meta::mutations::{tag_edit::ApplyTagOpsMutation, Mutation};
         use mm_ui::external_matches::approval::build_release_approval_decisions;
-
-        if approval_inputs.is_empty() {
-            self.status_message = Some("No releases selected".to_string());
-            return;
-        }
 
         // Load config for locales and credit routing
         let config = self.config();
@@ -590,17 +632,6 @@ impl App {
             return;
         }
 
-        // Stage one decision per release
-        let open_txn = self.open_txn_mode();
-        if !open_txn {
-            let n = decisions.len();
-            let _ = self.start_transaction(&format!(
-                "Approve {} release{}",
-                n,
-                if n == 1 { "" } else { "s" }
-            ));
-        }
-
         let approved = decisions.len();
         for ad in decisions {
             let key = mm_ui::decision_keys::mb_release_approval(ad.release_id);
@@ -622,21 +653,24 @@ impl App {
             );
         }
 
-        self.status_message = Some(if skipped > 0 {
-            format!(
-                "Approved {} release{} ({} files skipped \u{2014} missing cache)",
-                approved,
-                if approved == 1 { "" } else { "s" },
-                skipped,
-            )
-        } else {
-            format!(
-                "Approved {} release{}",
-                approved,
-                if approved == 1 { "" } else { "s" },
-            )
-        });
-
+        self.status_message = Some(format_approval_message(approved, skipped));
         self.after_staging_decisions();
+    }
+}
+
+fn format_approval_message(approved: usize, skipped: usize) -> String {
+    if skipped > 0 {
+        format!(
+            "Approved {} release{} ({} files skipped \u{2014} missing cache)",
+            approved,
+            if approved == 1 { "" } else { "s" },
+            skipped,
+        )
+    } else {
+        format!(
+            "Approved {} release{}",
+            approved,
+            if approved == 1 { "" } else { "s" },
+        )
     }
 }

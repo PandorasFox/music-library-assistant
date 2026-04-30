@@ -1011,39 +1011,17 @@ fn populate_cover_art_queue(
 ) {
     use std::collections::HashMap;
 
-    // Get directories for winning releases only (post-conflict-resolution).
-    // signal_packed_release contains the releases that actually won global
-    // assignment — release_packing_scores has ALL candidates including losers.
+    // Quality floor: only fetch CAA art for releases that the operator has
+    // committed to via an applied MUSICBRAINZ_ALBUMID tag on the audio file.
+    //
+    // Previously this also pulled candidates from `release_packing_scores`
+    // joined with `signal_packed_release`, which fired CAA fetches for any
+    // release the packer scored as optimal — even on weak/elimination matches.
+    // That produced cross-release contamination (e.g., a misidentified release
+    // pulled the wrong cover art into the wrong directory). The applied tag is
+    // the high-confidence signal: if the operator hasn't tagged the file with
+    // a release MBID, we don't fetch art for that release.
     let mut release_dirs: HashMap<String, String> = HashMap::new();
-    let sql = r#"
-        SELECT DISTINCT rps.release_id, p.path
-        FROM release_packing_scores rps
-        JOIN inode_paths p ON rps.inode = p.inode
-        WHERE rps.is_optimal = 1 AND p.zone = 'corpus'
-          AND rps.release_id IN (
-            SELECT substr(key, instr(key, ':') + 1) FROM signal_packed_release
-          )
-    "#;
-    if let Ok(mut stmt) = db.conn().prepare(sql) {
-        let _ = stmt.query_map([], |row| {
-            let release_id: String = row.get(0)?;
-            let path: String = row.get(1)?;
-            Ok((release_id, path))
-        }).and_then(|rows| {
-            for row in rows {
-                if let Ok((release_id, path)) = row {
-                    if let Some(dir) = std::path::Path::new(&path).parent() {
-                        let dir_str = dir.to_string_lossy().to_string();
-                        release_dirs.entry(release_id).or_insert(dir_str);
-                    }
-                }
-            }
-            Ok(())
-        });
-    }
-
-    // Also pick up release IDs from MUSICBRAINZ_ALBUMID tags (e.g. CD rips
-    // matched via CDTOC that bypass the AcoustID → release packing pipeline).
     let tag_sql = r#"
         SELECT DISTINCT ct.tag_value, p.path
         FROM corpus_tags ct

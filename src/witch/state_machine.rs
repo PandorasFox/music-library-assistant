@@ -329,7 +329,7 @@ impl super::Witch {
 
         self.dispatch_post_transition_work(work);
 
-        // Sidecar deploy fires eagerly — no 30s linger, no idle priority chain.
+        // Sidecar deploy fires eagerly — no idle linger, no idle priority chain.
         // Content analysis emitted SidecarDeployReady signals; deploy them now.
         if self.pending_work.contains(super::types::PendingWork::SIDECAR_DEPLOY) {
             let auto_deploy_enabled = self
@@ -490,7 +490,7 @@ impl super::Witch {
     fn transition_to_idle(&mut self) {
         let action = self.compute_idle_action();
 
-        // Always clear FETCH flag — don't retry every 30s if fetch can't start
+        // Always clear FETCH flag — don't retry on every linger expiry if fetch can't start
         self.pending_work.remove(super::types::PendingWork::FETCH);
 
         match action {

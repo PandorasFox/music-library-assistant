@@ -9,7 +9,7 @@ use mm_meta::soft_mutations::SoftMutation;
 impl super::Witch {
     /// Request an async check for deploy-ready files (audio + leftovers + stale + sidecars).
     ///
-    /// Fires from `transition_to_idle` — gated behind 30s linger + priority chain.
+    /// Fires from `transition_to_idle` — gated behind LINGER_DURATION + priority chain.
     /// Offloads the DB query to a blocking task.
     pub(super) fn request_auto_deploy_check(&self) {
         let config = match self.read_config(|c| c.clone()) {

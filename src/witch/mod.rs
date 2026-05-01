@@ -334,8 +334,11 @@ pub struct Witch {
 }
 
 impl Witch {
-    /// Linger duration for completed session display.
-    const LINGER_DURATION: Duration = Duration::from_secs(30);
+    /// Idle gate before the post-Done priority chain fires (auto-fetch,
+    /// auto-packing, auto-deploy). Held high so background work only kicks
+    /// in after a sustained quiet period, not every time a small batch of
+    /// work drains.
+    const LINGER_DURATION: Duration = Duration::from_secs(30 * 60);
 
     fn new(
         startup_state: types::WitchStartupState,

@@ -10,32 +10,34 @@ Source: `src/meta/computations/analysis/release_packing.rs`
 
 | Stage | Computation | Purpose |
 |-------|------------|---------|
-| 1 | PackReleases { incremental } | Identify candidates, write manifest, spawn per-release scorers. Incremental mode skips solved releases |
+| 1 | PackReleases { incremental } | Identify candidates, write manifest, spawn per-release scorers. Incremental mode scopes the work to releases reachable from dirty inodes |
 | 2 | ScoreReleaseCandidates (×N) | Directory selection, AcoustID scoring, elimination matching |
-| 3a | ComputeReleaseMappings | Classify proposals into quality tiers |
+| 3a | ComputeReleaseMappings | Classify proposals into quality tiers (full mode only) |
 | 3b–3e | Map{Perfect,FullMatch,Incomplete,Single}Releases → N×ResolvePackingComponent | Tiered orchestrators: find connected components, spawn parallel per-component MIS solvers. Knots extracted and resolved greedily by orchestrators. Isolated nodes emitted directly. (Incomplete/Single order configurable) |
 | 4 | EmitUnmatchedSignals { incremental } | Emit signals for unmatched corpus tracks and unfilled release slots. Incremental mode excludes MB-tagged inodes |
 
-Stages are barrier-separated: each defers the next via `SharedMappingState`, ensuring serial execution managed by the Witch's computation scheduler.
+Stages are barrier-separated: each defers the next via `SharedMappingState`, ensuring serial execution managed by the Witch's computation scheduler. **Incremental runs stop after Stage 2** — they refresh scoring data only and leave existing PackedRelease / ReleasePacking signals intact for the next full repack to reconcile.
 
 ---
 
 ## Stage 1: PackReleases (Orchestrator)
 
-**Trigger:** Manual only (operator requests release packing). Auto-triggered after external fetch (incremental mode).
+**Trigger:** `incremental=false` is either operator-initiated (full repack) or auto-triggered by the Witch's idle-timer promotion when accumulated incremental passes need reconciliation (configured via `release-packing { idle-full-repack-after-secs N }` in `config.kdl`; default 30 minutes; 0 disables). `incremental=true` is the live-ingestion auto-trigger that fires after AcoustID external fetches (`request_release_packing(true)` from `state_machine.rs`).
 
-**Parameter:** `incremental: bool` — when true, solved releases are skipped.
+**Parameter:** `incremental: bool` — selects between full repack and a scoped re-score of releases touched by dirty inodes.
 
 1. Load all AcoustID external matches for corpus files
 2. Filter recordings by `min_confidence` (from config). Duration is not filtered — it is a scoring dimension in Stage 2.
 3. Parse release tracklists from MB cache (locale-resolved artist names)
-4. Write manifest rows (`release_id`, `total_tracks`, `media_count`, `title`, `artist`) to `packing_manifest` table
-5. Deduplicate candidates per `(release_id, inode)` — keep highest-confidence recording
-6. Write candidate rows to `release_packing_candidates` intermediate table
-7. **Pinned release injection**: For each source dir with a `pinned_release` configured, add the pinned release ID to `all_release_ids` to ensure its tracklist is fetched. For inodes in that dir that have no AcoustID candidate for the pinned release, inject a synthetic candidate row (`confidence = 1.0`, empty `recording_id`). This guarantees every file in a pinned dir participates in scoring for the pinned release regardless of fingerprint match quality.
-8. **Incremental filtering** (when `incremental=true`): Load all MB-tagged inodes (files with both configured MB track + release tags). Group candidates by release_id. A release is "solved" if ALL its candidate inodes are MB-tagged AND the release is NOT pinned. Remove all candidates for solved releases. This skips rescoring already-applied matches, typically cutting the pipeline to ~1/3 of releases.
-9. Spawn N `ScoreReleaseCandidates` computations (one per release with candidates)
-10. Defer `ComputeReleaseMappings` via barrier (threads `incremental` through)
+4. **Determine scope**: read inodes flagged dirty for `release_packing` (set by TAGS-scope mutations). In incremental mode, compute `affected_releases` = union of (a) releases reachable from those dirty inodes' recordings and (b) pinned releases. In full mode, scope is unbounded.
+5. **Truncate vs per-release delete**: full mode runs `truncate_packing_tables` (manifest, scores, candidates, signal_packed_release). Incremental mode runs `delete_packing_data_for_release` for each affected release only — non-affected releases keep their manifest, scores, and existing PackedRelease/ReleasePacking signals.
+6. Write manifest rows (`release_id`, `total_tracks`, `media_count`, `title`, `artist`) for the in-scope releases
+7. Deduplicate candidates per `(release_id, inode)` — keep highest-confidence recording
+8. **Pinned release injection**: For each source dir with a `pinned_release` configured, add the pinned release ID to `all_release_ids` to ensure its tracklist is fetched. For inodes in that dir that have no AcoustID candidate for the pinned release, inject a synthetic candidate row (`confidence = 1.0`, empty `recording_id`). Pinned releases are always in scope for incremental runs.
+9. In incremental mode, filter `deduped` to candidates whose `release_id ∈ affected_releases` and clear the `release_packing` dirty-inode flags
+10. Write candidate rows to `release_packing_candidates`
+11. Spawn N `ScoreReleaseCandidates` computations (one per release with candidates)
+12. **Defer ComputeReleaseMappings only in full mode**. Incremental mode returns after spawning scoring; mapping/MIS does not run until the next full repack.
 
 **Key data:**
 - `CorpusFileInfo`: `parent_dir`, tags (`TITLE`/`ARTIST`/`ALBUM`/`TRACKNUMBER`), `duration_ms`
@@ -220,7 +222,7 @@ Post-resolution analysis producing 2 signal types:
 ### UnmatchedCorpusTrack
 Emitted for inodes with AcoustID recording matches but no release assignment. Also covers fingerprinted files with no AcoustID match at all.
 
-**Incremental mode:** MB-tagged inodes are excluded from unmatched detection. In incremental mode, solved releases were skipped in Stage 1 and their inodes have no `ReleasePacking` signals — without this filter they would be falsely flagged as unmatched. This exclusion is harmless in full mode (those inodes would have assignments anyway).
+**Incremental mode:** does not run Stage 4. Stage 4 only runs as part of a full repack, after Stage 3 mapping. The Stage 4 implementation still excludes MB-tagged inodes from unmatched detection so previously-skipped releases (whose existing assignments are preserved on disk) don't get falsely flagged.
 
 ### UnfilledReleaseSlot
 Empty track slots in partially-assigned releases. Only emitted for releases with `filled_count > 0`.

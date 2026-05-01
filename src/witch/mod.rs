@@ -23,7 +23,7 @@
 //! - New event sources: Add handlers in `event_handlers.rs`
 
 use std::collections::{HashMap, VecDeque};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::config::{self, Config, SharedConfig};
 use crate::db::write_thread::{self, DbThreadHandle};
@@ -316,6 +316,18 @@ pub struct Witch {
 
     /// True while vacuum check is running in a blocking task.
     vacuum_check_pending: bool,
+
+    // -------------------------------------------------------------------------
+    // Idle Full-Repack Promotion
+    // -------------------------------------------------------------------------
+    /// True if at least one incremental release-packing pass has been queued
+    /// since the last full repack. Cleared when a full repack is queued.
+    /// Drives the idle-timer auto-promotion in `decide_idle_action`.
+    incremental_since_full_repack: bool,
+
+    /// Set when the work state transitions into Idle, cleared when it leaves
+    /// Idle. Drives the elapsed-time guard for idle-timer auto-promotion.
+    last_idle_entry_at: Option<Instant>,
 }
 
 impl Witch {
@@ -396,6 +408,8 @@ impl Witch {
             pending_watcher_command: None,
             setup_in_progress: false,
             vacuum_check_pending: false,
+            incremental_since_full_repack: false,
+            last_idle_entry_at: None,
         }
     }
 
@@ -826,18 +840,31 @@ impl Witch {
             .is_some_and(|h| h.is_cover_art_active())
     }
 
-    /// Queue release bin-packing analysis (operator-initiated).
+    /// Queue release bin-packing analysis.
     ///
-    /// Analyzes cached MusicBrainz data and assigns corpus files to releases
-    /// using greedy bin-packing. Does not require a ConfirmationGesture.
+    /// `incremental=false` runs a full pipeline: truncate intermediate tables,
+    /// rebuild candidates and scores for every release, run mapping/MIS, emit
+    /// fresh PackedRelease / ReleasePacking signals.
     ///
-    /// When `incremental` is true, solved releases (all candidate inodes already
-    /// MB-tagged) are skipped — only unsolved and pinned releases enter the pipeline.
+    /// `incremental=true` is the live-ingestion path triggered after AcoustID
+    /// fetches: it re-scores only the releases reachable from inodes marked
+    /// dirty for `release_packing` (plus pinned releases). It deletes and
+    /// rewrites the manifest/candidates/scores rows for those releases only,
+    /// leaves all other scoring data and existing signals intact, and does
+    /// **not** run mapping/MIS — the next full repack (operator-initiated or
+    /// idle-timer auto-promoted) reconciles the global packing decision
+    /// against the updated scores.
     pub fn request_release_packing(&mut self, incremental: bool) {
         let mode = if incremental { "incremental" } else { "full" };
         crate::logging::log_general(format!(
             "[WITCH] Release packing analysis requested ({})", mode
         ));
+
+        // Track whether incremental scoring data has accumulated since the
+        // last full repack. Drives the idle-timer auto-promotion in
+        // decide_idle_action: incremental sets the flag, full clears it.
+        self.incremental_since_full_repack = incremental;
+
         self.queue_computation_with_label(
             Computation::Analysis(analysis::Computation::PackReleases { incremental }),
             Some("Release packing".to_string()),

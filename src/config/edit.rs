@@ -245,6 +245,13 @@ pub fn apply_config_edits_to_kdl(
                 new_rp.low_confidence_max_album_match,
             );
         }
+        if new_rp.idle_full_repack_after_secs != old_rp.idle_full_repack_after_secs {
+            set_or_create_int_node(
+                block,
+                ReleasePackingOpinions::KDL_IDLE_FULL_REPACK_AFTER_SECS,
+                new_rp.idle_full_repack_after_secs as i64,
+            );
+        }
     }
 
     // --- Leave Transactions Open ---

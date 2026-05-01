@@ -478,6 +478,62 @@ pub fn execute_pack_releases(
         return Result::success(computation, Vec::new());
     }
 
+    // === Compute the scope of releases this run will touch ===
+    //
+    // Incremental mode reflects the architectural intent: when active ingestion
+    // marks inodes dirty for "release_packing" (via TAGS-scope mutations), we
+    // re-score *only* the releases reachable from those dirty inodes (plus
+    // pinned releases, which always need the synthetic-candidate injection
+    // synced with current corpus state). Everything else's manifest, scores,
+    // candidates, and signals stay untouched. A subsequent operator-initiated
+    // full repack reconciles the global MIS against the updated scoring data.
+    //
+    // Full mode keeps the scope unbounded (`None`) so the existing path
+    // truncates and rebuilds everything.
+    let dirty_packing_inodes: HashSet<i64> = read_only_db
+        .get_dirty_inodes("release_packing")
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+
+    let affected_releases: Option<HashSet<String>> = if incremental {
+        let mut affected: HashSet<String> = HashSet::new();
+        for inode in &dirty_packing_inodes {
+            if let Some(recs) = inode_recordings.get(inode) {
+                for rec in recs {
+                    if let Some(release_ids) = recording_releases.get(&rec.recording_id) {
+                        for rid in release_ids {
+                            if release_tracklists.contains_key(rid) {
+                                affected.insert(rid.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for rid in pinned_dir_releases.values() {
+            if release_tracklists.contains_key(rid) {
+                affected.insert(rid.clone());
+            }
+        }
+        log_general(format!(
+            "[COMPUTE] PackReleases (incremental): {} dirty inodes → {} affected releases (+{} pinned, deduped)",
+            dirty_packing_inodes.len(),
+            affected.len(),
+            pinned_dir_releases.len(),
+        ));
+        if affected.is_empty() {
+            // Nothing to re-score. Clear dirty flags so we don't loop on them.
+            if !dirty_packing_inodes.is_empty() {
+                sender.clear_all_dirty_inodes("release_packing", witness);
+            }
+            return Result::success(computation, Vec::new());
+        }
+        Some(affected)
+    } else {
+        None
+    };
+
     // === Load artist data for locale-aware name resolution ===
     let release_artist_data: HashMap<String, Vec<(String, Option<musicbrainz::MbArtist>)>> =
         if preferred_locales.is_empty() {
@@ -513,12 +569,31 @@ pub fn execute_pack_releases(
                 .collect()
         };
 
-    // === Truncate intermediate tables for fresh pipeline ===
-    sender.truncate_packing_tables(witness);
+    // === Truncate vs per-release delete ===
+    // Full mode wipes intermediate tables for a clean rebuild. Incremental mode
+    // only deletes rows for the releases it's about to re-score; everything
+    // else's manifest, candidates, and scores stay intact across the run.
+    if let Some(ref affected) = affected_releases {
+        for release_id in affected {
+            sender.delete_packing_data_for_release(release_id, witness);
+        }
+    } else {
+        sender.truncate_packing_tables(witness);
+        // Full repack supersedes anything an incremental run would have done
+        // for these inodes — clear the dirty flags so they don't sit in DB
+        // forever. (Incremental mode clears them inline below.)
+        if !dirty_packing_inodes.is_empty() {
+            sender.clear_all_dirty_inodes("release_packing", witness);
+        }
+    }
 
     // === Write manifest ===
     let manifest_rows: Vec<(String, i32, String, String, i32)> = release_tracklists
         .iter()
+        .filter(|(release_id, _)| match &affected_releases {
+            Some(affected) => affected.contains(*release_id),
+            None => true,
+        })
         .map(|(release_id, release)| {
             let total: i32 = release.media.iter().map(|m| m.tracks.len() as i32).sum();
             let media_count = release.media.len() as i32;
@@ -629,7 +704,13 @@ pub fn execute_pack_releases(
                             recording_id: String::new(), // synthetic — no AcoustID match
                             confidence: 1.0,
                             path: inode_path.to_string(),
-                            parent_dir: dir_path.to_string(),
+                            // Use the file's actual immediate parent, not the
+                            // pinned dir string — the pinned dir is often a
+                            // grandparent (e.g. `Big Bands` over `Big Bands/057`)
+                            // and stomping it here causes classify_proposal's
+                            // multi-medium dir-purity check to flag a false
+                            // multi-parent mismatch.
+                            parent_dir: info.parent_dir.clone(),
                             duration_ms: info.duration_ms,
                             tag_title: info
                                 .tags
@@ -662,61 +743,23 @@ pub fn execute_pack_releases(
         ));
     }
 
-    // === Check for packing-relevant dirty inodes ===
-    // When tag mutations occur, affected inodes are marked dirty for "release_packing".
-    // If any exist, disable incremental solved-release skipping to force full re-scoring.
-    let packing_dirty = read_only_db
-        .get_dirty_inodes("release_packing")
-        .unwrap_or_default();
-    let force_full_scoring = !packing_dirty.is_empty();
-    if force_full_scoring {
+    // === Incremental mode: scope candidates to affected releases ===
+    // The candidate-build loop above produces entries for every (recording, release)
+    // pair regardless of mode; trim to the affected scope so we don't carry
+    // un-needed work into scoring or stomp on signals for non-affected releases.
+    if let Some(ref affected) = affected_releases {
+        let before = deduped.len();
+        deduped.retain(|(release_id, _), _| affected.contains(*release_id));
         log_general(format!(
-            "[COMPUTE] PackReleases: {} packing-dirty inodes — disabling incremental skip",
-            packing_dirty.len()
+            "[COMPUTE] PackReleases (incremental): scoped candidates from {} to {} ({} affected releases)",
+            before,
+            deduped.len(),
+            affected.len(),
         ));
-        sender.clear_all_dirty_inodes("release_packing", witness);
-    }
-
-    // === Incremental mode: skip solved releases ===
-    if incremental && !force_full_scoring {
-        let mb_tagged_inodes =
-            super::super::tags::load_mb_tagged_inodes(read_only_db, &config);
-
-        // Group candidates by release → collect inode sets
-        let mut release_inodes: HashMap<&str, HashSet<i64>> = HashMap::new();
-        for (release_id, inode) in deduped.keys() {
-            release_inodes
-                .entry(release_id)
-                .or_default()
-                .insert(*inode);
-        }
-
-        // Pinned release IDs (always bypass the solved check)
-        let pinned_ids: HashSet<&str> = pinned_dir_releases
-            .values()
-            .map(|s| s.as_str())
-            .collect();
-
-        // A release is solved if ALL its candidate inodes are MB-tagged
-        let solved: HashSet<&str> = release_inodes
-            .iter()
-            .filter(|(rid, inodes)| {
-                !pinned_ids.contains(*rid)
-                    && inodes.iter().all(|i| mb_tagged_inodes.contains(i))
-            })
-            .map(|(rid, _)| *rid)
-            .collect();
-
-        if !solved.is_empty() {
-            let before = deduped.len();
-            deduped.retain(|(release_id, _), _| !solved.contains(release_id));
-            log_general(format!(
-                "[COMPUTE] PackReleases (incremental): skipped {} solved releases \
-                 ({} candidates removed, {} remain)",
-                solved.len(),
-                before - deduped.len(),
-                deduped.len(),
-            ));
+        // We have everything we need to re-score; clear dirty flags so the
+        // next tick won't re-enter incremental mode for the same inodes.
+        if !dirty_packing_inodes.is_empty() {
+            sender.clear_all_dirty_inodes("release_packing", witness);
         }
     }
 
@@ -745,18 +788,29 @@ pub fn execute_pack_releases(
         })
         .collect();
 
-    log_general(format!(
-        "[COMPUTE] PackReleases: spawning {} ScoreReleaseCandidates, deferring mapping pipeline",
-        spawn.len()
-    ));
-
-    // === Defer Stage 3 (ComputeReleaseMappings orchestrates the rest) ===
-    let deferred_phases = vec![(
-        PipelineStage::Resolve,
-        vec![Computation::Analysis(
-            AnalysisComputation::ComputeReleaseMappings { incremental },
-        )],
-    )];
+    // === Defer Stage 3 only on full repacks ===
+    // Incremental mode keeps existing PackedRelease / ReleasePacking signals
+    // intact and just refreshes scoring data for the affected releases. The
+    // next operator-initiated full repack runs ComputeReleaseMappings against
+    // the now-updated scoring data and reconciles signals.
+    let deferred_phases = if affected_releases.is_some() {
+        log_general(format!(
+            "[COMPUTE] PackReleases (incremental): spawning {} ScoreReleaseCandidates, no mapping deferral",
+            spawn.len()
+        ));
+        Vec::new()
+    } else {
+        log_general(format!(
+            "[COMPUTE] PackReleases: spawning {} ScoreReleaseCandidates, deferring mapping pipeline",
+            spawn.len()
+        ));
+        vec![(
+            PipelineStage::Resolve,
+            vec![Computation::Analysis(
+                AnalysisComputation::ComputeReleaseMappings { incremental },
+            )],
+        )]
+    };
 
     Result::pipeline(
         computation,

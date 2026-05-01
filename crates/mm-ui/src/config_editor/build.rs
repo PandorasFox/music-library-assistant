@@ -284,6 +284,16 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
             cf!(float, release_packing.low_confidence_max_album_match, "Low confidence max album match",
                 "Max avg album_match score to trigger low-confidence downgrade (0.0-1.0)",
                 &["TODO"], ReleasePackingOpinions::KDL_LOW_CONFIDENCE_ALBUM_MATCH),
+            // u64 -> u32 cast (config editor lacks a u64 ConfigValue; 30min ≪ 2^32 sec)
+            field("Idle full-repack after (seconds)",
+                "Auto-promote incremental repacks to full once idle this long (0 = disable)",
+                &["TODO"],
+                ConfigValue::UintU32(ops.release_packing.idle_full_repack_after_secs as u32),
+                source_for(ops.release_packing.idle_full_repack_after_secs == defaults.release_packing.idle_full_repack_after_secs,
+                    ReleasePackingOpinions::KDL_IDLE_FULL_REPACK_AFTER_SECS),
+                false, |v, c| { if let ConfigValue::UintU32(n) = v {
+                    c.opinions.release_packing.idle_full_repack_after_secs = *n as u64;
+                } }),
         ]},
         ConfigGroup { name: "Packing: Candidate Weights", collapsed: true, fields: {
             let w = &ops.release_packing.candidate_weights;

@@ -254,6 +254,7 @@ impl_diffable_struct!(ReleasePackingOpinions {
     title_preassign_threshold, packing_knot_ratio, packing_knot_size_limit,
     singles_before_incompletes, allow_resolve_knots_with_discographies,
     low_confidence_max_acoustid_ratio, low_confidence_max_album_match,
+    idle_full_repack_after_secs,
 });
 impl_diffable_struct!(CreditRoutingConfig { routing, feat_format, max_feat_credits });
 impl_diffable_struct!(ExternalMatchingConfig {

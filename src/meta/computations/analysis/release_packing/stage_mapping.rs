@@ -19,7 +19,7 @@ use super::components::{
 };
 use super::types::{
     build_manifest_map, build_manifest_map_owned,
-    classify_proposal, AlternativeRelease, ComponentData, Proposal, ProposalTier,
+    classify_proposal_explained, AlternativeRelease, ComponentData, Proposal, ProposalTier,
     ReleaseMappingState, SharedComponentData, SharedMappingState,
 };
 use crate::config::ReleasePackingOpinions;
@@ -115,6 +115,13 @@ pub fn execute_compute_release_mappings(
     let mut incomplete_pool: Vec<Arc<Proposal>> = Vec::new();
     let mut single_pool: Vec<Arc<Proposal>> = Vec::new();
 
+    // Aggregate downgrade reasons for diagnostic logging. We sample release_ids
+    // per (from_tier, reason_kind) so an operator can see WHICH releases got
+    // demoted (e.g. multi-medium dir mismatch) and pick a representative to dig
+    // into when packing regressions appear.
+    let mut downgrade_samples: HashMap<(&'static str, String), (usize, Vec<String>)> =
+        HashMap::new();
+
     for (release_id, rows) in proposals_map {
         let total_tracks = manifest_map
             .get(release_id)
@@ -130,7 +137,29 @@ pub fn execute_compute_release_mappings(
             .collect::<HashSet<_>>()
             .len();
 
-        let tier = classify_proposal(&rows, total_tracks, media_count, &inode_dir_map);
+        let (tier, reason) =
+            classify_proposal_explained(&rows, total_tracks, media_count, &inode_dir_map);
+
+        // Bucket by tier + a coarse reason kind so a single sample stands in
+        // for the population of releases tripping that branch.
+        let tier_str = tier.as_str();
+        // Use the prefix of the reason up to the first comma as the bucket key
+        // (e.g. "multi-medium" / "single-medium" / "filled=N"). Distinguishing
+        // any deeper would balloon the bucket count.
+        let reason_kind = reason
+            .split(|c| c == ',' || c == ' ' || c == '—' || c == '(')
+            .next()
+            .unwrap_or(&reason)
+            .to_string();
+        let entry = downgrade_samples
+            .entry((tier_str, reason_kind))
+            .or_insert_with(|| (0, Vec::new()));
+        entry.0 += 1;
+        if entry.1.len() < 3 {
+            entry
+                .1
+                .push(format!("{} ({})", release_id, reason));
+        }
 
         let proposal = Arc::new(Proposal {
             total_tracks,
@@ -146,6 +175,21 @@ pub fn execute_compute_release_mappings(
             ProposalTier::Incomplete => incomplete_pool.push(proposal),
             ProposalTier::Single => single_pool.push(proposal),
         }
+    }
+
+    // Emit per-bucket sample log so operators can correlate tier counts with
+    // the specific reasons driving demotions.
+    let mut bucket_keys: Vec<_> = downgrade_samples.keys().cloned().collect();
+    bucket_keys.sort();
+    for key in &bucket_keys {
+        let (count, samples) = &downgrade_samples[key];
+        log_general(format!(
+            "[COMPUTE] ComputeReleaseMappings: tier={} reason_kind={:?} count={} samples=[{}]",
+            key.0,
+            key.1,
+            count,
+            samples.join(" | "),
+        ));
     }
 
     // === Pre-accept pinned release proposals ===
@@ -396,13 +440,53 @@ pub(crate) fn execute_map_perfect_releases(
         .get_assigned_packing_inodes()
         .unwrap_or_default();
 
-    // Filter: proposals whose entire inode set is unclaimed
-    let eligible: Vec<Arc<Proposal>> = std::mem::take(&mut state.perfect_pool)
+    // Filter: proposals whose entire inode set is unclaimed.
+    // We trace a sample of dropped releases so a regression where a high-tier
+    // pool gets gutted by upstream claims is visible in the logs.
+    let pool_in = std::mem::take(&mut state.perfect_pool);
+    let pool_in_size = pool_in.len();
+    let mut empty_inode_set = 0usize;
+    let mut overlap_dropped = 0usize;
+    let mut overlap_samples: Vec<String> = Vec::new();
+    let eligible: Vec<Arc<Proposal>> = pool_in
         .into_iter()
         .filter(|p| {
-            !p.inode_set.is_empty() && p.inode_set.iter().all(|i| !assigned_inodes.contains(i))
+            if p.inode_set.is_empty() {
+                empty_inode_set += 1;
+                return false;
+            }
+            let claimed: Vec<i64> = p
+                .inode_set
+                .iter()
+                .filter(|i| assigned_inodes.contains(i))
+                .copied()
+                .collect();
+            if !claimed.is_empty() {
+                overlap_dropped += 1;
+                if overlap_samples.len() < 5 {
+                    let release_id = p.rows.first().map(|r| r.release_id.as_str()).unwrap_or("?");
+                    overlap_samples.push(format!(
+                        "{} ({}/{} inodes already claimed)",
+                        release_id,
+                        claimed.len(),
+                        p.inode_set.len()
+                    ));
+                }
+                return false;
+            }
+            true
         })
         .collect();
+
+    log_general(format!(
+        "[COMPUTE] MapPerfectReleases: pool_in={}, assigned_inodes={}, eligible={}, dropped(empty={}, overlap={}) overlap_samples=[{}]",
+        pool_in_size,
+        assigned_inodes.len(),
+        eligible.len(),
+        empty_inode_set,
+        overlap_dropped,
+        overlap_samples.join(" | "),
+    ));
 
     if eligible.is_empty() {
         log_general("[COMPUTE] MapPerfectReleases: 0 eligible, skipping");

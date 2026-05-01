@@ -299,6 +299,13 @@ fn parse_release_packing_opinions(node: &kdl::KdlNode, opinions: &mut ReleasePac
                         }
                     }
                 }
+                ReleasePackingOpinions::KDL_IDLE_FULL_REPACK_AFTER_SECS => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_i64() {
+                            opinions.idle_full_repack_after_secs = val.max(0) as u64;
+                        }
+                    }
+                }
                 _ => {}
             }
         }

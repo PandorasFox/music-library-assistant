@@ -620,11 +620,45 @@ pub(super) fn orchestrate_partial_tier(
     let pool_size = pool.len();
 
     // --- Step 1: Cull tainted proposals ---
+    // Trace which releases got culled and what fraction of their inodes was
+    // already claimed — when a higher-coverage release gets dropped because a
+    // few of its inodes were claimed by a smaller higher-tier pack, that
+    // pre-emption is the most common packing-regression cause.
+    let mut cull_samples: Vec<String> = Vec::new();
     let effective: Vec<Arc<Proposal>> = pool
         .into_iter()
-        .filter(|p| p.inode_set.iter().all(|i| !assigned_inodes.contains(i)))
+        .filter(|p| {
+            let claimed: Vec<i64> = p
+                .inode_set
+                .iter()
+                .filter(|i| assigned_inodes.contains(i))
+                .copied()
+                .collect();
+            if claimed.is_empty() {
+                return true;
+            }
+            if cull_samples.len() < 5 {
+                let release_id = p.rows.first().map(|r| r.release_id.as_str()).unwrap_or("?");
+                cull_samples.push(format!(
+                    "{} ({}/{} inodes claimed)",
+                    release_id,
+                    claimed.len(),
+                    p.inode_set.len()
+                ));
+            }
+            false
+        })
         .collect();
     let culled = pool_size - effective.len();
+    if culled > 0 {
+        log_general(format!(
+            "[COMPUTE] {} partial: assigned_inodes={}, culled={} samples=[{}]",
+            tier.as_str(),
+            assigned_inodes.len(),
+            culled,
+            cull_samples.join(" | "),
+        ));
+    }
 
     // --- Step 2: Dedup by inode signature ---
     let manifest_for_siblings = read_only_db.get_packing_manifest().unwrap_or_default();
@@ -812,6 +846,48 @@ pub(crate) fn execute_resolve_packing_component(
         .collect();
 
     let mis_result = super::mis::solve_maximum_independent_set(&mis_candidates);
+
+    // Trace the component decision: list every proposal in this component with
+    // its release_id, inode count, score, and whether MIS picked it. When a
+    // big release gets dropped from a component in favor of several smaller
+    // ones, this log is the smoking gun.
+    let mut winners: Vec<String> = Vec::new();
+    let mut losers: Vec<String> = Vec::new();
+    for (idx, proposal) in proposals.iter().enumerate() {
+        let release_id = proposal
+            .rows
+            .first()
+            .map(|r| r.release_id.as_str())
+            .unwrap_or("?");
+        let entry = format!(
+            "{} (inodes={}, score={:.3})",
+            release_id,
+            proposal.inode_set.len(),
+            proposal.total_score
+        );
+        if mis_result.selected.get(idx).copied().unwrap_or(false) {
+            winners.push(entry);
+        } else {
+            losers.push(entry);
+        }
+    }
+    if proposals.len() > 1 {
+        // Cap loser detail to keep logs tractable for very wide knots.
+        let losers_display = if losers.len() <= 10 {
+            losers.join(" | ")
+        } else {
+            let head: Vec<&str> = losers.iter().take(10).map(|s| s.as_str()).collect();
+            format!("{} | +{} more", head.join(" | "), losers.len() - 10)
+        };
+        log_general(format!(
+            "[COMPUTE] ResolvePackingComponent tier={} proposals={} coverage={} winners=[{}] losers=[{}]",
+            tier.as_str(),
+            proposals.len(),
+            mis_result.selected_coverage,
+            winners.join(" | "),
+            losers_display,
+        ));
+    }
 
     // Build local alternatives_count: how many proposals in THIS component
     // contain each inode

@@ -307,6 +307,14 @@ pub struct ReleasePackingOpinions {
     pub allow_resolve_knots_with_discographies: bool,
     pub low_confidence_max_acoustid_ratio: f64,
     pub low_confidence_max_album_match: f64,
+    /// Auto-promote incremental → full repack after this many seconds of idle.
+    ///
+    /// When the system has run at least one incremental release-packing pass
+    /// since the last full repack and has been idle for at least this many
+    /// seconds, the idle-action handler fires a full repack automatically so
+    /// that mapping/MIS reconciles against the freshly-rescored data.
+    /// Set to 0 to disable auto-promotion.
+    pub idle_full_repack_after_secs: u64,
 }
 
 impl Default for ReleasePackingOpinions {
@@ -323,6 +331,7 @@ impl Default for ReleasePackingOpinions {
             allow_resolve_knots_with_discographies: true,
             low_confidence_max_acoustid_ratio: Self::DEFAULT_LOW_CONFIDENCE_MAX_ACOUSTID_RATIO,
             low_confidence_max_album_match: Self::DEFAULT_LOW_CONFIDENCE_MAX_ALBUM_MATCH,
+            idle_full_repack_after_secs: Self::DEFAULT_IDLE_FULL_REPACK_AFTER_SECS,
         }
     }
 }
@@ -333,6 +342,9 @@ impl ReleasePackingOpinions {
     pub const DEFAULT_PACKING_KNOT_SIZE_LIMIT: usize = 50;
     pub const DEFAULT_LOW_CONFIDENCE_MAX_ACOUSTID_RATIO: f64 = 0.25;
     pub const DEFAULT_LOW_CONFIDENCE_MAX_ALBUM_MATCH: f64 = 0.30;
+    /// 30 minutes — long enough that ingestion bursts settle, short enough
+    /// that mapping/MIS catches up before the operator notices.
+    pub const DEFAULT_IDLE_FULL_REPACK_AFTER_SECS: u64 = 30 * 60;
 
     pub const KDL_DURATION_TOLERANCE_PCT: &str = "duration-tolerance-pct";
     pub const KDL_MIN_CONFIDENCE: &str = "min-confidence";
@@ -345,6 +357,7 @@ impl ReleasePackingOpinions {
     pub const KDL_ALLOW_DISCOGRAPHY_REDUCTION: &str = "allow-resolve-knots-with-discographies";
     pub const KDL_LOW_CONFIDENCE_ACOUSTID_RATIO: &str = "low-confidence-max-acoustid-ratio";
     pub const KDL_LOW_CONFIDENCE_ALBUM_MATCH: &str = "low-confidence-max-album-match";
+    pub const KDL_IDLE_FULL_REPACK_AFTER_SECS: &str = "idle-full-repack-after-secs";
 }
 
 /// How a recording-level MusicBrainz relation type maps to tag output.
@@ -983,6 +996,7 @@ mod tests {
                 path_schema: None,
                 enable_acoustid: None,
                 pinned_release: None,
+                cover_art_sanctity: None,
             }],
             opinions: Default::default(),
         }

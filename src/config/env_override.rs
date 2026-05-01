@@ -344,6 +344,15 @@ fn apply_generic_field(config: &mut Config, block: &str, field: &str, val: &str)
                 return true;
             }
         }
+        (
+            Opinions::KDL_BLOCK_RELEASE_PACKING,
+            ReleasePackingOpinions::KDL_IDLE_FULL_REPACK_AFTER_SECS,
+        ) => {
+            if let Ok(n) = val.parse::<u64>() {
+                config.opinions.release_packing.idle_full_repack_after_secs = n;
+                return true;
+            }
+        }
 
         // external-matching
         (Opinions::KDL_BLOCK_EXTERNAL_MATCHING, ExternalMatchingConfig::KDL_ACOUSTID_KEY) => {

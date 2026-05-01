@@ -202,13 +202,19 @@ pub enum Computation {
 
     /// Pack corpus files into MusicBrainz releases (Stage 1 — orchestrator).
     ///
-    /// Loads external matches, identifies releases, writes session manifest,
-    /// spawns N ScoreReleaseCandidates (Stage 2), defers ComputeReleaseMappings
-    /// (Stage 3) and EmitUnmatchedSignals (Stage 4) as barrier-separated phases.
+    /// `incremental=false` (operator-initiated full repack): truncates the
+    /// intermediate tables, identifies all candidate releases, writes the full
+    /// session manifest, spawns N ScoreReleaseCandidates (Stage 2), and defers
+    /// ComputeReleaseMappings (Stage 3) and EmitUnmatchedSignals (Stage 4) as
+    /// barrier-separated phases.
     ///
-    /// Manual trigger only (expensive), not part of ScheduleContentAnalysis.
-    /// When `incremental` is true, solved releases (all candidate inodes MB-tagged)
-    /// are skipped — only unsolved and pinned releases enter the pipeline.
+    /// `incremental=true` (live-ingestion path): re-scores only the releases
+    /// reachable from inodes flagged dirty for `release_packing` (plus pinned
+    /// releases). Manifest/candidates/scores rows for affected releases are
+    /// deleted-and-rewritten; all other scoring data and existing
+    /// PackedRelease / ReleasePacking signals stay intact, and mapping/MIS is
+    /// **not** run. The next operator-initiated full repack reconciles the
+    /// global packing decision against the updated scoring data.
     PackReleases { incremental: bool },
 
     /// Score candidates for a single MusicBrainz release (Stage 2).

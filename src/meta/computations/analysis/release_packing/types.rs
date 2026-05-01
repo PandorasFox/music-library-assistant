@@ -227,41 +227,54 @@ pub(crate) struct ReleaseMappingState {
     pub low_confidence_max_acoustid_ratio: f64,
     /// Low-confidence downgrade: max average album_match threshold.
     pub low_confidence_max_album_match: f64,
-    /// Whether this pipeline run is incremental (skipping solved releases).
-    /// Threaded through to Stage 4 so EmitUnmatchedSignals can exclude MB-tagged inodes.
+    /// Whether this pipeline run is incremental.
+    ///
+    /// When true, the run scoped its scoring updates to releases reachable
+    /// from dirty inodes (plus pinned). Threaded through to Stage 4 so
+    /// EmitUnmatchedSignals can exclude MB-tagged inodes from gap analysis
+    /// (their releases were intentionally not re-mapped).
     pub incremental: bool,
 }
 
 
-/// Classify a proposal into a quality tier based on slot coverage and directory purity.
+/// Classify a proposal into a quality tier based on slot coverage and directory
+/// purity. Also returns a one-line human-readable reason describing which
+/// check passed/failed; logging callsites surface that reason so packing
+/// regressions can be traced to a specific demotion rule.
 ///
 /// `media_count` is the number of MbMedium entries for this release (from the tracklist).
 /// `inode_dir_map` maps each inode to its (parent_dir, dir_file_count).
-pub(super) fn classify_proposal(
+pub(super) fn classify_proposal_explained(
     rows: &[OptimalPackingScoreRow],
     total_tracks: i32,
     media_count: usize,
     inode_dir_map: &HashMap<i64, (String, i32)>,
-) -> ProposalTier {
+) -> (ProposalTier, String) {
     if total_tracks <= 1 {
-        return ProposalTier::Single;
+        return (
+            ProposalTier::Single,
+            format!("total_tracks={} ≤ 1", total_tracks),
+        );
     }
     if (rows.len() as i32) < total_tracks {
-        return ProposalTier::Incomplete;
+        return (
+            ProposalTier::Incomplete,
+            format!(
+                "filled={} < total_tracks={} (short by {})",
+                rows.len(),
+                total_tracks,
+                total_tracks - rows.len() as i32,
+            ),
+        );
     }
 
     // All slots filled — check directory purity for Perfect vs FullMatch.
-    //
-    // Perfect requires:
-    //   Single-medium: exactly 1 directory, dir_file_count == total_tracks
-    //   Multi-medium: each medium's inodes from exactly 1 directory, each directory
-    //     maps to exactly 1 medium, dir_file_count == medium track count,
-    //     all directories are siblings (same parent)
 
     // Build dir → inodes and dir → media mapping
     let mut dir_inodes: HashMap<&str, Vec<i64>> = HashMap::new();
     let mut dir_media: HashMap<&str, HashSet<i32>> = HashMap::new();
     let mut medium_dirs: HashMap<i32, HashSet<&str>> = HashMap::new();
+    let mut rows_without_dir = 0usize;
 
     for row in rows {
         if let Some((dir, _)) = inode_dir_map.get(&row.inode) {
@@ -274,15 +287,24 @@ pub(super) fn classify_proposal(
                 .entry(row.medium_pos)
                 .or_default()
                 .insert(dir.as_str());
+        } else {
+            rows_without_dir += 1;
         }
     }
 
     if dir_inodes.is_empty() {
-        return ProposalTier::FullMatch;
+        return (
+            ProposalTier::FullMatch,
+            format!(
+                "filled={}/{} but no rows have inode_dir_map entries (rows_without_dir={})",
+                rows.len(),
+                total_tracks,
+                rows_without_dir
+            ),
+        );
     }
 
     if media_count <= 1 {
-        // Single-medium: Perfect iff exactly 1 directory, file count matches total tracks
         if dir_inodes.len() == 1 {
             let dir = *dir_inodes.keys().next().unwrap();
             let dir_file_count = inode_dir_map
@@ -291,21 +313,56 @@ pub(super) fn classify_proposal(
                 .map(|(_, c)| *c)
                 .unwrap_or(0);
             if dir_file_count == total_tracks {
-                return ProposalTier::Perfect;
+                return (
+                    ProposalTier::Perfect,
+                    format!(
+                        "single-medium, 1 dir, dir_file_count={}=total_tracks",
+                        dir_file_count
+                    ),
+                );
             }
+            return (
+                ProposalTier::FullMatch,
+                format!(
+                    "single-medium, 1 dir, dir_file_count={} != total_tracks={}",
+                    dir_file_count, total_tracks
+                ),
+            );
         }
-        return ProposalTier::FullMatch;
+        return (
+            ProposalTier::FullMatch,
+            format!(
+                "single-medium, {} dirs (expected 1) — dirs={}",
+                dir_inodes.len(),
+                summarize_dirs(dir_inodes.keys().copied(), 4),
+            ),
+        );
     }
 
     // Multi-medium: each medium must map to exactly 1 directory and vice versa
-    for medium_dir_set in medium_dirs.values() {
-        if medium_dir_set.len() != 1 {
-            return ProposalTier::FullMatch;
+    for (medium_pos, dir_set) in &medium_dirs {
+        if dir_set.len() != 1 {
+            return (
+                ProposalTier::FullMatch,
+                format!(
+                    "multi-medium, medium_pos={} maps to {} dirs (expected 1) — dirs={}",
+                    medium_pos,
+                    dir_set.len(),
+                    summarize_dirs(dir_set.iter().copied(), 4),
+                ),
+            );
         }
     }
-    for dir_medium_set in dir_media.values() {
-        if dir_medium_set.len() != 1 {
-            return ProposalTier::FullMatch;
+    for (dir, medium_set) in &dir_media {
+        if medium_set.len() != 1 {
+            return (
+                ProposalTier::FullMatch,
+                format!(
+                    "multi-medium, dir={} maps to {} media (expected 1)",
+                    dir,
+                    medium_set.len()
+                ),
+            );
         }
     }
 
@@ -319,17 +376,53 @@ pub(super) fn classify_proposal(
             .map(|(_, c)| *c)
             .unwrap_or(0);
         if dir_file_count != inodes.len() as i32 {
-            return ProposalTier::FullMatch;
+            return (
+                ProposalTier::FullMatch,
+                format!(
+                    "multi-medium, dir={} has {} matched rows but dir_file_count={} (mismatch by {})",
+                    dir,
+                    inodes.len(),
+                    dir_file_count,
+                    dir_file_count - inodes.len() as i32,
+                ),
+            );
         }
         if let Some(parent) = Path::new(dir).parent() {
             parents.insert(parent.to_str().unwrap_or(""));
         }
     }
     if parents.len() > 1 {
-        return ProposalTier::FullMatch;
+        return (
+            ProposalTier::FullMatch,
+            format!(
+                "multi-medium, {} distinct dir parents (expected 1) — parents={}",
+                parents.len(),
+                summarize_dirs(parents.iter().copied(), 4),
+            ),
+        );
     }
 
-    ProposalTier::Perfect
+    (
+        ProposalTier::Perfect,
+        format!(
+            "multi-medium, {} dirs all sibling under {} parent, file counts match",
+            dir_inodes.len(),
+            parents.iter().next().copied().unwrap_or(""),
+        ),
+    )
+}
+
+/// Stringify up to `limit` directory paths, eliding remainder with "+N more".
+fn summarize_dirs<'a, I: IntoIterator<Item = &'a str>>(dirs: I, limit: usize) -> String {
+    let collected: Vec<&str> = dirs.into_iter().collect();
+    if collected.len() <= limit {
+        return collected.join(", ");
+    }
+    format!(
+        "{}, +{} more",
+        collected.iter().take(limit).copied().collect::<Vec<_>>().join(", "),
+        collected.len() - limit
+    )
 }
 
 // ============================================================================
@@ -431,7 +524,7 @@ mod tests {
             (200, "/music/album", 3),
             (300, "/music/album", 3),
         ]);
-        assert_eq!(classify_proposal(&rows, 3, 1, &inode_dirs), ProposalTier::Perfect);
+        assert_eq!(classify_proposal_explained(&rows, 3, 1, &inode_dirs).0, ProposalTier::Perfect);
     }
 
     #[test]
@@ -447,7 +540,7 @@ mod tests {
             (200, "/music/album", 5),
             (300, "/music/album", 5),
         ]);
-        assert_eq!(classify_proposal(&rows, 3, 1, &inode_dirs), ProposalTier::FullMatch);
+        assert_eq!(classify_proposal_explained(&rows, 3, 1, &inode_dirs).0, ProposalTier::FullMatch);
     }
 
     #[test]
@@ -461,14 +554,14 @@ mod tests {
             (100, "/music/album", 3),
             (200, "/music/album", 3),
         ]);
-        assert_eq!(classify_proposal(&rows, 3, 1, &inode_dirs), ProposalTier::Incomplete);
+        assert_eq!(classify_proposal_explained(&rows, 3, 1, &inode_dirs).0, ProposalTier::Incomplete);
     }
 
     #[test]
     fn test_classify_single() {
         let rows = vec![make_row(100, 1, 1)];
         let inode_dirs = dir_map(&[(100, "/music/album", 1)]);
-        assert_eq!(classify_proposal(&rows, 1, 1, &inode_dirs), ProposalTier::Single);
+        assert_eq!(classify_proposal_explained(&rows, 1, 1, &inode_dirs).0, ProposalTier::Single);
     }
 
     #[test]
@@ -486,7 +579,7 @@ mod tests {
             (300, "/music/boxset/disc2", 2),
             (400, "/music/boxset/disc2", 2),
         ]);
-        assert_eq!(classify_proposal(&rows, 4, 2, &inode_dirs), ProposalTier::Perfect);
+        assert_eq!(classify_proposal_explained(&rows, 4, 2, &inode_dirs).0, ProposalTier::Perfect);
     }
 
     #[test]
@@ -500,6 +593,6 @@ mod tests {
             (100, "/music/album", 2),
             (200, "/music/album", 2),
         ]);
-        assert_eq!(classify_proposal(&rows, 2, 2, &inode_dirs), ProposalTier::FullMatch);
+        assert_eq!(classify_proposal_explained(&rows, 2, 2, &inode_dirs).0, ProposalTier::FullMatch);
     }
 }

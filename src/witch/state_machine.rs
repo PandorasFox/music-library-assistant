@@ -7,11 +7,11 @@
 //! This module is part of the Witch subsystem. See `witch/mod.rs` for overview.
 
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::meta::computations::{analysis, derivation, Computation};
 
-use super::pipeline_triggers;
+use super::pipeline_triggers::{self, IdlePromotionState};
 use super::types::{ContentAnalysisWitness, ReasoningLevel, TaskKind, WatcherState, WorkState};
 
 // ============================================================================
@@ -87,7 +87,10 @@ impl super::Witch {
     pub(super) fn update_state(&mut self) {
         match self.work_state {
             WorkState::Idle => {
-                // Idle → Working: handled in queue methods
+                // Idle → Working: handled in queue methods.
+                // Idle → Idle: poll for idle-timer auto-promotion (full repack
+                // catch-up after accumulated incremental scoring passes).
+                self.maybe_run_idle_promotion();
             }
             WorkState::Working { processed, .. } => {
                 // Phase advancement: if all in-flight tasks have landed and the
@@ -480,19 +483,7 @@ impl super::Witch {
     }
 
     fn transition_to_idle(&mut self) {
-        let has_api_key = self
-            .read_config(|c| !c.opinions.external_matching.acoustid_api_key.is_empty())
-            .unwrap_or(false);
-        let auto_deploy_enabled = self
-            .read_config(|c| c.opinions.auto_deploy)
-            .unwrap_or(false);
-
-        let action = pipeline_triggers::decide_idle_action(
-            self.pending_work,
-            has_api_key,
-            self.is_external_fetch_active(),
-            auto_deploy_enabled,
-        );
+        let action = self.compute_idle_action();
 
         // Always clear FETCH flag — don't retry every 30s if fetch can't start
         self.pending_work.remove(super::types::PendingWork::FETCH);
@@ -521,10 +512,81 @@ impl super::Witch {
                 self.request_auto_deploy_check();
                 // Stay in Done — offload result will transition to Working
             }
+            pipeline_triggers::IdleAction::TriggerFullRepack => {
+                // Only reachable while polling Idle — Done→Idle has
+                // last_idle_entry_at=None so the elapsed-time guard fails.
+                // Defensive: handle the same way as the polling path.
+                self.fire_idle_full_repack();
+            }
             pipeline_triggers::IdleAction::GoIdle => {
                 self.work_state = WorkState::Idle;
+                self.last_idle_entry_at = Some(Instant::now());
             }
         }
+    }
+
+    /// Poll for idle-timer auto-promotion while the Witch is Idle.
+    ///
+    /// Called from `update_state()` on every housekeeping tick. Re-runs the
+    /// idle decision with the current promotion state; if the timer has
+    /// elapsed and we're sitting on accumulated incremental scoring data,
+    /// kicks off a full repack.
+    fn maybe_run_idle_promotion(&mut self) {
+        // Cheap exits before reading config / running the decision logic.
+        if !self.incremental_since_full_repack {
+            return;
+        }
+        if self.last_idle_entry_at.is_none() {
+            return;
+        }
+
+        let action = self.compute_idle_action();
+        if matches!(action, pipeline_triggers::IdleAction::TriggerFullRepack) {
+            self.fire_idle_full_repack();
+        }
+    }
+
+    /// Run `decide_idle_action` against the Witch's current config and state.
+    fn compute_idle_action(&self) -> pipeline_triggers::IdleAction {
+        let has_api_key = self
+            .read_config(|c| !c.opinions.external_matching.acoustid_api_key.is_empty())
+            .unwrap_or(false);
+        let auto_deploy_enabled = self
+            .read_config(|c| c.opinions.auto_deploy)
+            .unwrap_or(false);
+        let idle_full_repack_after = self
+            .read_config(|c| {
+                Duration::from_secs(c.opinions.release_packing.idle_full_repack_after_secs)
+            })
+            .unwrap_or(Duration::ZERO);
+
+        pipeline_triggers::decide_idle_action(
+            self.pending_work,
+            has_api_key,
+            self.is_external_fetch_active(),
+            auto_deploy_enabled,
+            IdlePromotionState {
+                incremental_since_full_repack: self.incremental_since_full_repack,
+                last_idle_entry_at: self.last_idle_entry_at,
+                idle_full_repack_after,
+            },
+        )
+    }
+
+    /// Apply the IdleAction::TriggerFullRepack effect: queue a full repack
+    /// and reset the idle-promotion bookkeeping. The work-state transition
+    /// to Working is handled inside `request_release_packing` via the
+    /// computation queue path.
+    fn fire_idle_full_repack(&mut self) {
+        crate::logging::log_general(
+            "[WITCH] Idle-timer promotion: triggering full release repack \
+             after accumulated incremental passes",
+        );
+        // request_release_packing(false) clears incremental_since_full_repack.
+        self.request_release_packing(false);
+        // Leaving Idle → Working; clear the idle-entry timestamp so we don't
+        // immediately re-trigger after the repack finishes.
+        self.last_idle_entry_at = None;
     }
 
     pub(super) fn transition_to_working(&mut self) {
@@ -536,6 +598,9 @@ impl super::Witch {
                 by_label: HashMap::new(),
                 label: None,
             };
+            // Leaving Idle (or Done): clear the idle-entry timestamp so the
+            // promotion timer doesn't measure across a working stretch.
+            self.last_idle_entry_at = None;
         }
     }
 }

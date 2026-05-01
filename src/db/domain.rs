@@ -400,6 +400,64 @@ impl_domain_query! {
 }
 
 impl_domain_query! {
+    GetVaOverrideReview => mm_meta::domain_query_types::VaOverrideReview, |db| {
+        use mm_meta::domain_query_types::{VaOverrideReview, VaOverrideReviewRow};
+        use std::collections::HashMap;
+
+        let overrides = db.get_various_artists_override_data().unwrap_or_default();
+        let mut rows: Vec<VaOverrideReviewRow> = Vec::with_capacity(overrides.len());
+
+        for ov in overrides {
+            let inodes = db.get_inodes_for_packed_release(&ov.release_id).unwrap_or_default();
+            let packed_inode_count = inodes.len();
+
+            // Sample current ALBUMARTIST across packed inodes. Pick the most
+            // common value; record whether all values agree.
+            let mut counts: HashMap<String, usize> = HashMap::new();
+            let mut total_with_value = 0usize;
+            for chunk in inodes.chunks(8000) {
+                let rows = db
+                    .get_tags_batch_for_zone(chunk, crate::db::types::Zone::Corpus)
+                    .unwrap_or_default();
+                for (_, pairs) in rows {
+                    for (k, v) in pairs {
+                        if k.eq_ignore_ascii_case("ALBUMARTIST") {
+                            *counts.entry(v).or_insert(0) += 1;
+                            total_with_value += 1;
+                            break; // first ALBUMARTIST per inode is enough for sampling
+                        }
+                    }
+                }
+            }
+            let (current_albumartist, albumartist_uniform) = match counts
+                .iter()
+                .max_by_key(|(_, n)| *n)
+            {
+                Some((value, n)) => {
+                    let uniform = *n == total_with_value && total_with_value == packed_inode_count;
+                    (Some(value.clone()), uniform)
+                }
+                None => (None, false),
+            };
+
+            rows.push(VaOverrideReviewRow {
+                release_id: ov.release_id,
+                release_title: ov.release_title,
+                suggested_artist: ov.suggested_artist,
+                source: ov.source,
+                packed_inode_count,
+                current_albumartist,
+                albumartist_uniform,
+            });
+        }
+
+        // Stable order: by release_title for predictable rendering.
+        rows.sort_by(|a, b| a.release_title.cmp(&b.release_title));
+        VaOverrideReview { rows }
+    }
+}
+
+impl_domain_query! {
     GetUnsolvedPackingData => Vec<(i64, String, crate::meta::signals::data::UnmatchedCorpusTrackData)>, |s, db| {
         db.get_unmatched_corpus_track_signal_data_by_category(&s.category)
             .unwrap_or_default()
@@ -1102,6 +1160,7 @@ dispatch_domain_query_impl! {
     GetCorpusTags,
     GetPackingBrowserData,
     GetUnsolvedPackingData,
+    GetVaOverrideReview,
     GetAudioFilesByInodes,
     GetInodeDetails,
     GetMissingTagAudioFiles,

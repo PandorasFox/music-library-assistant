@@ -123,7 +123,8 @@ export type DecisionKey =
   | { EditReversal: { session_label: string } }
   | "ConfigEdit"
   | { DirConfigEdit: { source_path: string } }
-  | { MbReleaseApproval: { release_id: string } };
+  | { MbReleaseApproval: { release_id: string } }
+  | { VaOverrideApplication: { release_id: string } };
 
 // -- Insights view types --
 
@@ -513,4 +514,36 @@ export interface PackingKnotData {
   ratio: number;
   contested_inodes: number[];
   proposals: KnotProposalEntry[];
+}
+
+// -- VA Override review types --
+
+export type VariousArtistsOverrideSource =
+  | "ExactAlternative"
+  | "CompetingProposal";
+
+export interface VaOverrideReviewRow {
+  release_id: string;
+  release_title: string;
+  suggested_artist: string;
+  source: VariousArtistsOverrideSource;
+  packed_inode_count: number;
+  current_albumartist: string | null;
+  albumartist_uniform: boolean;
+}
+
+export interface VaOverrideReview {
+  rows: VaOverrideReviewRow[];
+}
+
+export interface VaOverrideApplication {
+  release_id: string;
+  albumartist: string;
+}
+
+export interface VaOverrideStageSummary {
+  staged_releases: number;
+  staged_inodes: number;
+  skipped_releases: number;
+  already_matching_inodes: number;
 }

@@ -6,3 +6,4 @@
 pub mod approval;
 pub mod musicbrainz;
 pub mod tag_generation;
+pub mod va_override;

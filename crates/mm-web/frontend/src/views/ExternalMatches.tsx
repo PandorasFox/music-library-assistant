@@ -143,6 +143,20 @@ function MatchSummary({
         </section>
       )}
 
+      {data.va_override_count > 0 && (
+        <section className="em-section">
+          <h3>VA Overrides</h3>
+          <div className="em-list">
+            <div
+              className="em-row em-row--link"
+              onClick={() => { window.location.hash = "#/va-overrides"; }}
+            >
+              <span>Suggestions to review</span>
+              <span className="em-count">{data.va_override_count}</span>
+            </div>
+          </div>
+        </section>
+      )}
     </>
   );
 }

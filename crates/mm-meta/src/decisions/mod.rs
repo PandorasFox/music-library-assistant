@@ -52,6 +52,9 @@ pub enum DecisionKey {
     ArtistPluralNormalization,
     DirConfigEdit { source_path: std::path::PathBuf },
     MbReleaseApproval { release_id: String },
+    /// Apply a VariousArtistsOverride suggestion: rewrite ALBUMARTIST on every
+    /// inode currently packed to the given release.
+    VaOverrideApplication { release_id: String },
 }
 
 impl DecisionKey {
@@ -122,6 +125,8 @@ impl DecisionKey {
             DecisionKey::DirConfigEdit { .. } => &[ApplyDirConfigEdit, ApplyBatchDirConfigEdits],
             // MB release approval → tag ops + dir config edit
             DecisionKey::MbReleaseApproval { .. } => &[ApplyTagOps, ApplyDirConfigEdit],
+            // VA-override application → tag ops only (rewrites ALBUMARTIST on packed inodes)
+            DecisionKey::VaOverrideApplication { .. } => &[ApplyTagOps],
         }
     }
 }
@@ -173,6 +178,9 @@ impl std::fmt::Display for DecisionKey {
             }
             DecisionKey::MbReleaseApproval { release_id } => {
                 write!(f, "MB Release Approval:{}", release_id)
+            }
+            DecisionKey::VaOverrideApplication { release_id } => {
+                write!(f, "VA Override:{}", release_id)
             }
         }
     }

@@ -211,6 +211,13 @@ impl HandleAction for crate::release_packing_browser::ReleasePackingBrowserActio
                     app.approve_selected_releases(selected_indices, gesture);
                 }
             }
+            crate::release_packing_browser::ReleasePackingBrowserAction::ApplyVaOverridesSelected {
+                selected_indices,
+            } => {
+                if let Some(gesture) = witness {
+                    app.apply_va_overrides_for_selected(selected_indices, gesture);
+                }
+            }
         }
     }
 }
@@ -470,6 +477,57 @@ impl App {
         }
     }
 
+    /// Apply VA-override suggestions for selected releases. For each
+    /// selected release that carries a `VaOverrideInfo`, sends a
+    /// `BatchApplyVaOverrides` application using the signal's
+    /// `suggested_artist` value as-is. The TUI doesn't expose a per-row
+    /// edit field — operator can hand-edit individual releases via mm-web.
+    fn apply_va_overrides_for_selected(
+        &mut self,
+        selected_indices: std::collections::BTreeSet<usize>,
+        gesture: &witness::ConfirmationGesture,
+    ) {
+        let _ = gesture;
+        let applications: Vec<mm_meta::protocol::VaOverrideApplication> =
+            if let ActiveView::ReleasePackingBrowser(ref state) = self.view {
+                use crate::release_packing_browser::types::PackingListEntry;
+                selected_indices
+                    .iter()
+                    .filter_map(|&idx| {
+                        let entry = state.entries.get(idx)?;
+                        let rel_idx = match entry {
+                            PackingListEntry::Release { idx, .. } => *idx,
+                            _ => return None,
+                        };
+                        let release = state.releases.get(rel_idx)?;
+                        let va = release.va_override.as_ref()?;
+                        Some(mm_meta::protocol::VaOverrideApplication {
+                            release_id: release.release_id.clone(),
+                            albumartist: va.suggested_artist.clone(),
+                        })
+                    })
+                    .collect()
+            } else {
+                return;
+            };
+
+        if applications.is_empty() {
+            self.status_message =
+                Some("No selected releases carry a VA-override suggestion".to_string());
+            return;
+        }
+
+        match self.batch_apply_va_overrides(applications) {
+            Ok(summary) => {
+                self.status_message = Some(format_va_override_summary(&summary));
+                self.after_staging_decisions();
+            }
+            Err(e) => {
+                self.status_message = Some(format!("VA override apply failed: {e}"));
+            }
+        }
+    }
+
     /// Approve selected releases from the packing browser: generate tag ops from MB cache.
     fn approve_selected_releases(
         &mut self,
@@ -548,15 +606,12 @@ impl App {
 
     /// Shared approval logic.
     ///
-    /// Closed-txn mode (default): single protocol round-trip via
-    /// `BatchApproveReleases`. The witch loads staging data, builds
-    /// decisions, discards any open txn, opens a fresh one, and stages
-    /// all decisions in-process.
-    ///
-    /// Open-txn mode: falls back to the per-decision flow so that
-    /// decisions append to the existing persistent transaction (the
-    /// batched endpoint always discards). Used for composite flows
-    /// where the operator is building up a multi-source transaction.
+    /// Single protocol round-trip via `BatchApproveReleases`: the witch
+    /// loads staging data, builds decisions, and stages them into the
+    /// pending transaction (opening one if none is active, otherwise
+    /// appending). Same path as mm-web — open-txn vs closed-txn no longer
+    /// requires a client-side fork since the server appends rather than
+    /// clobbers.
     fn run_approval(
         &mut self,
         approval_inputs: Vec<mm_meta::views::external_matches::ReleaseApprovalInput>,
@@ -567,15 +622,9 @@ impl App {
             return;
         }
 
-        if self.open_txn_mode() {
-            self.run_approval_per_decision(approval_inputs, gesture);
-            return;
-        }
-
-        // Closed-txn fast path: single round-trip.
         let release_ids: Vec<String> = approval_inputs
-            .iter()
-            .map(|r| r.release_id.clone())
+            .into_iter()
+            .map(|r| r.release_id)
             .collect();
         // Gesture has already authorized this approval via the action
         // handler entry point; the protocol message itself doesn't carry
@@ -590,89 +639,6 @@ impl App {
                 self.status_message = Some(format!("Approval failed: {e}"));
             }
         }
-    }
-
-    /// Per-decision approval flow. Used in open-txn mode where decisions
-    /// must append to an existing transaction without discarding it.
-    fn run_approval_per_decision(
-        &mut self,
-        approval_inputs: Vec<mm_meta::views::external_matches::ReleaseApprovalInput>,
-        gesture: &witness::ConfirmationGesture,
-    ) {
-        use mm_meta::mutations::{tag_edit::ApplyTagOpsMutation, Mutation};
-        use mm_ui::external_matches::approval::build_release_approval_decisions;
-
-        // Load config for locales and credit routing
-        let config = self.config();
-        let locales = config.opinions.external_matching.preferred_locales.clone();
-        let routing = config.opinions.external_matching.credit_routing.clone();
-        let tag_names = config.opinions.external_matching.mb_tag_names.clone();
-
-        // Collect unique IDs for batch loading
-        let mut release_ids: Vec<String> = Vec::new();
-        let mut recording_ids: Vec<String> = Vec::new();
-        let mut all_inodes: Vec<i64> = Vec::new();
-        let mut seen_r = std::collections::HashSet::new();
-        let mut seen_rec = std::collections::HashSet::new();
-
-        for rd in &approval_inputs {
-            if seen_r.insert(rd.release_id.clone()) {
-                release_ids.push(rd.release_id.clone());
-            }
-            for t in &rd.tracks {
-                all_inodes.push(t.inode);
-                if seen_rec.insert(t.recording_id.clone()) {
-                    recording_ids.push(t.recording_id.clone());
-                }
-            }
-        }
-
-        // Batch query: load MB cache + current tags
-        let staging = self
-            .query(mm_meta::domain_queries::GetReleaseStagingData {
-                release_ids,
-                recording_ids,
-                inodes: all_inodes,
-            });
-
-        // Use shared approval builder (same logic for TUI and web)
-        let (decisions, summary) = build_release_approval_decisions(
-            &approval_inputs,
-            &staging.bundle,
-            &staging.inode_tags,
-            &locales,
-            &routing,
-            &tag_names,
-        );
-
-        if decisions.is_empty() {
-            self.status_message =
-                Some("No releases could be approved (missing MB cache)".to_string());
-            return;
-        }
-
-        for ad in decisions {
-            let key = mm_ui::decision_keys::mb_release_approval(ad.release_id);
-            let mutations: Vec<Mutation> = ad
-                .per_inode_ops
-                .into_iter()
-                .map(|ops| {
-                    Mutation::ApplyTagOps(ApplyTagOpsMutation {
-                        ops,
-                        zone: mm_meta::db_types::Zone::Corpus,
-                    })
-                })
-                .collect();
-            let decision = gesture.decide(&ad.label, mutations);
-            let _ = crate::operator_decisions::stage_decision(
-                self,
-                key,
-                decision,
-            );
-        }
-
-        self.status_message = Some(format_approval_summary(&summary));
-        self.after_staging_decisions();
     }
 }
 
@@ -699,4 +665,29 @@ fn format_approval_summary(
             count_noun(summary.skipped_releases, "release"),
         )
     }
+}
+
+/// Render a status line from a `VaOverrideSummary`.
+fn format_va_override_summary(
+    summary: &mm_meta::external::va_override::VaOverrideSummary,
+) -> String {
+    use mm_utils::count_noun;
+    let mut parts = vec![format!(
+        "Staged {} [{}]",
+        count_noun(summary.staged_releases, "VA override"),
+        count_noun(summary.staged_inodes, "inode"),
+    )];
+    if summary.already_matching_inodes > 0 {
+        parts.push(format!(
+            "{} already matching",
+            count_noun(summary.already_matching_inodes, "inode"),
+        ));
+    }
+    if summary.skipped_releases > 0 {
+        parts.push(format!(
+            "skipped {}",
+            count_noun(summary.skipped_releases, "release"),
+        ));
+    }
+    parts.join("; ")
 }

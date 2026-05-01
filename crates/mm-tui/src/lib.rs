@@ -965,8 +965,9 @@ impl App {
     }
 
     /// Server-side bulk approval. Single round-trip: server loads review +
-    /// staging data, builds decisions, discards any open txn, opens a fresh
-    /// one, and stages all decisions. Returns the full `ApprovalSummary`.
+    /// staging data, builds decisions, and stages them into the pending
+    /// transaction (opens one if none is active, else appends so prior
+    /// approvals aren't clobbered). Returns the full `ApprovalSummary`.
     pub(crate) fn batch_approve_releases(
         &mut self,
         release_ids: Vec<String>,
@@ -976,6 +977,24 @@ impl App {
             mm_meta::protocol::TransactionPayload::BatchApproveReleases { release_ids },
         ) {
             mm_meta::protocol::TransactionResponse::BatchApprovalStaged(summary) => Ok(summary),
+            mm_meta::protocol::TransactionResponse::Error(e) => {
+                Err(mm_meta::protocol::ProtocolError::Transaction(e))
+            }
+            _ => unreachable!("protocol bug: wrong transaction response"),
+        }
+    }
+
+    /// Server-side bulk VA-override apply. Mirrors `batch_approve_releases`
+    /// but for `BatchApplyVaOverrides`. Returns the `VaOverrideSummary`.
+    pub(crate) fn batch_apply_va_overrides(
+        &mut self,
+        applications: Vec<mm_meta::protocol::VaOverrideApplication>,
+    ) -> Result<mm_meta::external::va_override::VaOverrideSummary, mm_meta::protocol::ProtocolError>
+    {
+        match self.send_transaction(
+            mm_meta::protocol::TransactionPayload::BatchApplyVaOverrides { applications },
+        ) {
+            mm_meta::protocol::TransactionResponse::VaOverridesStaged(summary) => Ok(summary),
             mm_meta::protocol::TransactionResponse::Error(e) => {
                 Err(mm_meta::protocol::ProtocolError::Transaction(e))
             }

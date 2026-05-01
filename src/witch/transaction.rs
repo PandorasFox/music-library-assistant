@@ -425,9 +425,16 @@ impl super::Witch {
     /// Bulk-approve N releases server-side, eliminating per-decision round-trips.
     ///
     /// Loads the review/staging data, builds per-release decisions via
-    /// `build_release_approval_decisions`, discards any open transaction,
-    /// opens a fresh one, and streams all decisions in via `add_decision`.
-    /// Does NOT confirm — operator reviews and confirms separately.
+    /// `build_release_approval_decisions`, and streams all decisions into
+    /// the pending transaction via `add_decision` — opening a fresh
+    /// transaction if none is active, otherwise appending to the existing
+    /// one. Does NOT confirm — operator reviews and confirms separately.
+    ///
+    /// Appending (rather than discarding) is what lets the operator compose
+    /// multiple approval batches — e.g. approve Perfect matches, then Full
+    /// matches — without earlier approvals being clobbered by later calls.
+    /// Re-approving the same release within one transaction is idempotent
+    /// since `add_decision` keys on `MbReleaseApproval { release_id }`.
     ///
     /// Returns the full `ApprovalSummary` (staged + skipped at both release
     /// and track granularity) so callers can render an unambiguous status.
@@ -564,21 +571,24 @@ impl super::Witch {
         drop(read_db);
         drop(db);
 
-        // 7. Reset transaction state — discard any open txn, then start
-        //    a fresh one. Streaming: add each decision directly without
-        //    intermediate buffering.
-        if self.pending_transaction.is_some() {
-            let _ = self.discard_transaction();
+        // 7. Ensure a transaction exists, then stream decisions into it.
+        //    If a transaction is already open (e.g. operator is composing
+        //    Perfect + Full approvals), append to it; otherwise start a
+        //    fresh one. add_decision is keyed on MbReleaseApproval so
+        //    re-approving the same release is idempotent.
+        let appending = self.pending_transaction.is_some();
+        if !appending {
+            let label = format!(
+                "Approve {}",
+                mm_utils::count_noun(summary.staged_releases, "release"),
+            );
+            self.start_transaction(&label)?;
         }
-        let label = format!(
-            "Approve {}",
-            mm_utils::count_noun(summary.staged_releases, "release"),
-        );
-        self.start_transaction(&label)?;
 
         crate::logging::log_general(format!(
-            "[BATCH_APPROVE] streaming {} releases [{} tracks] into transaction \
+            "[BATCH_APPROVE] {} {} releases [{} tracks] into transaction \
              (skipped {} tracks across {} releases)",
+            if appending { "appending" } else { "streaming" },
             summary.staged_releases,
             summary.staged_tracks,
             summary.skipped_tracks,
@@ -587,6 +597,131 @@ impl super::Witch {
 
         for ad in decisions {
             let key = DecisionKey::MbReleaseApproval {
+                release_id: ad.release_id,
+            };
+            let mutations: Vec<Mutation> = ad
+                .per_inode_ops
+                .into_iter()
+                .map(|ops| {
+                    Mutation::ApplyTagOps(ApplyTagOpsMutation {
+                        ops,
+                        zone: Zone::Corpus,
+                    })
+                })
+                .collect();
+            self.add_decision(
+                key,
+                Decision {
+                    label: ad.label,
+                    mutations,
+                },
+            )?;
+        }
+
+        Ok(summary)
+    }
+
+    /// Batch-apply VariousArtistsOverride suggestions. For each application,
+    /// fans out to the inodes packed to that release (per `signal_release_packing`)
+    /// and stages an `ApplyTagOps` decision rewriting `ALBUMARTIST`. Mirrors
+    /// `batch_approve_releases` — opens a fresh transaction if none active,
+    /// appends to the pending one otherwise. Decisions are keyed on
+    /// `VaOverrideApplication { release_id }` for idempotency.
+    pub fn batch_apply_va_overrides(
+        &mut self,
+        applications: Vec<mm_meta::protocol::VaOverrideApplication>,
+    ) -> Result<mm_meta::external::va_override::VaOverrideSummary, TransactionError> {
+        use mm_meta::external::va_override::{build_va_override_decisions, VaOverrideInput};
+
+        if applications.is_empty() {
+            return Err(TransactionError::Other(
+                "no VA-override applications supplied".to_string(),
+            ));
+        }
+
+        let db_path = crate::config::get_db_path()
+            .map_err(|e| TransactionError::Other(format!("get_db_path: {e}")))?;
+        let db = crate::db::Database::open_read_only(&db_path)
+            .map_err(|e| TransactionError::Other(format!("open_read_only: {e}")))?;
+        let read_db = crate::db::ReadOnlyDb::new(&db);
+
+        // Fan out each release_id to its packed inodes.
+        let mut inputs: Vec<VaOverrideInput> = Vec::with_capacity(applications.len());
+        let mut all_inodes: Vec<i64> = Vec::new();
+        let mut skipped_no_inodes = 0usize;
+        for app in applications {
+            let inodes = read_db
+                .get_inodes_for_packed_release(&app.release_id)
+                .unwrap_or_default();
+            if inodes.is_empty() {
+                skipped_no_inodes += 1;
+                continue;
+            }
+            all_inodes.extend(inodes.iter().copied());
+            inputs.push(VaOverrideInput {
+                release_id: app.release_id,
+                albumartist: app.albumartist,
+                inodes,
+            });
+        }
+
+        if inputs.is_empty() {
+            return Err(TransactionError::Other(format!(
+                "no packed inodes found for any of the {} applications",
+                skipped_no_inodes
+            )));
+        }
+
+        // Reuse the existing staging loader for batched current-tag fetch.
+        // We don't need MB cache, just inode_tags — pass empty release/recording
+        // ID slices so the bundle ends up empty (cheap).
+        let staging = crate::db::domain::load_release_staging_data(
+            &read_db,
+            &[],
+            &[],
+            &all_inodes,
+        );
+
+        let (decisions, mut summary) =
+            build_va_override_decisions(&inputs, &staging.inode_tags);
+
+        // Add releases skipped at fan-out time to the summary so the operator
+        // sees them in the response.
+        summary.skipped_releases += skipped_no_inodes;
+
+        if decisions.is_empty() {
+            return Err(TransactionError::Other(format!(
+                "no tag operations produced (every selected release was \
+                 already at the chosen ALBUMARTIST or had no packed inodes; \
+                 already_matching={}, skipped={})",
+                summary.already_matching_inodes, summary.skipped_releases,
+            )));
+        }
+
+        drop(read_db);
+        drop(db);
+
+        let appending = self.pending_transaction.is_some();
+        if !appending {
+            let label = format!(
+                "Apply {}",
+                mm_utils::count_noun(summary.staged_releases, "VA override"),
+            );
+            self.start_transaction(&label)?;
+        }
+
+        crate::logging::log_general(format!(
+            "[BATCH_VA_OVERRIDE] {} {} VA overrides [{} inodes] into transaction \
+             (already_matching={}, skipped_releases={})",
+            if appending { "appending" } else { "streaming" },
+            summary.staged_releases,
+            summary.staged_inodes,
+            summary.already_matching_inodes,
+            summary.skipped_releases,
+        ));
+
+        for ad in decisions {
+            let key = DecisionKey::VaOverrideApplication {
                 release_id: ad.release_id,
             };
             let mutations: Vec<Mutation> = ad

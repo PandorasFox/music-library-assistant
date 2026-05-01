@@ -201,6 +201,14 @@ impl super::Witch {
                                         Err(e) => TransactionResponse::Error(e),
                                     }
                                 }
+                                TransactionPayload::BatchApplyVaOverrides { applications } => {
+                                    match w.batch_apply_va_overrides(applications) {
+                                        Ok(summary) => {
+                                            TransactionResponse::VaOverridesStaged(summary)
+                                        }
+                                        Err(e) => TransactionResponse::Error(e),
+                                    }
+                                }
                             };
                             Ok(AuthenticatedResponse::Transaction(response))
                         }

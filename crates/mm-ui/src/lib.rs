@@ -12,7 +12,6 @@ pub mod deploy;
 pub mod dir_config_editor;
 pub mod directory_browser;
 pub mod domain_types;
-pub mod external_matches;
 pub mod field_form;
 pub mod group_navigation;
 pub mod html;

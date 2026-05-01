@@ -33,6 +33,13 @@ pub(crate) enum ReleasePackingBrowserAction {
     ApproveSelected {
         selected_indices: BTreeSet<usize>,
     },
+    /// Apply VA-override suggestions for selected (or currently-cursored)
+    /// releases, using the signal's `suggested_artist` value as-is. The
+    /// operator can edit the value per-release in mm-web; the TUI just
+    /// applies the suggestion in bulk.
+    ApplyVaOverridesSelected {
+        selected_indices: BTreeSet<usize>,
+    },
 }
 
 // ============================================================================
@@ -399,6 +406,25 @@ impl ReleasePackingBrowserState {
             self.pin_input = Some(TextInputState::new());
             self.pin_error = None;
             return ReleasePackingBrowserAction::None;
+        }
+
+        // VA-override apply shortcut. Applies suggested_artist as-is on every
+        // checkbox-selected release that has a VA override (or the currently
+        // cursored release, if no rows are checked). For per-row text edits,
+        // use mm-web — TUI just applies the suggestion.
+        if matches!(action, InputAction::Char('v')) {
+            let indices: BTreeSet<usize> = if !self.list_state.selected.is_empty() {
+                self.list_state.selected.clone()
+            } else {
+                let mut s = BTreeSet::new();
+                s.insert(self.list_state.cursor);
+                s
+            };
+            if !indices.is_empty() {
+                return ReleasePackingBrowserAction::ApplyVaOverridesSelected {
+                    selected_indices: indices,
+                };
+            }
         }
 
         // Cancel

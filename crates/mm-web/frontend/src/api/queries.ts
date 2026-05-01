@@ -20,6 +20,7 @@ import type {
   OobFile,
   PackingKnotData,
   DirectoryClusterModalData,
+  VaOverrideReview,
 } from "./generated/types";
 
 // -- Query keys --
@@ -51,6 +52,7 @@ export const queryKeys = {
   oobFiles: (bucket: string) => ["oob-files", bucket] as const,
   directoryClusters: ["directory-cluster-data"] as const,
   releaseOverlaps: ["release-overlap-data"] as const,
+  vaOverrideReview: ["va-override-review"] as const,
 } as const;
 
 // -- Hooks --
@@ -227,6 +229,14 @@ export function useReleaseReview(filter: string) {
       get<ReleaseReviewData>(
         `/queries/release-review?filter=${filter}`,
       ),
+  });
+}
+
+export function useVaOverrideReview() {
+  return useQuery({
+    queryKey: queryKeys.vaOverrideReview,
+    queryFn: () =>
+      get<VaOverrideReview>(`/queries/va-override-review`),
   });
 }
 

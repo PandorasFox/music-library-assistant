@@ -947,6 +947,7 @@ mod tests {
                 disc_extraction_count: 0,
                 path_tag_mismatch_count: 0,
                 same_recording_different_release_count: 0,
+                artist_needs_plural_count: 0,
             },
             bucket_other: OtherSignalsBucket { entries: vec![] },
         }

@@ -55,6 +55,12 @@ fn tx_to_json(tr: TransactionResponse) -> Result<Json<serde_json::Value>, ApiErr
             "skipped_tracks": s.skipped_tracks,
             "skipped_releases": s.skipped_releases,
         }))),
+        TransactionResponse::VaOverridesStaged(s) => Ok(Json(serde_json::json!({
+            "staged_releases": s.staged_releases,
+            "staged_inodes": s.staged_inodes,
+            "skipped_releases": s.skipped_releases,
+            "already_matching_inodes": s.already_matching_inodes,
+        }))),
         TransactionResponse::Error(e) => Err(ProtocolError::Transaction(e).into()),
     }
 }
@@ -211,6 +217,49 @@ pub async fn approve_releases(
         TransactionResponse::Error(e) => Err(ProtocolError::Transaction(e).into()),
         other => Err(ApiError::Internal(format!(
             "unexpected response from BatchApproveReleases: {other:?}"
+        ))),
+    }
+}
+
+// ============================================================================
+// POST /tx/apply-va-overrides
+// ============================================================================
+
+#[derive(Deserialize)]
+pub struct ApplyVaOverridesRequest {
+    applications: Vec<mm_meta::protocol::VaOverrideApplication>,
+}
+
+/// Server-side bulk VA-override apply. Stages an `ApplyTagOps` decision per
+/// application that rewrites `ALBUMARTIST` on every inode currently packed
+/// to that release. Idempotent per release_id within a transaction.
+pub async fn apply_va_overrides(
+    State(state): State<AppState>,
+    BearerToken(token): BearerToken,
+    Json(body): Json<ApplyVaOverridesRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if body.applications.is_empty() {
+        return Err(ApiError::BadRequest("no applications".into()));
+    }
+
+    let tr = send_tx(
+        &state,
+        token,
+        TransactionPayload::BatchApplyVaOverrides {
+            applications: body.applications,
+        },
+    )
+    .await?;
+    match tr {
+        TransactionResponse::VaOverridesStaged(s) => Ok(Json(serde_json::json!({
+            "staged_releases": s.staged_releases,
+            "staged_inodes": s.staged_inodes,
+            "skipped_releases": s.skipped_releases,
+            "already_matching_inodes": s.already_matching_inodes,
+        }))),
+        TransactionResponse::Error(e) => Err(ProtocolError::Transaction(e).into()),
+        other => Err(ApiError::Internal(format!(
+            "unexpected response from BatchApplyVaOverrides: {other:?}"
         ))),
     }
 }

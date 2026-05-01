@@ -190,6 +190,12 @@ pub struct GetUnsolvedPackingData {
     pub category: String,
 }
 
+/// Reviewable VA-override suggestions. Returns one row per
+/// `signal_various_artists_override`, enriched with packed-inode count and
+/// the current `ALBUMARTIST` for context. Drives the bulk-apply UI.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GetVaOverrideReview;
+
 // ============================================================================
 // Detail Queries (Wave 4: composite queries collapsed into single execute)
 // ============================================================================
@@ -458,6 +464,7 @@ domain_query_protocol! {
     GetCorpusTags("corpus-tags") => Vec<(String, String)>,
     GetPackingBrowserData("packing-browser-data") => crate::domain_query_types::PackingBrowserData,
     GetUnsolvedPackingData("unsolved-packing-data") => Vec<(i64, String, crate::signals::data::UnmatchedCorpusTrackData)>,
+    GetVaOverrideReview("va-override-review") => crate::domain_query_types::VaOverrideReview,
 
     // Detail queries (Wave 4: composite)
     GetAudioFilesByInodes("audio-files-by-inodes") => Vec<crate::db_types::AudioFile>,

@@ -33,6 +33,37 @@ pub struct PackingBrowserData {
 }
 
 // ============================================================================
+// VA Override Review
+// ============================================================================
+
+/// One reviewable VariousArtistsOverride suggestion, enriched with the inode
+/// count (so the operator knows the apply blast radius) and a representative
+/// current `ALBUMARTIST` value (so they can compare what's being replaced
+/// against the suggestion).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VaOverrideReviewRow {
+    pub release_id: String,
+    pub release_title: String,
+    pub suggested_artist: String,
+    pub source: crate::signals::data::VariousArtistsOverrideSource,
+    /// Number of inodes currently packed to this release.
+    pub packed_inode_count: usize,
+    /// A representative `ALBUMARTIST` value across the packed inodes. If
+    /// every packed inode shares the same value, that's it; if values
+    /// disagree, the most-common one is returned. `None` means none of
+    /// the packed inodes have an `ALBUMARTIST` tag.
+    pub current_albumartist: Option<String>,
+    /// True if `current_albumartist` is the same across every packed inode.
+    pub albumartist_uniform: bool,
+}
+
+/// Response type for `GetVaOverrideReview`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct VaOverrideReview {
+    pub rows: Vec<VaOverrideReviewRow>,
+}
+
+// ============================================================================
 // Recording Batch Result
 // ============================================================================
 

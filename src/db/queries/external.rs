@@ -632,6 +632,34 @@ impl Database {
         Ok(results)
     }
 
+    /// Get all inodes currently assigned by release packing to a specific release.
+    ///
+    /// Decodes the bincode blob in `signal_release_packing.data` and filters by
+    /// the given release_id. Used by VA-override resolution and any other
+    /// per-release tag-edit batch flow that needs the inode fan-out.
+    pub fn get_inodes_for_packed_release(&self, release_id: &str) -> Result<Vec<i64>> {
+        let mut stmt = self
+            .conn()
+            .prepare("SELECT inode, data FROM signal_release_packing")?;
+        let rows = stmt.query_map([], |row| {
+            let inode: i64 = row.get(0)?;
+            let data_blob: Vec<u8> = row.get(1)?;
+            Ok((inode, data_blob))
+        })?;
+        let mut inodes = Vec::new();
+        for row in rows {
+            let (inode, data_blob) = row?;
+            if let Ok(data) =
+                bincode::deserialize::<crate::meta::signals::data::ReleasePackingData>(&data_blob)
+            {
+                if data.release_id == release_id {
+                    inodes.push(inode);
+                }
+            }
+        }
+        Ok(inodes)
+    }
+
     /// Read all release packing signal assignments.
     ///
     /// Deserializes the bincode blob to extract release_id, slot positions, and match method.

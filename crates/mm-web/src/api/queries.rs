@@ -250,6 +250,7 @@ unit_web_query!(
     GetArtistNeedsPluralData,
     GetSubparDuplicateData, GetDirectoryClusterData, GetReleaseOverlapData,
     GetLosslessRemuxData, GetMissingTagAudioFiles,
+    GetVaOverrideReview,
 );
 
 // -- Body-deserialized queries --
@@ -417,6 +418,7 @@ fn build_domain_payload(
         GetDirectoryListing, SearchCorpusFiles, SearchWithConditions,
         GetTagCanonicityResolution, GetCompoundSplitResolution,
         GetAcoustidMatches, GetReleaseReview,
+        GetVaOverrideReview,
     )
 }
 

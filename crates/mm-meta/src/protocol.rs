@@ -261,11 +261,35 @@ pub enum TransactionPayload {
     /// Get full details for all decisions in the active transaction.
     GetDetails,
     /// Server-side bulk approval. Loads review/staging data, builds
-    /// per-release decisions, discards any open transaction, opens a fresh
-    /// one, and stages all decisions in-process — eliminating the per-decision
+    /// per-release decisions, and stages them into the pending transaction
+    /// — opening a fresh one if none is active, otherwise appending so
+    /// prior approvals are preserved. Eliminates the per-decision
     /// AddDecision round-trip fan-out. Does NOT confirm; operator reviews
-    /// and confirms separately.
+    /// and confirms separately. Decisions are keyed on
+    /// `MbReleaseApproval { release_id }`, so re-approving the same
+    /// release within one transaction is idempotent.
     BatchApproveReleases { release_ids: Vec<String> },
+    /// Server-side bulk apply of VariousArtistsOverride suggestions. For each
+    /// `VaOverrideApplication`, queries the inodes packed to that release
+    /// and stages an `ApplyTagOps` decision that sets `ALBUMARTIST` to the
+    /// operator-chosen value (defaulting to the signal's `suggested_artist`,
+    /// but operator-editable in the review UI). Decisions are keyed on
+    /// `VaOverrideApplication { release_id }` so re-applying the same release
+    /// within one transaction is idempotent. Does NOT confirm; operator
+    /// reviews and confirms separately.
+    BatchApplyVaOverrides {
+        applications: Vec<VaOverrideApplication>,
+    },
+}
+
+/// One operator-approved VA-override application: a release whose
+/// `ALBUMARTIST` should be rewritten to the given value across every inode
+/// currently packed to it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VaOverrideApplication {
+    pub release_id: String,
+    /// Either the signal's `suggested_artist` or an operator edit.
+    pub albumartist: String,
 }
 
 /// Transaction operation response.
@@ -279,10 +303,14 @@ pub enum TransactionResponse {
     Discarded(DiscardSummary),
     /// Result of `BatchApproveReleases`: full breakdown of staged vs
     /// skipped at both release and track granularity. `staged_releases`
-    /// is the number of decisions added to the new transaction;
+    /// is the number of decisions added to the transaction;
     /// `staged_tracks` is the total per-inode tag-op groups across them.
     /// Skipped counts cover entries dropped due to missing MB cache.
     BatchApprovalStaged(crate::external::approval::ApprovalSummary),
+    /// Result of `BatchApplyVaOverrides`: how many VA-override applications
+    /// staged successfully vs. were skipped because the release is no longer
+    /// packed (no inodes to fan out to).
+    VaOverridesStaged(crate::external::va_override::VaOverrideSummary),
     /// Transaction-specific error.
     Error(TransactionError),
 }

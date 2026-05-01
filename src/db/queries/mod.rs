@@ -647,6 +647,7 @@ impl<'a> ReadOnlyDb<'a> {
         fn get_candidate_inode_dirs() -> Result<Vec<(i64, String, i32)>>;
         fn get_candidate_inode_recordings() -> Result<Vec<(i64, String)>>;
         fn get_release_packing_assignments() -> Result<Vec<external::PackingAssignment>>;
+        fn get_inodes_for_packed_release(release_id: &str) -> Result<Vec<i64>>;
         fn get_unassigned_audio_in_directory(parent_dir: &str, assigned_inodes: &std::collections::HashSet<i64>) -> Result<Vec<external::UnassignedAudioFile>>;
         fn get_mb_release_cache_bulk(release_ids: &[&str]) -> Result<Vec<(String, Vec<u8>)>>;
     }

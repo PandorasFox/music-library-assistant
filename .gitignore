@@ -26,6 +26,11 @@ dev-vite.sh
 # Frontend
 crates/mm-web/frontend/node_modules/
 crates/mm-web/frontend/dist/
+crates/mm-web/frontend/tsconfig.tsbuildinfo
+
+# ts-rs auto-generated TypeScript bindings (regenerated on every cargo build;
+# the frontend imports from src/api/generated/types.ts, not from these)
+crates/mm-meta/bindings/
 
 # claude lol
 .claude/

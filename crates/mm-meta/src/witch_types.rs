@@ -142,6 +142,22 @@ pub struct CoverArtProgress {
     pub images_upgraded: usize,
 }
 
+/// Progress snapshot for Deezer ISRC-keyed cover art fetching.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DeezerProgress {
+    /// Total album dirs queued for Deezer lookup.
+    pub total_dirs: usize,
+    /// Dirs processed so far.
+    pub processed: usize,
+    /// New cover sidecars written to corpus.
+    pub images_written: usize,
+    /// Dirs where Deezer had no track for the ISRC (sticky-cached).
+    pub isrc_not_found: usize,
+    /// Dirs that errored out during the lookup or download.
+    pub errors: usize,
+}
+
 // ============================================================================
 // Transaction Snapshot
 // ============================================================================
@@ -218,6 +234,12 @@ pub struct WitchStatus {
     pub is_cover_art_fetch_active: bool,
     /// Progress snapshot from cover art fetch.
     pub cover_art_progress: Option<CoverArtProgress>,
+
+    // -- Deezer art fetch state --
+    /// Whether a Deezer ISRC-keyed cover art fetch is currently running.
+    pub is_deezer_fetch_active: bool,
+    /// Progress snapshot from Deezer fetch.
+    pub deezer_progress: Option<DeezerProgress>,
 
     // -- Generation counters (for event detection via frame diffing) --
     /// Increments each time a mutation batch completes.

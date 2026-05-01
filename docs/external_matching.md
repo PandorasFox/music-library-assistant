@@ -40,6 +40,30 @@ Stages 0–3 are implemented and operational. The system is operator-initiated o
 - `meta/computations/analysis/path_schema.rs` — `DetectPathTagMismatches` computation, compares path-extracted metadata against corpus tags
 - Signal type: `PathTagMismatchSignal` with `PathTagMismatchData` (source_dir, schema_template, mismatch_kind)
 
+## Cover Art Sources
+
+Cover art fetching is operator-triggered and runs through the same scheduler thread as AcoustID/MB but with its own queue and rate limiter. Two sources today:
+
+### Cover Art Archive (CAA)
+
+- Public, no auth, no rate limit. Hardcoded base URL in `src/external/coverart.rs`.
+- Candidate set: corpus directories where any inode has `MUSICBRAINZ_ALBUMID` applied (operator commitment via tag flush). Joined against `inode_paths` to resolve target dirs. No ISRC check.
+- Per-release: fetches release listing → falls back to release-group listing if release has no art. Selects most-square candidate when multiple front images exist. Writes sidecar (`cover.jpg|png|webp|gif|bmp`) to the dir.
+- Cache: `caa_release_cache(release_id, status, response_json, image_count, fetched_at)`. Status sticky on `found`/`not_found`/`error`.
+- Operator command: `BackgroundTask::CoverArtFetch`.
+
+### Deezer (ISRC fallback)
+
+- Public, no auth, conservative rate limit (default 5 rps, configurable via `external-matching.deezer-requests-per-second`). Hardcoded base URL in `src/external/deezer.rs`.
+- Used to fill gaps left by CAA + embedded extraction. Operator-triggered only; **no auto-add or auto-fallback chain** — entirely a separate command.
+- Candidate set: corpus directories where (a) at least one inode has an `ISRC` tag, (b) the dir has no on-disk `cover_front` sidecar, (c) the representative file has no embedded picture (lofty `Tag::pictures()` probe at queue-population time), (d) no existing `deezer_isrc_cache` row marks the chosen ISRC as `found`/`not_found`.
+- Per-dir: samples one ISRC, calls `GET /track/isrc:{isrc}`, downloads `cover_xl` (1000×1000 JPEG), writes sidecar via the same `write_sidecar()` path as CAA. No release-group fallback — Deezer's catalog is broad enough that ISRC misses are sticky-cached and not retried.
+- Cache: `deezer_isrc_cache(isrc, status, deezer_album_id, cover_url, response_json, fetched_at)`. Status sticky on `found`/`not_found`. `error` rows are eligible for retry on a future button press (not auto-skipped during candidate population).
+- Operator command: `BackgroundTask::DeezerArtFetch`.
+- Config: `external-matching { deezer-enabled #true; deezer-requests-per-second 5 }`.
+
+The two sources cooperate through their per-source caches and the shared `image_info`/sidecar state on disk: a Deezer-written `cover.jpg` correctly drops the dir from CAA's eligible set on the next CAA run (because `image_info.role='cover_front'` gets indexed by the watcher), and vice versa.
+
 ## Remaining Work
 
 ### Dismiss/Ignore Persistence — NOT STARTED

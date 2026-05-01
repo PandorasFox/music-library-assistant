@@ -156,3 +156,22 @@ pub(super) fn execute_upsert_caa_release_cache(
     )?;
     Ok(())
 }
+
+/// Execute UpsertDeezerIsrcCache: insert or replace a Deezer ISRC cache entry.
+pub(super) fn execute_upsert_deezer_isrc_cache(
+    db: &Database,
+    isrc: &str,
+    status: &str,
+    deezer_album_id: Option<i64>,
+    cover_url: Option<&str>,
+    response_json: Option<&str>,
+    fetched_at: i64,
+) -> anyhow::Result<()> {
+    db.conn().execute(
+        r#"INSERT OR REPLACE INTO deezer_isrc_cache
+           (isrc, status, deezer_album_id, cover_url, response_json, fetched_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)"#,
+        params![isrc, status, deezer_album_id, cover_url, response_json, fetched_at],
+    )?;
+    Ok(())
+}

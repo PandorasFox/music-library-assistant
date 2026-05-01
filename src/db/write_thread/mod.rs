@@ -418,6 +418,16 @@ enum DbWriteOp {
         fetched_at: i64,
     },
 
+    /// Upsert a Deezer ISRC cache entry.
+    UpsertDeezerIsrcCache {
+        isrc: String,
+        status: String,
+        deezer_album_id: Option<i64>,
+        cover_url: Option<String>,
+        response_json: Option<String>,
+        fetched_at: i64,
+    },
+
     /// Insert a known MusicBrainz entity (for resumable fetching).
     InsertMbKnownEntity {
         mbid: String,

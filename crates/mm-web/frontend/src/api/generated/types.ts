@@ -59,6 +59,14 @@ export interface CoverArtProgress {
   images_upgraded: number;
 }
 
+export interface DeezerProgress {
+  total_dirs: number;
+  processed: number;
+  images_written: number;
+  isrc_not_found: number;
+  errors: number;
+}
+
 export interface TransactionSnapshot {
   label: string;
   decision_count: number;
@@ -81,6 +89,8 @@ export interface WitchStatus {
   has_acoustid_api_key: boolean;
   is_cover_art_fetch_active: boolean;
   cover_art_progress: CoverArtProgress | null;
+  is_deezer_fetch_active: boolean;
+  deezer_progress: DeezerProgress | null;
   mutations_generation: number;
   computations_generation: number;
   last_error: string | null;

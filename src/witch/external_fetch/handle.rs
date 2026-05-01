@@ -18,6 +18,8 @@ pub struct ExternalFetchHandle {
     batch_active: bool,
     /// Whether a cover art fetch is currently active.
     cover_art_active: bool,
+    /// Whether a Deezer ISRC-keyed fetch is currently active.
+    deezer_active: bool,
 }
 
 impl ExternalFetchHandle {
@@ -40,6 +42,7 @@ impl ExternalFetchHandle {
             handle: Some(handle),
             batch_active: false,
             cover_art_active: false,
+            deezer_active: false,
         }, message_rx)
     }
 
@@ -83,6 +86,30 @@ impl ExternalFetchHandle {
     /// Whether a cover art fetch is currently active.
     pub fn is_cover_art_active(&self) -> bool {
         self.cover_art_active
+    }
+
+    /// Request a Deezer ISRC-keyed cover art fetch.
+    ///
+    /// The scheduler scans corpus_tags for ISRC-tagged inodes whose dirs lack
+    /// both a sidecar and embedded artwork, then dispatches `/track/isrc:`
+    /// lookups against Deezer with the configured rate limit. Operator-only —
+    /// nothing else in MM auto-triggers this command.
+    pub fn request_deezer_art(&mut self) {
+        if self.deezer_active {
+            return;
+        }
+        self.deezer_active = true;
+        let _ = self.command_tx.send(FetchCommand::StartDeezerArt);
+    }
+
+    /// Mark the Deezer fetch as done.
+    pub(in crate::witch) fn mark_deezer_done(&mut self) {
+        self.deezer_active = false;
+    }
+
+    /// Whether a Deezer fetch is currently active.
+    pub fn is_deezer_active(&self) -> bool {
+        self.deezer_active
     }
 }
 

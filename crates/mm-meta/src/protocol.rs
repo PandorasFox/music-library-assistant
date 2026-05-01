@@ -309,6 +309,10 @@ pub enum BackgroundTask {
     ExternalFetch,
     /// Cover Art Archive sidecar image fetch.
     CoverArtFetch,
+    /// Deezer ISRC-keyed cover art fetch (operator-triggered, fills gaps left
+    /// by CAA + embedded extraction). Candidate set: corpus dirs lacking both
+    /// a sidecar and embedded artwork, where at least one inode has an ISRC tag.
+    DeezerArtFetch,
     /// Release bin-packing computation (full — rescores everything from scratch).
     ReleasePacking,
     /// Schema reconciliation pass.

@@ -26,6 +26,8 @@ pub(crate) fn render(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewS
         cached_data: state.data.cached_data.as_ref(),
         cover_art_active: state.data.cover_art_active,
         cover_art_progress: state.data.cover_art_progress.as_ref(),
+        deezer_active: state.data.deezer_active,
+        deezer_progress: state.data.deezer_progress.as_ref(),
     };
 
     let flat_items = &state.data.flat_items;
@@ -51,6 +53,8 @@ struct RenderSnapshot<'a> {
     cached_data: Option<&'a mm_meta::views::ExternalMatchesData>,
     cover_art_active: bool,
     cover_art_progress: Option<&'a mm_meta::witch_types::CoverArtProgress>,
+    deezer_active: bool,
+    deezer_progress: Option<&'a mm_meta::witch_types::DeezerProgress>,
 }
 
 fn render_item(
@@ -73,6 +77,7 @@ fn render_item(
             NavigableEntry::FetchAction => render_fetch_line(is_cursor, snap),
             NavigableEntry::PackReleasesAction => render_pack_releases_line(is_cursor, snap),
             NavigableEntry::CoverArtAction => render_cover_art_line(is_cursor, snap),
+            NavigableEntry::DeezerArtAction => render_deezer_art_line(is_cursor, snap),
             NavigableEntry::UntaggedMatches => {
                 let count = snap
                     .cached_data
@@ -200,6 +205,36 @@ fn render_cover_art_line(is_cursor: bool, snap: &RenderSnapshot) -> Line<'static
     Line::from(vec![
         Span::styled(marker, label_style),
         Span::styled("Download cover art            ", label_style),
+        Span::styled(
+            format!("{:<12}", status_label),
+            Style::default().fg(status_color),
+        ),
+    ])
+}
+
+fn render_deezer_art_line(is_cursor: bool, snap: &RenderSnapshot) -> Line<'static> {
+    let (status_label, status_color) = if snap.deezer_active {
+        if let Some(p) = &snap.deezer_progress {
+            (
+                format!(
+                    "{}/{} dirs, {} images",
+                    p.processed, p.total_dirs, p.images_written
+                ),
+                Color::Yellow,
+            )
+        } else {
+            ("Active".to_string(), Color::Yellow)
+        }
+    } else {
+        ("Idle".to_string(), Color::Green)
+    };
+
+    let disabled = snap.deezer_active;
+    let (marker, label_style) = cursor_marker_style(is_cursor, disabled);
+
+    Line::from(vec![
+        Span::styled(marker, label_style),
+        Span::styled("Fetch cover art via Deezer    ", label_style),
         Span::styled(
             format!("{:<12}", status_label),
             Style::default().fg(status_color),

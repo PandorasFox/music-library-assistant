@@ -24,6 +24,19 @@ impl RateLimiter {
         }
     }
 
+    /// Deezer's public API tolerates ~50 rps according to docs but we keep a
+    /// conservative default. No exponential backoff — Deezer rate-limit
+    /// responses (HTTP 4 in `error.code`) are rare and per-IP, so a flat
+    /// fixed-interval limiter mirrors the AcoustID shape.
+    pub(super) fn new_deezer(requests_per_second: u32) -> Self {
+        Self {
+            base_interval: Duration::from_millis(1000 / requests_per_second.max(1) as u64),
+            backoff_multiplier: 1,
+            last_request_at: None,
+            max_backoff: 1,
+        }
+    }
+
     /// Duration until this limiter is ready for another request.
     /// Returns `Duration::ZERO` if ready now.
     pub(super) fn time_until_ready(&self) -> Duration {

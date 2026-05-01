@@ -78,6 +78,9 @@ function MatchSummary({
         <button onClick={() => onQueueFetch("CoverArtFetch")}>
           Download Cover Art
         </button>
+        <button onClick={() => onQueueFetch("DeezerArtFetch")}>
+          Fetch Cover Art via Deezer
+        </button>
       </div>
 
       <section className="em-section">
@@ -139,6 +142,7 @@ function MatchSummary({
           </div>
         </section>
       )}
+
     </>
   );
 }

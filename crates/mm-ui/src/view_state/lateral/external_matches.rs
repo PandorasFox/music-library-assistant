@@ -39,6 +39,8 @@ pub enum ExternalMatchesAction {
     RequestReleasePacking,
     /// Enter on "Download cover art" entry
     RequestCoverArt,
+    /// Enter on "Fetch cover art via Deezer" entry
+    RequestDeezerArt,
     /// Enter on "Untagged matches" → launch review for untagged entries
     LaunchUntaggedReview,
     /// Enter on a confidence bucket → launch review for entries in that tier
@@ -60,6 +62,8 @@ pub enum NavigableEntry {
     PackReleasesAction,
     /// "Download cover art" action entry (always present)
     CoverArtAction,
+    /// "Fetch cover art via Deezer" action entry (always present)
+    DeezerArtAction,
     /// "Untagged matches" — files with fingerprint hits but no existing tags
     UntaggedMatches,
     /// Confidence tier bucket
@@ -138,6 +142,10 @@ pub struct ExternalMatchesViewData {
     pub cover_art_active: bool,
     /// Latest cover art fetch progress snapshot.
     pub cover_art_progress: Option<mm_meta::witch_types::CoverArtProgress>,
+    /// Whether a Deezer ISRC-keyed fetch is currently active.
+    pub deezer_active: bool,
+    /// Latest Deezer fetch progress snapshot.
+    pub deezer_progress: Option<mm_meta::witch_types::DeezerProgress>,
 }
 
 // ============================================================================
@@ -150,6 +158,7 @@ impl ExternalMatchesViewData {
         has_api_key: bool,
         singles_before_incompletes: bool,
         cover_art_active: bool,
+        deezer_active: bool,
     ) -> Self {
         let mut data = Self {
             cached_data: None,
@@ -160,6 +169,8 @@ impl ExternalMatchesViewData {
             singles_before_incompletes,
             cover_art_active,
             cover_art_progress: None,
+            deezer_active,
+            deezer_progress: None,
         };
         data.rebuild_items();
         data
@@ -194,6 +205,11 @@ impl ExternalMatchesViewData {
         items.push(ExternalMatchListItem::Entry {
             nav: NavigableEntry::CoverArtAction,
             detail_lines: self.cover_art_detail_lines(),
+        });
+
+        items.push(ExternalMatchListItem::Entry {
+            nav: NavigableEntry::DeezerArtAction,
+            detail_lines: self.deezer_art_detail_lines(),
         });
 
         if let Some(ref data) = self.cached_data {
@@ -680,6 +696,114 @@ impl ExternalMatchesViewData {
         lines
     }
 
+    fn deezer_art_detail_lines(&self) -> Vec<Line<'static>> {
+        let mut lines = vec![
+            Line::from(Span::styled(
+                "Fetch cover art via Deezer",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+        ];
+
+        if self.deezer_active {
+            if let Some(ref p) = self.deezer_progress {
+                lines.push(Line::from(vec![
+                    Span::styled("Dirs:    ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("{}/{}", p.processed, p.total_dirs),
+                        Style::default().fg(Color::Yellow),
+                    ),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("  Written:  ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("{:>5}", p.images_written),
+                        Style::default().fg(Color::Green),
+                    ),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("  No-data:  ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("{:>5}", p.isrc_not_found),
+                        Style::default().fg(Color::White),
+                    ),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("  Errors:   ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("{:>5}", p.errors),
+                        Style::default().fg(Color::Red),
+                    ),
+                ]));
+
+                if p.total_dirs > 0 {
+                    let pct = ((p.processed as f32 / p.total_dirs as f32) * 100.0).round();
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(Span::styled(
+                        format!("  Progress: {}%", pct),
+                        Style::default().fg(Color::Yellow),
+                    )));
+                }
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("Active", Style::default().fg(Color::Yellow)),
+                ]));
+            }
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Idle", Style::default().fg(Color::Green)),
+            ]));
+
+            if let Some(ref p) = self.deezer_progress {
+                if p.total_dirs > 0 {
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(Span::styled(
+                        format!("Last run: {} dirs", p.total_dirs),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                    lines.push(Line::from(vec![
+                        Span::styled("  Written: ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            format!("{}", p.images_written),
+                            Style::default().fg(Color::Green),
+                        ),
+                        Span::styled("  No-data: ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            format!("{}", p.isrc_not_found),
+                            Style::default().fg(Color::White),
+                        ),
+                        Span::styled("  Errors: ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            format!("{}", p.errors),
+                            Style::default().fg(Color::Red),
+                        ),
+                    ]));
+                }
+            }
+
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "ISRC-keyed Deezer lookup for",
+                Style::default().fg(Color::DarkGray),
+            )));
+            lines.push(Line::from(Span::styled(
+                "dirs lacking sidecar+embedded art.",
+                Style::default().fg(Color::DarkGray),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Press Enter to start download.",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+
+        lines
+    }
+
     fn untagged_detail_lines(&self) -> Vec<Line<'static>> {
         let count = self
             .cached_data
@@ -777,6 +901,13 @@ impl ExternalMatchesViewData {
             NavigableEntry::CoverArtAction => {
                 if !self.cover_art_active {
                     Some(ExternalMatchesAction::RequestCoverArt)
+                } else {
+                    None
+                }
+            }
+            NavigableEntry::DeezerArtAction => {
+                if !self.deezer_active {
+                    Some(ExternalMatchesAction::RequestDeezerArt)
                 } else {
                     None
                 }

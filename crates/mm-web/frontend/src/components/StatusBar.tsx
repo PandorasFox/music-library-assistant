@@ -59,6 +59,16 @@ function CoverArtIndicator({ status }: { status: WitchStatus }) {
   );
 }
 
+function DeezerIndicator({ status }: { status: WitchStatus }) {
+  if (!status.is_deezer_fetch_active || !status.deezer_progress) return null;
+  const p = status.deezer_progress;
+  return (
+    <span className="status-fetch">
+      Deezer {p.processed}/{p.total_dirs}
+    </span>
+  );
+}
+
 function TransactionIndicator({ status }: { status: WitchStatus }) {
   if (!status.transaction) return null;
 
@@ -83,6 +93,7 @@ export function StatusBar({ status, wsState }: StatusBarProps) {
         {status && <WorkIndicator status={status} />}
         {status && <FetchIndicator status={status} />}
         {status && <CoverArtIndicator status={status} />}
+        {status && <DeezerIndicator status={status} />}
       </div>
       <div className="statusbar__right">
         {status && <TransactionIndicator status={status} />}

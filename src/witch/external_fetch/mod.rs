@@ -39,13 +39,14 @@ use crate::db::write_thread;
 use crate::db::Database;
 use crate::external::acoustid::{AcoustIDClient, LookupOutcome};
 use crate::external::coverart::CoverArtClient;
+use crate::external::deezer::DeezerClient;
 use crate::external::musicbrainz::{MbLookupOutcome, MusicBrainzClient};
 use crate::meta::external::ExternalSource;
 use mm_meta::config::CoverArtSanctity;
 use mm_meta::paths::PathResolver;
 
 use rate_limiter::{AdaptiveRateLimiter, RateLimiter};
-use types::FetchCommand;
+use types::{DeezerProgress, FetchCommand};
 
 // ============================================================================
 // Scheduler Thread
@@ -87,6 +88,8 @@ async fn scheduler_loop(
     let mut batch: Option<BatchState> = None;
     let mut caa_batch: Option<CoverArtBatch> = None;
     let mut caa_in_flight: JoinSet<(CoverArtResult, String)> = JoinSet::new();
+    let mut deezer_batch: Option<DeezerBatch> = None;
+    let mut deezer_in_flight: JoinSet<DeezerResult> = JoinSet::new();
 
     loop {
         tokio::select! {
@@ -142,11 +145,29 @@ async fn scheduler_loop(
                         ));
                         let _ = message_tx.send(SchedulerMessage::CoverArtProgress(cab.progress.clone()));
                     }
+                    Some(FetchCommand::StartDeezerArt) => {
+                        if deezer_batch.is_some() {
+                            continue;
+                        }
+                        deezer_batch = Some(init_deezer_batch(&db, &shared_config));
+                        let dz = deezer_batch.as_ref().unwrap();
+                        if dz.queue.is_empty() {
+                            crate::logging::log_general("[FETCH] No Deezer work needed");
+                            let _ = message_tx.send(SchedulerMessage::DeezerDone(dz.progress.clone()));
+                            deezer_batch = None;
+                            continue;
+                        }
+                        crate::logging::log_general(format!(
+                            "[FETCH] Deezer: {} dirs to process (rps={})",
+                            dz.queue.len(), dz.rps,
+                        ));
+                        let _ = message_tx.send(SchedulerMessage::DeezerProgress(dz.progress.clone()));
+                    }
                     Some(FetchCommand::Shutdown) | None => break,
                 }
             }
 
-            _ = tick.tick(), if batch.is_some() || caa_batch.is_some() => {
+            _ = tick.tick(), if batch.is_some() || caa_batch.is_some() || deezer_batch.is_some() => {
                 // Dispatch cover art work (no rate limiter — CAA has no limits)
                 if caa_in_flight.is_empty() {
                     if let Some(ref mut cab) = caa_batch {
@@ -171,6 +192,23 @@ async fn scheduler_loop(
                                 (result, release_id)
                             });
                         }
+                    }
+                }
+
+                // Dispatch Deezer work, gated on the rate limiter (per-tick,
+                // up to one request per tick — fetch thread keeps it serial
+                // like CAA).
+                if let Some(ref mut dz) = deezer_batch {
+                    if !dz.queue.is_empty()
+                        && dz.limiter.time_until_ready() == Duration::ZERO
+                    {
+                        let item = dz.queue.pop_front().unwrap();
+                        dz.limiter.mark_request();
+                        let client = dz.client.clone();
+                        let corpus_root = dz.corpus_root.clone();
+                        deezer_in_flight.spawn(async move {
+                            execute_deezer_fetch(&client, &corpus_root, item).await
+                        });
                     }
                 }
 
@@ -411,6 +449,40 @@ async fn scheduler_loop(
                     if cab.queue.is_empty() && caa_in_flight.is_empty() {
                         let _ = message_tx.send(SchedulerMessage::CoverArtDone(cab.progress.clone()));
                         caa_batch = None;
+                    }
+                }
+            }
+
+            Some(result) = deezer_in_flight.join_next(), if !deezer_in_flight.is_empty() => {
+                let Ok(result) = result else { continue };
+
+                // Persist the cache entry regardless of outcome.
+                if let Some(sender) = write_thread::signal_sender() {
+                    sender.upsert_deezer_isrc_cache(
+                        &result.isrc,
+                        result.cache_status,
+                        result.deezer_album_id,
+                        result.cover_url.as_deref(),
+                        result.response_json.as_deref(),
+                        now_unix(),
+                    );
+                }
+
+                if let Some(ref mut dz) = deezer_batch {
+                    dz.progress.processed += 1;
+                    if result.image_written {
+                        dz.progress.images_written += 1;
+                    }
+                    if result.cache_status == "not_found" {
+                        dz.progress.isrc_not_found += 1;
+                    } else if result.cache_status == "error" {
+                        dz.progress.errors += 1;
+                    }
+                    let _ = message_tx.send(SchedulerMessage::DeezerProgress(dz.progress.clone()));
+
+                    if dz.queue.is_empty() && deezer_in_flight.is_empty() {
+                        let _ = message_tx.send(SchedulerMessage::DeezerDone(dz.progress.clone()));
+                        deezer_batch = None;
                     }
                 }
             }
@@ -1455,6 +1527,298 @@ fn write_sidecar(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
     }
     std::fs::write(path, bytes)?;
     Ok(())
+}
+
+// ============================================================================
+// Deezer Fetch
+// ============================================================================
+
+/// State for a Deezer ISRC-keyed cover art fetch batch.
+struct DeezerBatch {
+    queue: VecDeque<DeezerQueueItem>,
+    client: DeezerClient,
+    limiter: RateLimiter,
+    progress: DeezerProgress,
+    corpus_root: std::path::PathBuf,
+    rps: u32,
+}
+
+/// One album dir to look up via Deezer.
+struct DeezerQueueItem {
+    /// Corpus-relative directory containing the album's audio files.
+    target_dir: String,
+    /// ISRC sampled from one of the dir's tracks.
+    isrc: String,
+}
+
+/// Result from processing a single Deezer ISRC entry.
+struct DeezerResult {
+    isrc: String,
+    cache_status: &'static str,
+    deezer_album_id: Option<i64>,
+    cover_url: Option<String>,
+    response_json: Option<String>,
+    image_written: bool,
+}
+
+/// Initialize a Deezer fetch batch from config + DB state.
+fn init_deezer_batch(db: &Database, shared_config: &SharedConfig) -> DeezerBatch {
+    let (enabled, rps, corpus_root) = {
+        let config = shared_config.read().expect("SharedConfig lock poisoned");
+        let em = &config.opinions.external_matching;
+        let resolver = PathResolver::from_config(&config);
+        (em.deezer_enabled, em.deezer_requests_per_second, resolver.corpus_dir())
+    };
+
+    let mut queue = VecDeque::new();
+    if enabled {
+        populate_deezer_queue(db, &corpus_root, &mut queue);
+    } else {
+        crate::logging::log_general("[FETCH] Deezer is disabled in config");
+    }
+
+    let progress = DeezerProgress {
+        total_dirs: queue.len(),
+        ..Default::default()
+    };
+
+    DeezerBatch {
+        queue,
+        client: DeezerClient::new(),
+        limiter: RateLimiter::new_deezer(rps),
+        progress,
+        corpus_root,
+        rps,
+    }
+}
+
+/// Populate the Deezer queue.
+///
+/// Filters: corpus directory contains at least one inode tagged with ISRC,
+/// the directory has no on-disk `cover_front` sidecar, the representative
+/// file has no embedded artwork, and we don't already have a `found` or
+/// `not_found` cache row for the chosen ISRC.
+///
+/// One entry per target dir; the chosen ISRC is sampled deterministically
+/// (first ISRC encountered for a dir's inodes).
+fn populate_deezer_queue(
+    db: &Database,
+    corpus_root: &std::path::Path,
+    queue: &mut VecDeque<DeezerQueueItem>,
+) {
+    use std::collections::{HashMap, HashSet};
+
+    // Step 1: pull (inode, dir, isrc, sample_path) for every corpus inode
+    //         tagged with ISRC.
+    let sql = r#"
+        SELECT ct.inode, ip.path, ct.tag_value
+        FROM corpus_tags ct
+        JOIN inode_paths ip ON ip.inode = ct.inode
+        WHERE ct.tag_name = 'ISRC'
+          AND ip.zone = 'corpus'
+    "#;
+    let mut by_dir: HashMap<String, (String, std::path::PathBuf)> = HashMap::new();
+    if let Ok(mut stmt) = db.conn().prepare(sql) {
+        let rows = stmt.query_map([], |row| {
+            let _inode: i64 = row.get(0)?;
+            let rel_path: String = row.get(1)?;
+            let isrc: String = row.get(2)?;
+            Ok((rel_path, isrc))
+        });
+        if let Ok(rows) = rows {
+            for row in rows.flatten() {
+                let (rel_path, isrc) = row;
+                let dir = match std::path::Path::new(&rel_path).parent() {
+                    Some(d) => d.to_string_lossy().to_string(),
+                    None => continue,
+                };
+                let trimmed = isrc.trim().to_string();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                by_dir.entry(dir).or_insert_with(|| {
+                    let abs = corpus_root.join(&rel_path);
+                    (trimmed, abs)
+                });
+            }
+        }
+    }
+
+    if by_dir.is_empty() {
+        crate::logging::log_general("[FETCH] Deezer queue: no ISRC-tagged inodes found");
+        return;
+    }
+
+    // Step 2: drop dirs that already have a cover_front sidecar.
+    by_dir.retain(|dir, _| get_existing_art_dims(db, dir, "cover_front").is_none());
+    let after_sidecar = by_dir.len();
+
+    // Step 3: drop entries whose ISRC is already cached.
+    let cached_isrcs: HashSet<String> = {
+        let mut set = HashSet::new();
+        if let Ok(mut stmt) = db
+            .conn()
+            .prepare("SELECT isrc FROM deezer_isrc_cache WHERE status IN ('found', 'not_found')")
+        {
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0));
+            if let Ok(rows) = rows {
+                for row in rows.flatten() {
+                    set.insert(row);
+                }
+            }
+        }
+        set
+    };
+    by_dir.retain(|_, (isrc, _)| !cached_isrcs.contains(isrc));
+    let after_cache = by_dir.len();
+
+    // Step 4: drop entries where the representative file has embedded art.
+    let mut after_embedded = 0usize;
+    for (dir, (isrc, sample_path)) in by_dir.into_iter() {
+        if has_embedded_picture(&sample_path) {
+            continue;
+        }
+        after_embedded += 1;
+        queue.push_back(DeezerQueueItem {
+            target_dir: dir,
+            isrc,
+        });
+    }
+
+    crate::logging::log_general(format!(
+        "[FETCH] Deezer queue populated: {} → {} (sidecar filter) → {} (cache filter) → {} (embedded filter)",
+        cached_isrcs.len() + queue.len(), // approximation for "before any filter"
+        after_sidecar,
+        after_cache,
+        after_embedded,
+    ));
+}
+
+/// Check whether an audio file has embedded picture metadata.
+///
+/// Uses lofty to read tag picture blocks. Returns `false` on any read error
+/// (treat unreadable file as "no embedded art" so we still attempt fetch).
+fn has_embedded_picture(path: &std::path::Path) -> bool {
+    use lofty::file::TaggedFileExt;
+    use lofty::probe::Probe;
+
+    let tagged = match Probe::open(path).and_then(|p| p.read()) {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+    tagged
+        .tags()
+        .iter()
+        .any(|tag| !tag.pictures().is_empty())
+}
+
+/// Execute a single Deezer ISRC lookup + image write.
+async fn execute_deezer_fetch(
+    client: &DeezerClient,
+    corpus_root: &std::path::Path,
+    item: DeezerQueueItem,
+) -> DeezerResult {
+    let isrc = item.isrc.clone();
+    let track = match client.lookup_track_by_isrc(&isrc).await {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            crate::logging::log_general(format!(
+                "[FETCH] Deezer: no track for ISRC {} ({})",
+                isrc, item.target_dir
+            ));
+            return DeezerResult {
+                isrc,
+                cache_status: "not_found",
+                deezer_album_id: None,
+                cover_url: None,
+                response_json: None,
+                image_written: false,
+            };
+        }
+        Err(e) => {
+            crate::logging::log_error(format!(
+                "[FETCH] Deezer lookup failed for ISRC {} ({}): {:#}",
+                isrc, item.target_dir, e
+            ));
+            return DeezerResult {
+                isrc,
+                cache_status: "error",
+                deezer_album_id: None,
+                cover_url: None,
+                response_json: Some(format!("{{\"lookup_error\":\"{}\"}}", e)),
+                image_written: false,
+            };
+        }
+    };
+
+    let cover_url = match track.album.best_cover_url() {
+        Some(u) => u.to_string(),
+        None => {
+            crate::logging::log_general(format!(
+                "[FETCH] Deezer: track for ISRC {} has no album cover URL",
+                isrc
+            ));
+            return DeezerResult {
+                isrc,
+                cache_status: "not_found",
+                deezer_album_id: Some(track.album.id),
+                cover_url: None,
+                response_json: None,
+                image_written: false,
+            };
+        }
+    };
+
+    let downloaded = match client.download_image(&cover_url).await {
+        Ok(d) => d,
+        Err(e) => {
+            crate::logging::log_error(format!(
+                "[FETCH] Deezer image download failed for ISRC {} ({}): {:#}",
+                isrc, cover_url, e
+            ));
+            return DeezerResult {
+                isrc,
+                cache_status: "error",
+                deezer_album_id: Some(track.album.id),
+                cover_url: Some(cover_url),
+                response_json: None,
+                image_written: false,
+            };
+        }
+    };
+
+    let abs_dir = corpus_root.join(&item.target_dir);
+    let filename = format!("cover.{}", downloaded.format.extension());
+    let abs_path = abs_dir.join(&filename);
+
+    if let Err(e) = write_sidecar(&abs_path, &downloaded.bytes) {
+        crate::logging::log_error(format!(
+            "[FETCH] Deezer write failed for {} (ISRC {}): {:#}",
+            abs_path.display(), isrc, e
+        ));
+        return DeezerResult {
+            isrc,
+            cache_status: "error",
+            deezer_album_id: Some(track.album.id),
+            cover_url: Some(cover_url),
+            response_json: None,
+            image_written: false,
+        };
+    }
+
+    crate::logging::log_general(format!(
+        "[FETCH] Deezer wrote cover art: {}/{} (ISRC {})",
+        item.target_dir, filename, isrc,
+    ));
+
+    DeezerResult {
+        isrc,
+        cache_status: "found",
+        deezer_album_id: Some(track.album.id),
+        cover_url: Some(cover_url),
+        response_json: None,
+        image_written: true,
+    }
 }
 
 /// Find an existing sidecar file by stem name (e.g. "cover") in a directory,

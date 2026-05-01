@@ -431,6 +431,22 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
                         opinions.cover_art_types = types;
                     }
                 }
+                ExternalMatchingConfig::KDL_DEEZER_ENABLED => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(b) = entry.value().as_bool() {
+                            opinions.deezer_enabled = b;
+                        }
+                    }
+                }
+                ExternalMatchingConfig::KDL_DEEZER_REQ_PER_SEC => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_i64() {
+                            if val > 0 {
+                                opinions.deezer_requests_per_second = val as u32;
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }

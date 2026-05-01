@@ -57,6 +57,8 @@ impl super::Witch {
             has_acoustid_api_key: self.has_acoustid_api_key(),
             is_cover_art_fetch_active: self.is_cover_art_fetch_active(),
             cover_art_progress: self.cover_art_progress.clone(),
+            is_deezer_fetch_active: self.is_deezer_fetch_active(),
+            deezer_progress: self.deezer_progress.clone(),
             mutations_generation: self.mutations_generation,
             computations_generation: self.computations_generation,
             last_error: self.recent_errors.back().cloned(),

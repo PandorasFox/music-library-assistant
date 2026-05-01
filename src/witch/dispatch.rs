@@ -230,6 +230,12 @@ impl super::Witch {
                                                 Err(reason) => CommandResponse::Failed(reason),
                                             }
                                         }
+                                        BackgroundTask::DeezerArtFetch => {
+                                            match w.request_deezer_art_fetch() {
+                                                Ok(()) => CommandResponse::Ok,
+                                                Err(reason) => CommandResponse::Failed(reason),
+                                            }
+                                        }
                                         BackgroundTask::ReleasePacking => {
                                             w.request_release_packing(false);
                                             crate::logging::log_general(format!(

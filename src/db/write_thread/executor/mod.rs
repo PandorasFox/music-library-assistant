@@ -628,6 +628,27 @@ pub(super) fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             });
         }
 
+        DbWriteOp::UpsertDeezerIsrcCache {
+            isrc,
+            status,
+            deezer_album_id,
+            cover_url,
+            response_json,
+            fetched_at,
+        } => {
+            with_retry("upsert_deezer_isrc_cache", isrc, || {
+                external_ops::execute_upsert_deezer_isrc_cache(
+                    db,
+                    isrc,
+                    status,
+                    *deezer_album_id,
+                    cover_url.as_deref(),
+                    response_json.as_deref(),
+                    *fetched_at,
+                )
+            });
+        }
+
         // ExecuteVacuum, ApplyReconciliation, and Shutdown are handled in the run_db_thread loop, never reach here
         DbWriteOp::ExecuteVacuum { .. } => {
             unreachable!("ExecuteVacuum handled in run_db_thread loop")

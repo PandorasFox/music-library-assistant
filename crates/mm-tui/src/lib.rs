@@ -577,6 +577,7 @@ impl App {
         let fetch_active = ws.is_external_fetch_active;
         let has_api_key = ws.has_acoustid_api_key;
         let cover_art_active = ws.is_cover_art_fetch_active;
+        let deezer_active = ws.is_deezer_fetch_active;
         let config = self.config();
         let singles_before_incompletes = config.opinions.release_packing.singles_before_incompletes;
         let mut data = external_match_view::ExternalMatchesViewData::new(
@@ -584,6 +585,7 @@ impl App {
             has_api_key,
             singles_before_incompletes,
             cover_art_active,
+            deezer_active,
         );
         let ext_data = self.query(mm_meta::domain_queries::GetExternalMatches);
         data.update(ext_data);
@@ -1312,15 +1314,20 @@ fn run_app<B: ratatui::backend::Backend>(
             let fetch_progress = app.cached_status.external_fetch_progress.clone();
             let new_cover_art_active = app.cached_status.is_cover_art_fetch_active;
             let cover_art_progress = app.cached_status.cover_art_progress.clone();
+            let new_deezer_active = app.cached_status.is_deezer_fetch_active;
+            let deezer_progress = app.cached_status.deezer_progress.clone();
             let mut fetch_changed = false;
             if let ActiveView::ExternalMatches(ref mut s) = app.view {
                 fetch_changed = s.data.fetch_active != new_fetch_active
-                    || s.data.cover_art_active != new_cover_art_active;
+                    || s.data.cover_art_active != new_cover_art_active
+                    || s.data.deezer_active != new_deezer_active;
                 s.data.fetch_active = new_fetch_active;
                 s.data.fetch_progress = fetch_progress;
                 s.data.cover_art_active = new_cover_art_active;
                 s.data.cover_art_progress = cover_art_progress;
-                if s.data.fetch_active || s.data.cover_art_active {
+                s.data.deezer_active = new_deezer_active;
+                s.data.deezer_progress = deezer_progress;
+                if s.data.fetch_active || s.data.cover_art_active || s.data.deezer_active {
                     s.interaction.tick_count = s.interaction.tick_count.wrapping_add(1);
                 }
             }

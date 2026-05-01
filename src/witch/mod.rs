@@ -297,6 +297,9 @@ pub struct Witch {
     /// Latest progress snapshot from the cover art fetch.
     cover_art_progress: Option<external_fetch::CoverArtProgress>,
 
+    /// Latest progress snapshot from the Deezer ISRC-keyed fetch.
+    deezer_progress: Option<mm_meta::witch_types::DeezerProgress>,
+
     // -------------------------------------------------------------------------
     // Offload Infrastructure (async spawn_blocking results)
     // -------------------------------------------------------------------------
@@ -402,6 +405,7 @@ impl Witch {
             external_fetch: None,
             fetch_progress: None,
             cover_art_progress: None,
+            deezer_progress: None,
             offload_tx,
             offload_rx,
             watcher_cache_loading: false,
@@ -838,6 +842,38 @@ impl Witch {
         self.external_fetch
             .as_ref()
             .is_some_and(|h| h.is_cover_art_active())
+    }
+
+    /// Request a Deezer ISRC-keyed cover art fetch.
+    ///
+    /// Operator-triggered (no auto-add). Lazy-spawns the external fetch
+    /// thread if needed.
+    pub fn request_deezer_art_fetch(&mut self) -> Result<(), String> {
+        let shared_config = match self.shared_config {
+            Some(ref sc) => sc.clone(),
+            None => return Err("Server config not yet available".to_string()),
+        };
+        if self.external_fetch.is_none() {
+            let (handle, rx) = external_fetch::ExternalFetchHandle::spawn(shared_config);
+            self.scheduler_message_rx = Some(rx);
+            self.external_fetch = Some(handle);
+            crate::logging::log_general("[WITCH] Spawned external fetch thread");
+        }
+        let handle = self.external_fetch.as_mut().unwrap();
+        if handle.is_deezer_active() {
+            return Err("Deezer fetch already in progress".to_string());
+        }
+        self.deezer_progress = None;
+        crate::logging::log_general("[WITCH] Deezer fetch requested");
+        handle.request_deezer_art();
+        Ok(())
+    }
+
+    /// Whether a Deezer fetch is currently active.
+    pub fn is_deezer_fetch_active(&self) -> bool {
+        self.external_fetch
+            .as_ref()
+            .is_some_and(|h| h.is_deezer_active())
     }
 
     /// Queue release bin-packing analysis.

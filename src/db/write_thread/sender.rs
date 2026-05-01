@@ -703,6 +703,27 @@ impl SignalWriteSender {
         });
     }
 
+    /// Upsert a Deezer ISRC cache entry.
+    pub fn upsert_deezer_isrc_cache(
+        &self,
+        isrc: &str,
+        status: &str,
+        deezer_album_id: Option<i64>,
+        cover_url: Option<&str>,
+        response_json: Option<&str>,
+        fetched_at: i64,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::UpsertDeezerIsrcCache {
+            isrc: isrc.to_string(),
+            status: status.to_string(),
+            deezer_album_id,
+            cover_url: cover_url.map(|s| s.to_string()),
+            response_json: response_json.map(|s| s.to_string()),
+            fetched_at,
+        });
+    }
+
     /// Insert a known MusicBrainz entity for resumable fetching.
     pub fn insert_mb_known_entity(
         &self,

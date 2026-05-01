@@ -1,7 +1,7 @@
 //! Message and data types for external fetch scheduling.
 
 use crate::meta::external::ExternalSource;
-pub use mm_meta::witch_types::CoverArtProgress;
+pub use mm_meta::witch_types::{CoverArtProgress, DeezerProgress};
 
 // ============================================================================
 // Public Types
@@ -68,6 +68,10 @@ pub(in crate::witch) enum SchedulerMessage {
     /// Sent per-release when the CAA fetch decides to replace existing art.
     /// The Witch queues a `StashAndReplaceSidecars` derivation computation.
     SidecarReplacements(Vec<mm_meta::computations::derivation::SidecarReplacement>),
+    /// Deezer fetch progress update.
+    DeezerProgress(DeezerProgress),
+    /// Deezer fetch complete.
+    DeezerDone(DeezerProgress),
 }
 
 /// Command from Witch to scheduler.
@@ -76,6 +80,9 @@ pub(super) enum FetchCommand {
     Start,
     /// Fetch cover art from Cover Art Archive for matched releases.
     StartCoverArt,
+    /// Fetch cover art from Deezer for ISRC-tagged corpus dirs without
+    /// existing sidecar or embedded artwork. Operator-triggered only.
+    StartDeezerArt,
     /// Shut down the scheduler thread.
     Shutdown,
 }

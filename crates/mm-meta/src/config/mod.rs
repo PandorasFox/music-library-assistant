@@ -511,6 +511,10 @@ pub struct ExternalMatchingConfig {
     pub mb_tag_names: MbTagNameConfig,
     /// Which CAA image types to download (e.g. "Front", "Back").
     pub cover_art_types: Vec<String>,
+    /// Whether the Deezer fallback cover-art source is enabled.
+    pub deezer_enabled: bool,
+    /// Conservative cap for Deezer API requests per second.
+    pub deezer_requests_per_second: u32,
 }
 
 impl Default for ExternalMatchingConfig {
@@ -527,6 +531,8 @@ impl Default for ExternalMatchingConfig {
             credit_routing: CreditRoutingConfig::default(),
             mb_tag_names: MbTagNameConfig::default(),
             cover_art_types: vec!["Front".to_string(), "Back".to_string()],
+            deezer_enabled: true,
+            deezer_requests_per_second: 5,
         }
     }
 }
@@ -544,6 +550,8 @@ impl ExternalMatchingConfig {
     pub const KDL_TAG_TEMPLATES: &str = "tag-templates";
     pub const KDL_CREDIT_ROUTING: &str = "credit-routing";
     pub const KDL_COVER_ART_TYPES: &str = "cover-art-types";
+    pub const KDL_DEEZER_ENABLED: &str = "deezer-enabled";
+    pub const KDL_DEEZER_REQ_PER_SEC: &str = "deezer-requests-per-second";
 }
 
 /// Opinions for disc extraction from ALBUM and TRACKNUMBER tags.

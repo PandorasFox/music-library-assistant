@@ -267,6 +267,20 @@ pub fn schema_inventory() -> Vec<TableEntry> {
     });
 
     tables.push(TableEntry {
+        name: "deezer_isrc_cache",
+        kind: TableKind::Core,
+        create_sql: "CREATE TABLE IF NOT EXISTS deezer_isrc_cache (
+            isrc TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            deezer_album_id INTEGER,
+            cover_url TEXT,
+            response_json TEXT,
+            fetched_at INTEGER NOT NULL
+        )",
+        index_sql: &[],
+    });
+
+    tables.push(TableEntry {
         name: "mb_known_entities",
         kind: TableKind::Core,
         create_sql: "CREATE TABLE IF NOT EXISTS mb_known_entities (

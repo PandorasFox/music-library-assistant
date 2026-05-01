@@ -420,6 +420,19 @@ impl super::Witch {
                     Some("Stash and replace sidecars".to_string()),
                 );
             }
+            external_fetch::SchedulerMessage::DeezerProgress(progress) => {
+                self.deezer_progress = Some(progress);
+            }
+            external_fetch::SchedulerMessage::DeezerDone(progress) => {
+                crate::logging::log_general(format!(
+                    "[WITCH] Deezer fetch done: {} dirs, {} written, {} not_found, {} errors",
+                    progress.processed, progress.images_written, progress.isrc_not_found, progress.errors,
+                ));
+                self.deezer_progress = Some(progress);
+                if let Some(ref mut handle) = self.external_fetch {
+                    handle.mark_deezer_done();
+                }
+            }
         }
     }
 

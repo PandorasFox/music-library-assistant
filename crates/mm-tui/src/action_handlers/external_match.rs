@@ -56,6 +56,25 @@ impl HandleAction for external_match_view::ExternalMatchesAction {
                     }
                 }
             }
+            external_match_view::ExternalMatchesAction::RequestDeezerArt => {
+                match app.queue_task(mm_meta::protocol::BackgroundTask::DeezerArtFetch) {
+                    Ok(None) => {
+                        app.status_message =
+                            Some("Deezer fetch requested".to_string());
+                        let deezer_active =
+                            app.witch_status().is_deezer_fetch_active;
+                        if let ActiveView::ExternalMatches(ref mut s) = app.view {
+                            s.data.deezer_active = deezer_active;
+                        }
+                    }
+                    Ok(Some(reason)) => {
+                        app.error_popup = Some(reason);
+                    }
+                    Err(e) => {
+                        app.error_popup = Some(format!("Protocol error: {}", e));
+                    }
+                }
+            }
             external_match_view::ExternalMatchesAction::RequestReleasePacking => {
                 match app.queue_task(mm_meta::protocol::BackgroundTask::ReleasePacking) {
                     Ok(Some(reason)) => {

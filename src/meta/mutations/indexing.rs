@@ -817,11 +817,33 @@ pub fn execute_flush_tags_to_disk(
 
     // 3. Validate: committed DB state must match what we expected to write
     if committed_tags != *expected_tags {
+        let diff = expected_tags.diff(&committed_tags);
+        let missing: Vec<String> = diff
+            .only_left
+            .iter()
+            .map(|(k, v)| {
+                let v_short: String = v.chars().take(60).collect();
+                format!("{}={}", k, v_short)
+            })
+            .collect();
+        let extra: Vec<String> = diff
+            .only_right
+            .iter()
+            .map(|(k, v)| {
+                let v_short: String = v.chars().take(60).collect();
+                format!("{}={}", k, v_short)
+            })
+            .collect();
         anyhow::bail!(
-            "FlushTagsToDisk validation failed for inode {}: \
-             DB tags diverge from expected tags. \
+            "FlushTagsToDisk validation failed for inode {} (path={}): \
+             expected={} committed={} expected_only=[{}] committed_only=[{}]. \
              Leaving needs_disk_flush raised for OOB resolution.",
             inode,
+            abs_path.display(),
+            expected_tags.len(),
+            committed_tags.len(),
+            missing.join(", "),
+            extra.join(", "),
         );
     }
 

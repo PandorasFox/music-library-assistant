@@ -947,6 +947,25 @@ impl Database {
     // Dirty Inode Queries (for incremental computations)
     // ========================================================================
 
+    /// List all corpus inodes whose `audio_info.needs_tag_flush=1` flag is
+    /// raised — i.e. files where MM wrote tags to DB but the disk-flush
+    /// either failed silently or never ran.
+    ///
+    /// Drives the silent-stuck recovery scan: `VerifyPendingWrite` runs
+    /// against each, reads disk tags, and either clears the flag (when the
+    /// disk already matches DB — see `execute_verify_tags`'s clean-diff
+    /// branches) or emits an `OutOfBandTagSync/Conflict` signal so the
+    /// operator can resolve via the existing OOB UI.
+    pub fn get_corpus_inodes_needing_tag_flush(&self) -> Result<Vec<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT a.inode FROM audio_info a \
+             JOIN inode_paths p ON p.inode = a.inode \
+             WHERE p.zone = 'corpus' AND a.needs_tag_flush = 1",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, i64>(0))?;
+        Ok(rows.flatten().collect())
+    }
+
     /// Check whether an inode has a pending_write marker.
     ///
     /// Returns true if this inode was recently written to by MM (via

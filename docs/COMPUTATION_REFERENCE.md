@@ -49,7 +49,8 @@ This follows the same pattern as `pending_mutation_phases` (used for two-stage d
 |-------------|-------------|
 | WalkCorpus | Enumerate directories, spawn per-directory scans. Has `force_check` parameter. |
 | ScanCorpusDirectory | Collect disk state, emit FileInCorpus signals, return observed inodes to Witch. Has `force_check` parameter. |
-| VerifyTags | Verify disk tags match indexed tags, emit classification signals. Pending-write aware. |
+| VerifyTags | Verify disk tags match indexed tags, emit classification signals. Pending-write aware. Clean-diff branches also clear `audio_info.needs_tag_flush` (silent-stuck flag recovery). |
+| VerifyPendingWrite | Recovery wrapper: reads disk tags + mtime inline for an inode, then dispatches the standard `VerifyTags` logic. Used by `queue_stale_flush_recovery` to drain `pending_write` markers and `needs_tag_flush=1` inodes that the watcher's mtime-diff path skipped. |
 
 ### Derivation Phase
 
@@ -115,7 +116,8 @@ This follows the same pattern as `pending_mutation_phases` (used for two-stage d
 |-------------|--------|-----------------|-----------------|
 | WalkCorpus | ScanCorpusDirectory × N (propagates `force_check`) | — | — |
 | ScanCorpusDirectory | VerifyTags + VerifyAudio (all indexed, if `force_check=true`) | FileInCorpus | — | Also indexes directory entry (is_dir=1) in files table with read guard (skips write if entry already matches by zone+inode+mtime). Returns observed inodes to the Witch via Result (accumulated in tick(), consumed by queue_derivation_computations()). |
-| VerifyTags | — | OutOfBandTagConflict, OutOfBandTagSync, MtimeOnlyMismatch, CorruptFile | OutOfBandTagConflict, OutOfBandTagSync, MtimeOnlyMismatch (mutual exclusion) | Pending-write aware: when `pending_write` marker exists and tags are clean, skips mtime check and clears all OOB signals. Always updates `files.mtime` from disk. |
+| VerifyTags | — | OutOfBandTagConflict, OutOfBandTagSync, MtimeOnlyMismatch, CorruptFile | OutOfBandTagConflict, OutOfBandTagSync, MtimeOnlyMismatch (mutual exclusion); also clears `audio_info.needs_tag_flush` on clean diff (both pending-write-succeeded and file-healthy branches) | Pending-write aware: when `pending_write` marker exists and tags are clean, skips mtime check and clears all OOB signals. Always updates `files.mtime` from disk. Clean-diff means there is nothing left to flush by definition; this is the recovery path for silent-stuck `needs_tag_flush=1` flags from failed/lost flush mutations. |
+| VerifyPendingWrite | — | (delegates to `VerifyTags`) | (delegates to `VerifyTags`) | Reads disk tags + mtime inline, then calls `execute_verify_tags`. Queued by `queue_stale_flush_recovery` (Witch) for the union of `pending_write` dirty markers and `needs_tag_flush=1` corpus inodes. Fires on `AllInitialScansComplete` and on every awakening quiescence transition. |
 | VerifyAudio | — | CorruptFile | CorruptFile (if audio valid) |
 
 ### Derivation Phase Computations

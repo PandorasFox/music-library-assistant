@@ -35,6 +35,9 @@ impl ObservationExecute for Computation {
             Computation::VerifyAudio { inode, path } => {
                 execute_verify_audio(ctx.read_db, *inode, path, ctx.witness)
             }
+            Computation::VerifyPendingWrite { inode, path } => {
+                execute_verify_pending_write(ctx.read_db, *inode, path, ctx.witness)
+            }
         }
     }
 }

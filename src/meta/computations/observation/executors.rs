@@ -146,6 +146,9 @@ pub fn execute_verify_tags(
                     drop_stale_corpus_signal::<OutOfBandTagSyncSignal>(
                         read_only_db, &sender, inode, witness,
                     );
+                    // Clean disk-vs-DB diff means there's nothing left to flush;
+                    // any raised needs_tag_flush flag is stale.
+                    sender.clear_needs_disk_flush_observed(inode, witness);
                 } else {
                     // No pending_write — external or idle rescan path
                     let mtime_actually_differs = check_mtime_differs(read_only_db, inode, mtime_secs, mtime_nanos);
@@ -188,6 +191,8 @@ pub fn execute_verify_tags(
                         drop_stale_corpus_signal::<OutOfBandTagSyncSignal>(
                             read_only_db, &sender, inode, witness,
                         );
+                        // File-healthy means no flush is owed; clear stale flag.
+                        sender.clear_needs_disk_flush_observed(inode, witness);
                     }
                 }
             } else if verify_result.is_conflict() {
@@ -400,4 +405,58 @@ pub fn execute_verify_audio(
             Result::success(computation, Vec::new())
         }
     }
+}
+
+// ============================================================================
+// Verify Pending Write (Post-Restart Recovery)
+// ============================================================================
+
+/// Re-verify tags for an inode whose `pending_write` dirty marker is still
+/// raised — typically because MM wrote tags, the writer's `pending_write`
+/// marker was set, but the post-write watcher FileChanged event was never
+/// processed (container restart, missed inotify event, mtime equality after
+/// restart). Reads disk tags + mtime inline, then dispatches the standard
+/// VerifyTags logic which clears the pending_write flag on a clean diff or
+/// emits an OOB signal on divergence.
+pub fn execute_verify_pending_write(
+    read_only_db: &ReadOnlyDb<'_>,
+    inode: i64,
+    path: &Path,
+    witness: &ComputationWitness,
+) -> Result {
+    let computation = Computation::VerifyPendingWrite {
+        inode,
+        path: path.to_path_buf(),
+    };
+
+    let metadata = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) => {
+            return Result::failure(
+                computation,
+                format!("Failed to stat {}: {}", path.display(), e),
+            );
+        }
+    };
+    let (mtime_secs, mtime_nanos) = crate::corpus::paths::read_mtime(&metadata);
+
+    let disk_tags = match crate::corpus::tags::from_file(path) {
+        Ok(t) => t,
+        Err(e) => {
+            return Result::failure(
+                computation,
+                format!("Failed to read disk tags from {}: {:#}", path.display(), e),
+            );
+        }
+    };
+
+    execute_verify_tags(
+        read_only_db,
+        inode,
+        path,
+        mtime_secs,
+        mtime_nanos,
+        &disk_tags,
+        witness,
+    )
 }

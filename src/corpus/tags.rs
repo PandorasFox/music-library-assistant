@@ -654,8 +654,12 @@ fn tagset_from_id3v2(tag: Option<&lofty::id3::v2::Id3v2Tag>) -> TagSet {
         return TagSet::empty();
     };
     let mut pairs: Vec<(String, String)> = Vec::new();
+    let mut text_unmapped: Vec<String> = Vec::new();
+    let mut frame_count: usize = 0;
+    let mut skipped_other: usize = 0;
 
     for frame in tag {
+        frame_count += 1;
         match frame {
             Frame::Text(text_frame) => {
                 let frame_id = text_frame.id().as_str();
@@ -674,6 +678,8 @@ fn tagset_from_id3v2(tag: Option<&lofty::id3::v2::Id3v2Tag>) -> TagSet {
                             pairs.push((vorbis_key.to_string(), v.to_string()));
                         }
                     }
+                } else {
+                    text_unmapped.push(frame_id.to_string());
                 }
                 // Unknown text frames are skipped — no lossless Vorbis mapping
             }
@@ -685,9 +691,15 @@ fn tagset_from_id3v2(tag: Option<&lofty::id3::v2::Id3v2Tag>) -> TagSet {
                 if is_binary_tag_key(&vorbis_key) {
                     continue;
                 }
-                let v = txxx.content.trim();
-                if !v.is_empty() {
-                    pairs.push((vorbis_key, v.to_string()));
+                // Split null-separated multi-values (ID3v2.4 convention) — the
+                // writer emits multi-value TXXX content as `v1\0v2\0…`, so the
+                // reader must split for multi-value tags (ARTISTS,
+                // MUSICBRAINZ_ARTISTID, ALBUMARTISTS, etc.) to round-trip.
+                for value in txxx.content.split('\0') {
+                    let v = value.trim();
+                    if !v.is_empty() {
+                        pairs.push((vorbis_key.clone(), v.to_string()));
+                    }
                 }
             }
             Frame::Timestamp(ts_frame) => {
@@ -709,8 +721,20 @@ fn tagset_from_id3v2(tag: Option<&lofty::id3::v2::Id3v2Tag>) -> TagSet {
                     }
                 }
             }
-            _ => {} // Skip APIC, COMM, USLT, POPM, binary, etc.
+            _ => {
+                skipped_other += 1;
+            } // Skip APIC, COMM, USLT, POPM, binary, etc.
         }
+    }
+
+    if frame_count > 0 && (!text_unmapped.is_empty() || skipped_other > 0) {
+        crate::logging::log_general(format!(
+            "[tagset_from_id3v2] frames={} pairs={} unmapped_text=[{}] skipped_other={}",
+            frame_count,
+            pairs.len(),
+            text_unmapped.join(","),
+            skipped_other,
+        ));
     }
 
     TagSet::new(pairs)
@@ -752,9 +776,17 @@ fn id3v2_split_number_pair(
 fn write_id3v2_tags_mp3(path: &Path, tags: &TagSet) -> Result<()> {
     use lofty::id3::v2::{Frame, Id3v2Tag};
 
+    crate::logging::log_general(format!(
+        "[write_id3v2_tags_mp3] start: path={} input_tags={}",
+        path.display(),
+        tags.len(),
+    ));
+
     let mut reader = open_buffered(path)?;
     let mut mp3 = lofty::mpeg::MpegFile::read_from(&mut reader, ParseOptions::default())
         .with_context(|| format!("Failed to read MP3: {}", path.display()))?;
+
+    let pre_frames = mp3.id3v2().map(|t| t.into_iter().count()).unwrap_or(0);
 
     // Preserve existing picture frames
     let existing_pictures: Vec<Frame<'static>> = mp3
@@ -776,6 +808,36 @@ fn write_id3v2_tags_mp3(path: &Path, tags: &TagSet) -> Result<()> {
 
     populate_id3v2_from_tagset(&mut id3v2, tags);
 
+    let post_frames = (&id3v2).into_iter().count();
+    let frame_ids: Vec<String> = (&id3v2)
+        .into_iter()
+        .map(|f| match f {
+            Frame::Text(t) => format!("Text({})", t.id().as_str()),
+            Frame::UserText(u) => format!("TXXX({})", u.description),
+            Frame::Timestamp(t) => format!("Timestamp({})", t.id().as_str()),
+            Frame::UniqueFileIdentifier(_) => "UFID".to_string(),
+            Frame::Picture(_) => "Picture".to_string(),
+            Frame::Comment(_) => "Comment".to_string(),
+            Frame::UnsynchronizedText(_) => "USLT".to_string(),
+            Frame::Url(u) => format!("URL({})", u.id().as_str()),
+            Frame::UserUrl(_) => "WXXX".to_string(),
+            Frame::KeyValue(k) => format!("KV({})", k.id().as_str()),
+            Frame::Popularimeter(_) => "POPM".to_string(),
+            Frame::Binary(b) => format!("Binary({})", b.id().as_str()),
+            Frame::RelativeVolumeAdjustment(_) => "RVA2".to_string(),
+            Frame::Ownership(_) => "OWNE".to_string(),
+            Frame::EventTimingCodes(_) => "ETCO".to_string(),
+            Frame::Private(_) => "PRIV".to_string(),
+            _ => "Other".to_string(),
+        })
+        .collect();
+    crate::logging::log_general(format!(
+        "[write_id3v2_tags_mp3] populated: pre_frames={} post_frames={} frames=[{}]",
+        pre_frames,
+        post_frames,
+        frame_ids.join(","),
+    ));
+
     mp3.set_id3v2(id3v2);
     mp3.remove_id3v1();
     mp3.remove_ape();
@@ -783,7 +845,62 @@ fn write_id3v2_tags_mp3(path: &Path, tags: &TagSet) -> Result<()> {
     mp3.save_to_path(path, WriteOptions::default())
         .with_context(|| format!("Failed to save tags to MP3: {}", path.display()))?;
 
+    // Read-back verification: after writing, immediately re-read tags from disk
+    // and diff against what we tried to write. This pinpoints round-trip
+    // failures (writer succeeds but reader sees different tags) which are
+    // otherwise invisible — VerifyTags will see disk≠DB and re-emit OOB.
+    match from_file(path) {
+        Ok(roundtrip) => {
+            let diff = tags.diff(&roundtrip);
+            if !diff.only_left.is_empty() || !diff.only_right.is_empty() {
+                let lost: Vec<String> = diff
+                    .only_left
+                    .iter()
+                    .map(|(k, v)| format!("{}={}", k, truncate(v, 60)))
+                    .collect();
+                let extra: Vec<String> = diff
+                    .only_right
+                    .iter()
+                    .map(|(k, v)| format!("{}={}", k, truncate(v, 60)))
+                    .collect();
+                crate::logging::log_error(format!(
+                    "[write_id3v2_tags_mp3] ROUND-TRIP MISMATCH path={} \
+                     wrote={} read_back={} lost=[{}] extra=[{}]",
+                    path.display(),
+                    tags.len(),
+                    roundtrip.len(),
+                    lost.join(", "),
+                    extra.join(", "),
+                ));
+            } else {
+                crate::logging::log_general(format!(
+                    "[write_id3v2_tags_mp3] round-trip OK: path={} tags={}",
+                    path.display(),
+                    tags.len(),
+                ));
+            }
+        }
+        Err(e) => {
+            crate::logging::log_error(format!(
+                "[write_id3v2_tags_mp3] read-back FAILED path={}: {:#}",
+                path.display(),
+                e
+            ));
+        }
+    }
+
     Ok(())
+}
+
+/// Truncate a string to at most `max` chars (UTF-8-safe), appending an ellipsis.
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max).collect();
+        out.push('…');
+        out
+    }
 }
 
 /// Populate an Id3v2Tag from a TagSet.

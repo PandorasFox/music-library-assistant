@@ -451,6 +451,11 @@ impl super::Witch {
             }),
             Some("Reconciling library files".to_string()),
         );
+
+        // Drain any silent-stuck pending_write / needs_tag_flush=1 inodes.
+        // Awakening is a natural quiescence point (post-mutation, idle), so
+        // VerifyPendingWrite reads can't race in-flight FlushTagsToDisk writes.
+        self.queue_stale_flush_recovery();
     }
 
     /// Queue content analysis computations (internal only).

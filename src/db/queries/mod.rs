@@ -685,6 +685,7 @@ impl<'a> ReadOnlyDb<'a> {
     delegate_read! {
         fn is_pending_write(inode: i64) -> Result<bool>;
         fn get_dirty_inodes(computation_type: &str) -> Result<Vec<i64>>;
+        fn get_corpus_inodes_needing_tag_flush() -> Result<Vec<i64>>;
         fn get_corpus_inodes_with_tag_separator(tag_name: &str, separator: &str) -> Result<Vec<i64>>;
     }
 

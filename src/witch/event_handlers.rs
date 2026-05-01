@@ -116,6 +116,13 @@ impl super::Witch {
                         self.queue_awakening_computations(true);
                     }
                 }
+
+                // Recover any pending_write markers + silent-stuck
+                // needs_tag_flush=1 inodes that the watcher's mtime diff would
+                // have skipped. These are inodes MM wrote tags to where the
+                // post-write FileChanged event never reached VerifyTags
+                // (container restart, mtime equality, etc.).
+                self.queue_stale_flush_recovery();
             }
             fs_thread::WatcherMessage::FileChanged {
                 zone, inode, path,
@@ -248,6 +255,79 @@ impl super::Witch {
                 self.watcher_state = WatcherState::Polling;
             }
         }
+    }
+
+    /// Queue a `VerifyPendingWrite` Observation computation for every corpus
+    /// inode that's flagged as needing reconciliation but is invisible to the
+    /// watcher's mtime-diff path. Two populations:
+    ///
+    /// - `pending_write` dirty markers: MM wrote tags, the post-write
+    ///   FileChanged event never reached VerifyTags (container restart,
+    ///   mtime equality, etc.).
+    /// - `audio_info.needs_tag_flush=1` with no other surface: ApplyTagOps
+    ///   raised the flag and the disk-flush failed silently or never ran.
+    ///   No consumer was clearing this until VerifyTags learned to.
+    ///
+    /// Runs once per `AllInitialScansComplete` and on each awakening
+    /// quiescence transition.
+    pub(super) fn queue_stale_flush_recovery(&mut self) {
+        let db_path = match crate::config::get_db_path() {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        let db = match crate::db::Database::open_read_only(&db_path) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+        let read_db = crate::db::queries::ReadOnlyDb::new(&db);
+        let pending_write_inodes: Vec<i64> = read_db
+            .get_dirty_inodes("pending_write")
+            .unwrap_or_default();
+        let needs_flush_inodes: Vec<i64> = read_db
+            .get_corpus_inodes_needing_tag_flush()
+            .unwrap_or_default();
+        let pw_count = pending_write_inodes.len();
+        let nf_count = needs_flush_inodes.len();
+        if pw_count == 0 && nf_count == 0 {
+            return;
+        }
+
+        let mut union: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
+        union.extend(pending_write_inodes);
+        union.extend(needs_flush_inodes);
+
+        let resolver = crate::corpus::paths::get_resolver();
+        let mut queued = 0usize;
+        let mut skipped_no_path = 0usize;
+        for inode in &union {
+            let rel_path = match self.observed_inodes.corpus.get(inode) {
+                Some(meta) => meta.path.clone(),
+                None => {
+                    skipped_no_path += 1;
+                    continue;
+                }
+            };
+            let abs_path = resolver.resolve_for_zone(
+                crate::db::types::Zone::Corpus,
+                std::path::Path::new(&rel_path),
+            );
+            self.queue_computation_with_label(
+                Computation::Observation(
+                    crate::meta::computations::observation::Computation::VerifyPendingWrite {
+                        inode: *inode,
+                        path: abs_path,
+                    },
+                ),
+                Some("Stale-flush recovery".to_string()),
+            );
+            queued += 1;
+        }
+        crate::logging::log_general(format!(
+            "[WITCH] Queued {} VerifyPendingWrite stale-flush recovery computation(s) \
+             ({} pending_write, {} needs_tag_flush=1, {} unioned; \
+              {} skipped — inode not in corpus observed set)",
+            queued, pw_count, nf_count, union.len(), skipped_no_path,
+        ));
     }
 
     /// Process a single scheduler message from the external fetch thread.

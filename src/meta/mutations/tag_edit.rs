@@ -115,22 +115,60 @@ fn execute_apply_tag_ops(
         by_inode.entry(op.inode).or_default().push(op);
     }
 
+    let total_inodes = by_inode.len();
+    let total_ops = ops.len();
+    crate::logging::log_general(format!(
+        "[ApplyTagOps] start: zone={:?} ops={} inodes={}",
+        zone, total_ops, total_inodes
+    ));
+
     let mut spawned = Vec::new();
     let mut errors = Vec::new();
+    let mut skipped_not_found = 0usize;
+    let mut skipped_validation = 0usize;
+    let mut skipped_nop = 0usize;
+    let mut audio_lookup_errors = 0usize;
+    let mut tag_read_errors = 0usize;
 
     for (inode, inode_ops) in by_inode {
-        // Get audio file info from DB
-        let audio_file = match db.get_audio_file_by_inode(inode, zone)? {
-            Some(f) => f,
-            None => {
+        // Get audio file info from DB. Log explicitly on DB error so we don't
+        // silently abort the entire mutation mid-loop and lose all subsequent
+        // inodes.
+        let audio_file = match db.get_audio_file_by_inode(inode, zone) {
+            Ok(Some(f)) => f,
+            Ok(None) => {
+                skipped_not_found += 1;
                 errors.push(format!("inode {} not found in zone {:?}", inode, zone));
+                continue;
+            }
+            Err(e) => {
+                audio_lookup_errors += 1;
+                let msg = format!(
+                    "[ApplyTagOps] get_audio_file_by_inode failed for inode {} zone {:?}: {:#}",
+                    inode, zone, e
+                );
+                crate::logging::log_error(&msg);
+                errors.push(msg);
                 continue;
             }
         };
         let file_path = audio_file.path();
 
-        // Get current tags as set for validation
-        let current_tags = db.get_tags_for_zone(inode, zone)?;
+        // Get current tags as set for validation. Same treatment — log+continue
+        // instead of `?` so one bad inode can't poison the rest of the batch.
+        let current_tags = match db.get_tags_for_zone(inode, zone) {
+            Ok(t) => t,
+            Err(e) => {
+                tag_read_errors += 1;
+                let msg = format!(
+                    "[ApplyTagOps] get_tags_for_zone failed for inode {} (path={}): {:#}",
+                    inode, file_path, e
+                );
+                crate::logging::log_error(&msg);
+                errors.push(msg);
+                continue;
+            }
+        };
         let current_set: HashSet<(String, String)> = current_tags
             .iter()
             .map(|t| (t.tag_name.to_uppercase(), t.tag_value.clone()))
@@ -155,6 +193,7 @@ fn execute_apply_tag_ops(
         }
 
         if validation_failed {
+            skipped_validation += 1;
             continue; // Skip this inode, try others
         }
 
@@ -166,6 +205,7 @@ fn execute_apply_tag_ops(
             .collect();
 
         if validated_ops.is_empty() {
+            skipped_nop += 1;
             continue; // All ops were no-ops
         }
 
@@ -220,6 +260,19 @@ fn execute_apply_tag_ops(
     if !errors.is_empty() {
         crate::logging::log_error(format!("ApplyTagOps partial failure: {:?}", errors));
     }
+
+    crate::logging::log_general(format!(
+        "[ApplyTagOps] done: zone={:?} inodes={} spawned={} \
+         skipped(not_found={} validation={} nop={}) errors(audio_lookup={} tag_read={})",
+        zone,
+        total_inodes,
+        spawned.len(),
+        skipped_not_found,
+        skipped_validation,
+        skipped_nop,
+        audio_lookup_errors,
+        tag_read_errors,
+    ));
 
     Ok(spawned)
 }

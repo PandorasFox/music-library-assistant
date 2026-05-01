@@ -491,6 +491,26 @@ impl SignalWriteSender {
         });
     }
 
+    /// Clear the needs_disk_flush flag from observation context.
+    ///
+    /// Specifically for `VerifyTags` clean-diff branches: when a computation
+    /// observes that disk and DB tags match, any raised `needs_tag_flush`
+    /// flag is by definition stale (there is nothing left to flush). This is
+    /// the recovery path for silent-stuck flags from failed/lost flush
+    /// mutations. Mirrors `clear_dirty_inode` — same witness shape, same
+    /// computation-side observation rationale.
+    pub fn clear_needs_disk_flush_observed(
+        &self,
+        inode: i64,
+        _witness: &ComputationWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::SetNeedsDiskFlush {
+            inode,
+            value: false,
+        });
+    }
+
     // =========================================================================
     // Dirty Inode Operations (for incremental computations)
     // =========================================================================

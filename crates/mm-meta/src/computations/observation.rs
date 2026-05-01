@@ -34,6 +34,14 @@ pub enum Computation {
     /// Catches truncated files, corrupt streams, and other audio-level issues
     /// that tag verification wouldn't detect. Emits CorruptFile if decode fails.
     VerifyAudio { inode: i64, path: PathBuf },
+
+    /// Re-run VerifyTags for an inode whose `pending_write` dirty marker is
+    /// raised — fires on post-restart initial-scan completion. Reads disk
+    /// tags + mtime inline, then dispatches the standard VerifyTags logic.
+    /// This unsticks files MM wrote tags to where the post-write watcher
+    /// FileChanged event was missed (mtime equality means the watcher's
+    /// initial-scan diff sees no change).
+    VerifyPendingWrite { inode: i64, path: PathBuf },
 }
 
 impl Computation {
@@ -42,6 +50,7 @@ impl Computation {
         match self {
             Computation::VerifyTags { .. } => "Tag verification",
             Computation::VerifyAudio { .. } => "Audio verification",
+            Computation::VerifyPendingWrite { .. } => "Tag verification (pending-write recovery)",
         }
     }
 }

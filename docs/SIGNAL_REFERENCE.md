@@ -88,7 +88,7 @@ For each track, re-queue an `ApplyDbTagsToDisk` mutation. Since `ApplyDbTagsToDi
 | LibraryStale | DeriveDeployHealthSignals | UpdateDeploySignals, LibraryMove | Library file at wrong path (audio or sidecar image) |
 | DeployReady | DeriveCorpusDeployStatus | UpdateDeploySignals, HardLink | Healthy corpus file not deployed. Metadata: `{ "deploy_path": "..." }` |
 | DeployedHealthy | DeriveCorpusDeployStatus, UpdateDeploySignals | DeriveCorpusDeployStatus | Healthy corpus file correctly deployed. Metadata: `{ "library_path": "{library_name}/..." }` |
-| SidecarDeployReady | DeriveCorpusDeployStatus | DeriveCorpusDeployStatus (reconcile) | Corpus sidecar image not yet deployed to library. Tiebreak winner if conflicting. Keyed by image inode. BLOB data: role, format, width, height |
+| SidecarDeployReady | DeriveCorpusDeployStatus | DeriveCorpusDeployStatus (reconcile) | Canonical corpus sidecar image not yet deployed to library. For contested slots (multiple competing inodes), only the alphabetically-first corpus path's inode is offered for deploy; phantom `inode_paths` aliases (e.g., broken hardlinks still tracked in DB) are deduped to the canonical path. Keyed by image inode. BLOB data: role, format, width, height |
 
 ---
 
@@ -98,7 +98,7 @@ Aggregate signals group multiple tracks by a shared characteristic. They use set
 
 | Signal | Emitted By | Cleared By | Meaning |
 |--------|------------|------------|---------|
-| SidecarDeployConflict | DeriveCorpusDeployStatus | DeriveCorpusDeployStatus (reconcile) | Multiple corpus images target the same library sidecar path. Key: "library_name/deploy_path". Data (BLOB): Vec of conflicting corpus image inodes. Tiebreak winner (alphabetically first corpus path) still gets SidecarDeployReady |
+| SidecarDeployConflict | DeriveCorpusDeployStatus | DeriveCorpusDeployStatus (reconcile) | Multiple distinct corpus image inodes compete for the same library sidecar slot. Slots are grouped by `(library_name, album_dir, role_class)` where `role_class` collapses all `cover_front` images in an album to one slot, all `cover_back` to one, and other sidecars per-filename — so per-disc covers in multi-disc albums conflict instead of each emitting a separate (often phantom-pathed) DeployReady. Key: "library_name/deploy_path" (winner's filename). Data (BLOB): Vec of competing corpus inodes. Emitted whenever 2+ inodes contest the slot, regardless of whether one is already deployed. The alphabetical winner (or already-deployed inode) gets SidecarDeployReady; losers do not |
 | FingerprintOverlap | DetectFingerprintOverlaps | DetectFingerprintOverlaps | Tracks with identical fingerprints (internal signal) |
 | CrossSourceOverlap | DetectCrossSourceOverlaps | DetectCrossSourceOverlaps | Fingerprint overlaps spanning different source directories (from config `dir` stanzas). Key: sorted source pair, e.g., "web/releases/bandcamp\|web/releases/indie". Within-source overlaps are ignored. Metadata: `source_a`, `source_b`, `*_priority`, `*_can_stash`, `overlap_count`, `fingerprint_keys[]`, `track_pairs[]` |
 | DuplicateInode | DetectDuplicateInodes | DetectDuplicateInodes | Tracks sharing same inode |

@@ -1381,73 +1381,78 @@ fn derive_sidecar_deploy_signals(
         .flat_map(|paths| paths.iter().cloned())
         .collect();
 
-    // --- Phase 1: Collect all candidate images per deploy key ---
-    // Group candidates by (library_name, deploy_path) to detect conflicts.
-    // An image is a candidate if it passes mode filter and isn't already deployed.
-    type DeployKey = (String, String); // (library_name, deploy_path)
+    // --- Phase 1: Collect candidates by (library_name, album_dir, role_class) ---
+    //
+    // Cover front and cover back images compete by ROLE within an album: per-disc
+    // covers all target the same library album dir, so they must dedupe to a
+    // single deploy. Other sidecars (booklet.pdf, liner_notes.txt) deploy with
+    // their own filenames and only conflict when two corpus dirs ship the exact
+    // same filename.
+    type DeployKey = (String, String, SidecarRoleClass);
     let mut candidates_by_deploy: HashMap<DeployKey, Vec<&CorpusImageEntry>> = HashMap::new();
 
-    for (_corpus_dir, (library_name, album_dir)) in &dir_targets {
+    for (corpus_dir, (library_name, album_dir)) in &dir_targets {
         let images = images_by_dir
-            .get(_corpus_dir.as_str())
+            .get(corpus_dir.as_str())
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
 
         for img in images {
-            if let Some((key, _filename)) =
-                sidecar_candidate_key(img, mode, library_name, album_dir)
-            {
+            if let Some((role_class, _filename)) = sidecar_role_class(img, mode) {
+                let key = (library_name.clone(), album_dir.clone(), role_class);
                 candidates_by_deploy.entry(key).or_default().push(img);
             }
         }
     }
 
     // --- Phase 2: Classify — deployed, single candidate, or conflict ---
+    //
+    // Each group is one library destination slot. We dedupe by inode (so phantom
+    // inode_paths aliases — e.g., a hardlink broken on disk but still in the DB —
+    // don't multi-count), pick the alphabetically-first path per inode for a
+    // canonical winner, then classify the slot.
     let mut computed_sidecars: Vec<ComputedCorpusSignal> = Vec::new();
     let mut computed_conflicts: Vec<ComputedAggregateSignal> = Vec::new();
 
-    for ((library_name, deploy_path), group) in &candidates_by_deploy {
-        // If any image in this group is already deployed, the path is satisfied.
-        // No SidecarDeployReady needed (would fail with "Destination already exists").
-        // Also check if the destination path is already occupied by a different file
-        // (e.g., an image from another corpus directory deployed to the same album dir).
-        let any_deployed = group.iter().any(|img| library_inodes.contains(&img.inode));
-        let path_occupied =
-            library_paths.contains(Path::new(library_name).join(deploy_path).as_path());
-        if any_deployed || path_occupied {
-            // Still emit conflict signal if 2+ non-deployed images also target this path,
-            // so the operator knows about the duplicate corpus images.
-            let non_deployed: Vec<&&CorpusImageEntry> = group
-                .iter()
-                .filter(|img| !library_inodes.contains(&img.inode))
-                .collect();
-            if non_deployed.len() >= 2 {
-                let conflict_key = format!("{}/{}", library_name, deploy_path);
-                let inodes: Vec<i64> = group.iter().map(|img| img.inode).collect();
-                let signal = TypedSignalWrite::SidecarDeployConflict(SidecarDeployConflictSignal {
-                    key: conflict_key.clone(),
-                    deploy_path: deploy_path.clone(),
-                    library_name: library_name.clone(),
-                    inodes,
-                });
-                computed_conflicts.push(ComputedAggregateSignal::new(conflict_key, signal));
-            }
-            continue;
+    for ((library_name, album_dir, _role_class), group) in &candidates_by_deploy {
+        let mut by_inode: HashMap<i64, &CorpusImageEntry> = HashMap::new();
+        for img in group {
+            by_inode
+                .entry(img.inode)
+                .and_modify(|existing: &mut &CorpusImageEntry| {
+                    if img.path < existing.path {
+                        *existing = *img;
+                    }
+                })
+                .or_insert(img);
+        }
+        let mut deduped: Vec<&CorpusImageEntry> = by_inode.into_values().collect();
+        deduped.sort_by(|a, b| a.path.cmp(&b.path));
+
+        let winner = deduped[0];
+        let winner_filename = Path::new(&winner.path)
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let deploy_path = format!("{}/{}", album_dir, winner_filename);
+        let target_path = Path::new(library_name).join(&deploy_path);
+
+        let any_deployed = deduped.iter().any(|img| library_inodes.contains(&img.inode));
+        let path_blocked = library_paths.contains(&target_path);
+
+        // Only the canonical winner is ever offered for deploy. Phantom alias
+        // paths (Cover2.png, Cover3.png from broken hardlinks) no longer leak
+        // into SidecarDeployReady because they share the role-class slot.
+        if !any_deployed && !path_blocked {
+            computed_sidecars.push(make_sidecar_ready_signal(winner, &deploy_path, library_name));
         }
 
-        // No image deployed yet
-        if group.len() == 1 {
-            // Single candidate: emit SidecarDeployReady
-            let img = group[0];
-            computed_sidecars.push(make_sidecar_ready_signal(img, deploy_path, library_name));
-        } else {
-            // Conflict: tiebreak winner (alphabetically first corpus path) gets DeployReady,
-            // all inodes go into the conflict signal.
-            let winner = group.iter().min_by_key(|img| &img.path).unwrap();
-            computed_sidecars.push(make_sidecar_ready_signal(winner, deploy_path, library_name));
-
+        // Emit Conflict whenever 2+ distinct inodes compete — regardless of
+        // whether one is already deployed. The operator sees the full competing
+        // set so they can pick a winner explicitly.
+        if deduped.len() >= 2 {
             let conflict_key = format!("{}/{}", library_name, deploy_path);
-            let inodes: Vec<i64> = group.iter().map(|img| img.inode).collect();
+            let inodes: Vec<i64> = deduped.iter().map(|img| img.inode).collect();
             let signal = TypedSignalWrite::SidecarDeployConflict(SidecarDeployConflictSignal {
                 key: conflict_key.clone(),
                 deploy_path: deploy_path.clone(),
@@ -1496,19 +1501,31 @@ fn derive_sidecar_deploy_signals(
     sidecar_count
 }
 
-/// Check if a corpus image is a deployment candidate and return its deploy key.
+/// Slot grouping for sidecar deploy candidates within an album dir.
 ///
-/// Returns `Some((deploy_key, filename))` if the image passes the mode filter
-/// and is not already deployed (inode not in library). Returns `None` otherwise.
-fn sidecar_candidate_key(
+/// `cover_front` / `cover_back` images all compete for ONE slot per album,
+/// regardless of source filename — multi-disc albums commonly ship the same
+/// cover under each disc, but only one ends up in the library. Other sidecars
+/// (booklet.pdf, liner_notes.txt, ...) keep their filename as the slot
+/// discriminator and only conflict on exact filename collision.
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
+enum SidecarRoleClass {
+    PrimaryCover,
+    BackCover,
+    Named(String),
+}
+
+/// Classify a corpus image into a role-based deploy slot.
+///
+/// Returns `Some((role_class, filename))` if the image passes the mode filter,
+/// `None` otherwise. The filename is returned for downstream deploy_path
+/// construction (the winner of a contested slot deploys with its own filename).
+fn sidecar_role_class(
     img: &crate::db::queries::files::CorpusImageEntry,
     mode: crate::config::SidecarDeployMode,
-    library_name: &str,
-    album_dir: &str,
-) -> Option<((String, String), String)> {
+) -> Option<(SidecarRoleClass, String)> {
     use crate::config::SidecarDeployMode;
 
-    // Apply mode filter
     match mode {
         SidecarDeployMode::PrimaryCover => {
             if img.role != "cover_front" {
@@ -1528,9 +1545,13 @@ fn sidecar_candidate_key(
         return None;
     }
 
-    let deploy_path = format!("{}/{}", album_dir, filename);
-    let key = (library_name.to_string(), deploy_path);
-    Some((key, filename))
+    let role_class = match img.role.as_str() {
+        "cover_front" => SidecarRoleClass::PrimaryCover,
+        "cover_back" => SidecarRoleClass::BackCover,
+        _ => SidecarRoleClass::Named(filename.clone()),
+    };
+
+    Some((role_class, filename))
 }
 
 /// Build a SidecarDeployReady corpus signal for the given image.

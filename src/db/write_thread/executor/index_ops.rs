@@ -225,10 +225,15 @@ pub(super) fn execute_index_audio_file(
 /// Zone-scoped: only deletes the file entry matching both inode AND zone,
 /// preventing cross-zone collateral damage.
 pub(super) fn execute_drop_from_index(db: &Database, inode: i64, zone: &str) -> anyhow::Result<()> {
+    // Up to 8 statements + the corpus-signal sweep all run as one transaction —
+    // previously each was its own auto-commit, costing one fsync each. The
+    // cascade deletes are also atomic now: either we drop the whole inode and
+    // all of its dependent rows, or none of it.
+    let tx = db.conn().unchecked_transaction()?;
 
     // Delete the path mapping scoped to zone (audio_info, corpus_tags cascade
     // via the inode FK once the inodes row is removed below).
-    db.conn().execute(
+    tx.execute(
         "DELETE FROM inode_paths WHERE inode = ?1 AND zone = ?2",
         params![inode, zone],
     )?;
@@ -236,34 +241,28 @@ pub(super) fn execute_drop_from_index(db: &Database, inode: i64, zone: &str) -> 
     // If no other paths reference this inode, clean up the inode row and the
     // associated audio metadata. inode_paths CASCADEs from inodes, so removing
     // the inode row also drops any remaining paths (defensive — should be 0).
-    let count: i64 = db.conn().query_row(
+    let count: i64 = tx.query_row(
         "SELECT COUNT(*) FROM inode_paths WHERE inode = ?1",
         params![inode],
         |row| row.get(0),
     )?;
     if count == 0 {
-        db.conn()
-            .execute("DELETE FROM inodes WHERE inode = ?1", params![inode])?;
-        db.conn()
-            .execute("DELETE FROM audio_info WHERE inode = ?1", params![inode])?;
+        tx.execute("DELETE FROM inodes WHERE inode = ?1", params![inode])?;
+        tx.execute("DELETE FROM audio_info WHERE inode = ?1", params![inode])?;
         // Cascade to external matching data (ghost AcoustID matches, retries)
-        db.conn()
-            .execute("DELETE FROM external_matches WHERE inode = ?1", params![inode])?;
-        db.conn()
-            .execute("DELETE FROM external_retry WHERE inode = ?1", params![inode])?;
+        tx.execute("DELETE FROM external_matches WHERE inode = ?1", params![inode])?;
+        tx.execute("DELETE FROM external_retry WHERE inode = ?1", params![inode])?;
         // Cascade to packing intermediate data (stale candidates, scores)
-        db.conn()
-            .execute("DELETE FROM release_packing_candidates WHERE inode = ?1", params![inode])?;
-        db.conn()
-            .execute("DELETE FROM release_packing_scores WHERE inode = ?1", params![inode])?;
+        tx.execute("DELETE FROM release_packing_candidates WHERE inode = ?1", params![inode])?;
+        tx.execute("DELETE FROM release_packing_scores WHERE inode = ?1", params![inode])?;
         // Cascade to dirty inode markers (orphaned entries)
-        db.conn()
-            .execute("DELETE FROM dirty_inodes WHERE inode = ?1", params![inode])?;
+        tx.execute("DELETE FROM dirty_inodes WHERE inode = ?1", params![inode])?;
     }
 
     // Clear all corpus signals for this inode from typed tables
-    crate::meta::signals::registry::clear_all_corpus_signals(db.conn(), inode);
+    crate::meta::signals::registry::clear_all_corpus_signals(&tx, inode);
 
+    tx.commit()?;
     Ok(())
 }
 
@@ -320,22 +319,22 @@ pub(super) fn execute_apply_index_tag_ops(
     let tx = db.conn().unchecked_transaction()?;
 
     for op in &effective_ops {
+        // tag_name is uppercased on the way in; the table column uses
+        // COLLATE NOCASE so case-only mismatches in stored data still match.
         let tag_name = op.tag_name.to_uppercase();
 
         match (&op.old_value, &op.new_value) {
             (Some(old), Some(new)) => {
                 // Replace: UPDATE in place
-                // Use UPPER() for tag_name match - tag tables may store original case from
-                // audio files but ops are normalized to uppercase.
                 tx.execute(
-                    &format!("UPDATE {} SET tag_value = ?1 WHERE inode = ?2 AND UPPER(tag_name) = ?3 AND tag_value = ?4", tag_table),
+                    &format!("UPDATE {} SET tag_value = ?1 WHERE inode = ?2 AND tag_name = ?3 AND tag_value = ?4", tag_table),
                     params![new, inode, &tag_name, old],
                 )?;
             }
             (Some(old), None) => {
                 // Drop: DELETE with exact match
                 tx.execute(
-                    &format!("DELETE FROM {} WHERE inode = ?1 AND UPPER(tag_name) = ?2 AND tag_value = ?3", tag_table),
+                    &format!("DELETE FROM {} WHERE inode = ?1 AND tag_name = ?2 AND tag_value = ?3", tag_table),
                     params![inode, &tag_name, old],
                 )?;
             }
@@ -506,8 +505,11 @@ pub(super) fn execute_upsert_file_entry(
 ) -> anyhow::Result<()> {
     let scanned_at = current_unix_secs();
 
-    // Upsert inode-level metadata.
-    db.conn().execute(
+    // Single transaction across both writes — without it, each `execute` call
+    // auto-commits separately and pays an fsync apiece.
+    let tx = db.conn().unchecked_transaction()?;
+
+    tx.execute(
         r#"
         INSERT INTO inodes (inode, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
         VALUES (?1, 0, ?2, ?3, ?4, ?5)
@@ -527,12 +529,12 @@ pub(super) fn execute_upsert_file_entry(
         ],
     )?;
 
-    // Insert path mapping (idempotent on conflict).
-    db.conn().execute(
+    tx.execute(
         "INSERT OR IGNORE INTO inode_paths (inode, zone, path) VALUES (?1, ?2, ?3)",
         params![file_entry.inode, zone, path],
     )?;
 
+    tx.commit()?;
     Ok(())
 }
 
@@ -548,8 +550,9 @@ pub(super) fn execute_index_directory(
 ) -> anyhow::Result<()> {
     let scanned_at = current_unix_secs();
 
-    // Upsert inode-level metadata for the directory.
-    db.conn().execute(
+    let tx = db.conn().unchecked_transaction()?;
+
+    tx.execute(
         r#"
         INSERT INTO inodes (inode, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
         VALUES (?1, 1, ?2, ?3, 0, ?4)
@@ -563,12 +566,12 @@ pub(super) fn execute_index_directory(
         params![inode, mtime_secs, mtime_nanos, scanned_at],
     )?;
 
-    // Insert path mapping (idempotent on conflict).
-    db.conn().execute(
+    tx.execute(
         "INSERT OR IGNORE INTO inode_paths (inode, zone, path) VALUES (?1, ?2, ?3)",
         params![inode, zone, path],
     )?;
 
+    tx.commit()?;
     Ok(())
 }
 
@@ -584,8 +587,11 @@ pub(super) fn execute_index_image_file(
 ) -> anyhow::Result<()> {
     let scanned_at = current_unix_secs();
 
-    // Upsert inode-level metadata.
-    db.conn().execute(
+    // Called per image during scans — collapsing the two statements into one
+    // transaction halves the fsync count on this hot path.
+    let tx = db.conn().unchecked_transaction()?;
+
+    tx.execute(
         r#"
         INSERT INTO inodes (inode, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
         VALUES (?1, 0, ?2, ?3, ?4, ?5)
@@ -599,12 +605,12 @@ pub(super) fn execute_index_image_file(
         params![inode, mtime_secs, mtime_nanos, file_size, scanned_at],
     )?;
 
-    // Insert path mapping (idempotent on conflict).
-    db.conn().execute(
+    tx.execute(
         "INSERT OR IGNORE INTO inode_paths (inode, zone, path) VALUES (?1, ?2, ?3)",
         params![inode, zone, path],
     )?;
 
+    tx.commit()?;
     Ok(())
 }
 

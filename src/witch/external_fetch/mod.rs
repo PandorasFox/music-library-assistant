@@ -729,8 +729,8 @@ async fn execute_acoustid_lookup(
     fingerprint_raw: &[u32],
     duration_secs: u32,
 ) -> AcoustIdOutcome {
-    match client.lookup_with_raw(fingerprint_raw, duration_secs).await {
-        Ok((LookupOutcome::Matches(recordings), _raw)) => {
+    match client.lookup(fingerprint_raw, duration_secs).await {
+        Ok(LookupOutcome::Matches(recordings)) => {
             let rows: Vec<MatchRow> = recordings
                 .into_iter()
                 .map(|r| MatchRow {
@@ -740,8 +740,8 @@ async fn execute_acoustid_lookup(
                 .collect();
             AcoustIdOutcome::Match(rows)
         }
-        Ok((LookupOutcome::NoMatch, _)) => AcoustIdOutcome::NoMatch,
-        Ok((LookupOutcome::RateLimited, _)) => AcoustIdOutcome::RateLimited,
+        Ok(LookupOutcome::NoMatch) => AcoustIdOutcome::NoMatch,
+        Ok(LookupOutcome::RateLimited) => AcoustIdOutcome::RateLimited,
         Err(e) => {
             crate::logging::log_error(format!("[FETCH] AcoustID lookup failed: {:#}", e));
             AcoustIdOutcome::Error
@@ -840,7 +840,6 @@ fn write_acoustid_matches(inode: i64, fingerprint_blob: &[u8], rows: &[MatchRow]
                 acoustid_source_key,
                 &row.recording_id,
                 row.confidence,
-                None,
                 now,
             );
             sender.insert_mb_known_entity(&row.recording_id, "recording", None, now);

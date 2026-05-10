@@ -384,6 +384,32 @@ pub fn execute_derive_deploy_health_signals(
         corpus_inodes.len(),
     ));
 
+    // Preload the set of corpus inodes that have audio_info rows. This replaces
+    // a per-file `get_audio_file_by_path(corpus_path)` lookup inside the hot loop
+    // (87k 3-table joins for the music library) with a HashSet membership test.
+    // Library files are hardlinked to their corpus origins, so library_inode is
+    // the corpus inode and `audio_info` membership answers "is this audio?".
+    let corpus_audio_inodes: HashSet<i64> = match read_only_db
+        .get_audio_inodes_for_zone(crate::db::types::Zone::Corpus)
+    {
+        Ok(set) => set,
+        Err(e) => {
+            log_error(format!(
+                "[COMPUTE] DeriveDeployHealthSignals '{}': get_audio_inodes_for_zone failed: {}",
+                library_name, e,
+            ));
+            return Result::failure(
+                computation,
+                format!("get_audio_inodes_for_zone: {}", e),
+            );
+        }
+    };
+    log_general(format!(
+        "[COMPUTE] DeriveDeployHealthSignals '{}': {} corpus audio inodes preloaded",
+        library_name,
+        corpus_audio_inodes.len(),
+    ));
+
     // Build path→inode index for conflict detection.
     // When a stale file's expected path is already occupied by a different inode,
     // it's a stale-conflict (tag edit moved the expected path onto an occupied slot).
@@ -465,6 +491,7 @@ pub fn execute_derive_deploy_health_signals(
                     library_path,
                     *library_inode,
                     corpus_path,
+                    &corpus_audio_inodes,
                     &library_path_to_inode,
                     &mut dir_to_album_dir,
                     &corpus_tag_maps,
@@ -485,6 +512,7 @@ pub fn execute_derive_deploy_health_signals(
                     library_name,
                     *library_inode,
                     corpus_path,
+                    &corpus_audio_inodes,
                     &mut dir_to_album_dir,
                     &corpus_tag_maps,
                 );
@@ -590,19 +618,20 @@ fn classify_library_file(
     library_path: &Path,
     library_inode: i64,
     corpus_path: &str,
+    corpus_audio_inodes: &HashSet<i64>,
     library_path_to_inode: &HashMap<PathBuf, i64>,
     dir_to_album_dir: &mut HashMap<String, Option<String>>,
     corpus_tag_maps: &HashMap<i64, HashMap<String, String>>,
 ) -> DeployLifecyclePhase {
-    // Try audio file path first
-    if let Ok(Some(audio_file)) = read_only_db.get_audio_file_by_path(corpus_path) {
+    // Library files are hardlinked to corpus, so library_inode == corpus inode.
+    // A membership check on the preloaded audio set replaces a per-file 3-table join.
+    if corpus_audio_inodes.contains(&library_inode) {
         return classify_audio_stale(
             read_only_db,
             library_name,
             library_path,
             library_inode,
             corpus_path,
-            audio_file.inode(),
             library_path_to_inode,
             corpus_tag_maps,
         );
@@ -644,16 +673,16 @@ fn corpus_tags_for(
 
 /// Classify an audio library file as stale or healthy by comparing deploy paths.
 fn classify_audio_stale(
-    _read_only_db: &ReadOnlyDb<'_>,
+    read_only_db: &ReadOnlyDb<'_>,
     library_name: &str,
     library_path: &Path,
     library_inode: i64,
     corpus_path: &str,
-    inode: i64,
     library_path_to_inode: &HashMap<PathBuf, i64>,
     corpus_tag_maps: &HashMap<i64, HashMap<String, String>>,
 ) -> DeployLifecyclePhase {
-    let tag_map = corpus_tags_for(_read_only_db, inode, corpus_tag_maps);
+    // Library inode == corpus inode for hardlinked deployments.
+    let tag_map = corpus_tags_for(read_only_db, library_inode, corpus_tag_maps);
 
     let expected_relative = compute_deployment_path_with_tags(corpus_path, &tag_map);
     let library_path_suffix = library_path
@@ -789,11 +818,13 @@ fn compute_expected_library_path(
     library_name: &str,
     library_inode: i64,
     corpus_path: &str,
+    corpus_audio_inodes: &HashSet<i64>,
     dir_to_album_dir: &mut HashMap<String, Option<String>>,
     corpus_tag_maps: &HashMap<i64, HashMap<String, String>>,
 ) -> Option<String> {
-    // Audio file: compute from tags directly
-    if let Ok(Some(_audio_file)) = read_only_db.get_audio_file_by_path(corpus_path) {
+    // Audio file: compute from tags directly. Audio membership is the inode set
+    // (library_inode == corpus inode for hardlinks), no per-file SQL needed.
+    if corpus_audio_inodes.contains(&library_inode) {
         let tag_map = corpus_tags_for(read_only_db, library_inode, corpus_tag_maps);
         let expected_relative = compute_deployment_path_with_tags(corpus_path, &tag_map);
         let expected_with_prefix = Path::new(library_name).join(&expected_relative);

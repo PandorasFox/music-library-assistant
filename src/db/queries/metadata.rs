@@ -28,6 +28,8 @@ impl Database {
         let album_artist_in = compound_tag_sql_in("ALBUM", "ARTIST");
         let catalog_number_in = compound_tag_sql_in("CATALOG", "NUMBER");
 
+        // tag_name uses COLLATE NOCASE so plain `=` and `IN` are case-insensitive
+        // and can use idx_corpus_tags_name(_value).
         let sql = format!(
             r#"SELECT
                    album.tag_value as album,
@@ -41,26 +43,26 @@ impl Database {
                INNER JOIN inode_paths p ON album.inode = p.inode AND p.zone = 'corpus'
                LEFT JOIN corpus_tags album_artist
                    ON album.inode = album_artist.inode
-                   AND UPPER(album_artist.tag_name) IN {album_artist_in}
+                   AND album_artist.tag_name IN {album_artist_in}
                LEFT JOIN corpus_tags artist
                    ON album.inode = artist.inode
-                   AND UPPER(artist.tag_name) = 'ARTIST'
+                   AND artist.tag_name = 'ARTIST'
                LEFT JOIN corpus_tags isrc
                    ON album.inode = isrc.inode
-                   AND UPPER(isrc.tag_name) = 'ISRC'
+                   AND isrc.tag_name = 'ISRC'
                LEFT JOIN corpus_tags catalog
                    ON album.inode = catalog.inode
-                   AND UPPER(catalog.tag_name) IN {catalog_number_in}
+                   AND catalog.tag_name IN {catalog_number_in}
                LEFT JOIN corpus_tags year
                    ON album.inode = year.inode
-                   AND UPPER(year.tag_name) = 'YEAR'
+                   AND year.tag_name = 'YEAR'
                LEFT JOIN corpus_tags date
                    ON album.inode = date.inode
-                   AND UPPER(date.tag_name) = 'DATE'
+                   AND date.tag_name = 'DATE'
                LEFT JOIN corpus_tags mb_release
                    ON album.inode = mb_release.inode
-                   AND UPPER(mb_release.tag_name) = UPPER(?1)
-               WHERE UPPER(album.tag_name) = 'ALBUM'
+                   AND mb_release.tag_name = ?1
+               WHERE album.tag_name = 'ALBUM'
                    AND album.tag_value IS NOT NULL
                    AND album.tag_value != ''"#
         );
@@ -101,10 +103,10 @@ impl Database {
                INNER JOIN inode_paths p ON ct_track.inode = p.inode AND p.zone = 'corpus'
                INNER JOIN corpus_tags ct_release
                    ON ct_track.inode = ct_release.inode
-                   AND UPPER(ct_release.tag_name) = UPPER(?2)
+                   AND ct_release.tag_name = ?2
                    AND ct_release.tag_value IS NOT NULL
                    AND ct_release.tag_value != ''
-               WHERE UPPER(ct_track.tag_name) = UPPER(?1)
+               WHERE ct_track.tag_name = ?1
                    AND ct_track.tag_value IS NOT NULL
                    AND ct_track.tag_value != ''"#,
         )?;
@@ -129,7 +131,7 @@ impl Database {
             r#"SELECT t.tag_value, COUNT(DISTINCT t.inode) as file_count
                FROM {} t
                INNER JOIN inode_paths p ON t.inode = p.inode AND p.zone = ?1
-               WHERE UPPER(t.tag_name) = UPPER(?2) AND t.tag_value IS NOT NULL AND t.tag_value != ''
+               WHERE t.tag_name = ?2 AND t.tag_value IS NOT NULL AND t.tag_value != ''
                GROUP BY t.tag_value
                ORDER BY file_count DESC"#,
             Z::TAG_TABLE
@@ -166,7 +168,7 @@ impl Database {
         let sql = format!(
             r#"SELECT DISTINCT t.inode FROM {} t
                INNER JOIN inode_paths p ON t.inode = p.inode AND p.zone = ?1
-               WHERE REPLACE(REPLACE(REPLACE(REPLACE(UPPER(t.tag_name), '_', ''), '-', ''), ' ', ''), '.', '') = ?2
+               WHERE REPLACE(REPLACE(REPLACE(REPLACE(t.tag_name, '_', ''), '-', ''), ' ', ''), '.', '') = ?2 COLLATE NOCASE
                AND t.tag_value IN ({})"#,
             Z::TAG_TABLE,
             placeholders.join(",")
@@ -210,7 +212,7 @@ impl Database {
         let sql = format!(
             r#"SELECT DISTINCT t.tag_value, t.inode FROM {} t
                INNER JOIN inode_paths p ON t.inode = p.inode AND p.zone = ?1
-               WHERE REPLACE(REPLACE(REPLACE(REPLACE(UPPER(t.tag_name), '_', ''), '-', ''), ' ', ''), '.', '') = ?2
+               WHERE REPLACE(REPLACE(REPLACE(REPLACE(t.tag_name, '_', ''), '-', ''), ' ', ''), '.', '') = ?2 COLLATE NOCASE
                AND t.tag_value IN ({})"#,
             Z::TAG_TABLE,
             placeholders.join(",")
@@ -257,7 +259,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             r#"SELECT ct.inode, ct.tag_value FROM corpus_tags ct
                INNER JOIN inode_paths p ON ct.inode = p.inode AND p.zone = 'corpus'
-               WHERE UPPER(ct.tag_name) = 'ALBUM' AND ct.tag_value IS NOT NULL AND ct.tag_value != ''"#,
+               WHERE ct.tag_name = 'ALBUM' AND ct.tag_value IS NOT NULL AND ct.tag_value != ''"#,
         )?;
 
         let rows = stmt.query_map(params![], |row| Ok((row.get(0)?, row.get(1)?)))?;
@@ -276,17 +278,17 @@ impl Database {
         let mut stmt = self.conn.prepare(
             r#"SELECT ct.inode, ct.tag_value,
                       COALESCE((SELECT ct2.tag_value FROM corpus_tags ct2
-                                WHERE ct2.inode = ct.inode AND UPPER(ct2.tag_name) = 'ALBUM'
+                                WHERE ct2.inode = ct.inode AND ct2.tag_name = 'ALBUM'
                                 LIMIT 1), ''),
                       COALESCE((SELECT ct3.tag_value FROM corpus_tags ct3
-                                WHERE ct3.inode = ct.inode AND UPPER(ct3.tag_name) = 'ALBUM_ARTIST'
+                                WHERE ct3.inode = ct.inode AND ct3.tag_name = 'ALBUM_ARTIST'
                                 LIMIT 1),
                                (SELECT ct4.tag_value FROM corpus_tags ct4
-                                WHERE ct4.inode = ct.inode AND UPPER(ct4.tag_name) = 'ALBUMARTIST'
+                                WHERE ct4.inode = ct.inode AND ct4.tag_name = 'ALBUMARTIST'
                                 LIMIT 1), '')
                FROM corpus_tags ct
                INNER JOIN inode_paths p ON ct.inode = p.inode AND p.zone = 'corpus'
-               WHERE UPPER(ct.tag_name) = 'TRACKNUMBER' AND ct.tag_value IS NOT NULL AND ct.tag_value != ''"#,
+               WHERE ct.tag_name = 'TRACKNUMBER' AND ct.tag_value IS NOT NULL AND ct.tag_value != ''"#,
         )?;
 
         let rows = stmt.query_map(params![], |row| {

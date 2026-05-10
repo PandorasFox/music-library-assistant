@@ -150,10 +150,17 @@ impl Database {
         // Performance tuning for flash storage
         // Using execute_batch to handle PRAGMAs uniformly (some return rows, some don't)
         let cache_kb = config::get_db_cache_kb();
+        // wal_autocheckpoint default is 1000 pages (~4 MB at 4 KB pages). With
+        // ~7.8 KB audio_info rows (the fingerprint BLOB dominates), every ~500
+        // audio inserts trips an inline checkpoint that stalls the writer
+        // mid-batch. 50000 pages (~200 MB) lets a full ingest cycle write
+        // through without forced mid-flight checkpoints; the WAL checkpoint
+        // on shutdown still truncates cleanly.
         conn.execute_batch(&format!(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
              PRAGMA busy_timeout = 5000;
+             PRAGMA wal_autocheckpoint = 50000;
              PRAGMA cache_size = {};
              PRAGMA temp_store = MEMORY;
              PRAGMA foreign_keys = ON;",
@@ -477,6 +484,14 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_all_inodes::<Z>()
     }
 
+    /// Get the set of inodes that have an `audio_info` row for a zone.
+    pub fn get_audio_inodes_for_zone(
+        &self,
+        zone: super::types::Zone,
+    ) -> Result<std::collections::HashSet<i64>> {
+        self.db.get_audio_inodes_for_zone(zone)
+    }
+
     /// Get all file-presence signal inodes with their paths for a zone.
     pub fn get_file_presence_inodes<Z: crate::zones::AudioZone>(
         &self,
@@ -631,7 +646,7 @@ impl<'a> ReadOnlyDb<'a> {
     delegate_read! {
         fn get_external_matches_data(config: &crate::config::Config) -> Result<crate::meta::views::ExternalMatchesData>;
         fn get_external_match_entries_filtered(confidence: crate::meta::views::external_matches::AcoustidConfidence) -> Result<Vec<(i64, String, f64, String)>>;
-        fn get_external_matches_for_derivation(source_key: i64) -> Result<Vec<external::ExternalMatchRow>>;
+        fn get_external_matches_for_corpus(source_key: i64) -> Result<Vec<external::ExternalMatchRow>>;
         fn get_mb_recording_cache(recording_id: &str) -> Result<Option<(Vec<u8>, i64)>>;
         fn get_mb_artist_cache(artist_id: &str) -> Result<Option<(Vec<u8>, i64)>>;
         fn get_known_mb_artist_names() -> Result<std::collections::HashSet<String>>;
@@ -640,7 +655,6 @@ impl<'a> ReadOnlyDb<'a> {
         fn get_optimal_packing_scores_for_release(release_id: &str) -> Result<Vec<external::OptimalPackingScoreRow>>;
         fn has_packing_scores_for_release(release_id: &str) -> bool;
         fn get_mb_release_cache(release_id: &str) -> Result<Option<(Vec<u8>, i64)>>;
-        fn get_external_matches_slim(source_key: i64) -> Result<Vec<external::ExternalMatchRow>>;
         fn get_packing_candidates_for_release(release_id: &str) -> Result<Vec<external::PackingCandidateRow>>;
         fn get_packing_inode_paths() -> Result<Vec<(i64, String)>>;
         fn get_packing_knots() -> Result<Vec<crate::meta::signals::data::PackingKnotData>>;

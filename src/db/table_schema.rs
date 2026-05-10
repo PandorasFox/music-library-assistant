@@ -112,8 +112,14 @@ pub fn schema_inventory() -> Vec<TableEntry> {
             needs_tag_flush INTEGER NOT NULL DEFAULT 0,
             tags_version INTEGER NOT NULL DEFAULT 0
         )",
+        // No index on `fingerprint` — it's a ~7.8 KB BLOB per row. Indexing it
+        // means every audio_info upsert writes a 7.8 KB index entry on top of
+        // the row, doubling write amplification and bloating the index file.
+        // The only query that nominally used it (`enm.fingerprint = a.fingerprint`
+        // in `get_inodes_needing_lookup`) already drives from
+        // `external_no_match`'s `PRIMARY KEY (fingerprint, source)`, which is
+        // indexed and selective.
         index_sql: &[
-            "CREATE INDEX IF NOT EXISTS idx_audio_info_fingerprint ON audio_info(fingerprint)",
             "CREATE INDEX IF NOT EXISTS idx_audio_info_duration ON audio_info(duration_ms)",
         ],
     });
@@ -121,9 +127,15 @@ pub fn schema_inventory() -> Vec<TableEntry> {
     tables.push(TableEntry {
         name: "corpus_tags",
         kind: TableKind::Core,
+        // `tag_name COLLATE NOCASE` lets the indexes on tag_name service
+        // case-insensitive lookups directly. Source tag names come in mixed case
+        // from the underlying audio files; before this, every query did
+        // `UPPER(tag_name) = ?` and skipped the index. PRIMARY KEY uniqueness
+        // also collapses case-only duplicates (e.g. "Album" + "ALBUM" merge),
+        // which is what we want — they were always the same logical tag.
         create_sql: "CREATE TABLE IF NOT EXISTS corpus_tags (
             inode INTEGER NOT NULL REFERENCES audio_info(inode) ON DELETE CASCADE,
-            tag_name TEXT NOT NULL,
+            tag_name TEXT NOT NULL COLLATE NOCASE,
             tag_value TEXT NOT NULL,
             PRIMARY KEY (inode, tag_name, tag_value)
         )",
@@ -191,6 +203,10 @@ pub fn schema_inventory() -> Vec<TableEntry> {
     tables.push(TableEntry {
         name: "external_matches",
         kind: TableKind::Core,
+        // `raw_response` used to store the full AcoustID JSON blob per match,
+        // but AcoustID's per-track metadata (titles, artists, releases) is
+        // un-localized and frequently wrong — we resolve recording metadata
+        // against `mb_recording_cache` instead. AcoustID is now linkage-only.
         create_sql: "CREATE TABLE IF NOT EXISTS external_matches (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             inode INTEGER NOT NULL,
@@ -198,7 +214,6 @@ pub fn schema_inventory() -> Vec<TableEntry> {
             source INTEGER NOT NULL,
             recording_id TEXT NOT NULL,
             confidence REAL NOT NULL,
-            raw_response BLOB,
             fetched_at INTEGER NOT NULL,
             UNIQUE(inode, source, recording_id)
         )",

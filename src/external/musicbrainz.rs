@@ -47,10 +47,15 @@ impl MusicBrainzClient {
         }
     }
 
-    /// Fetch a recording by MBID with artist credits, artist relations, and work relations.
+    /// Fetch a recording by MBID with artist credits, artist relations, work
+    /// relations, releases, and the release-group nested under each release.
+    ///
+    /// `release-groups` is required so `MbReleaseRef.release_group` populates —
+    /// `DeriveExternalMatches` uses it as the canonical release-group MBID for
+    /// the matched recording without needing a separate release fetch.
     pub async fn fetch_recording(&self, mbid: &str) -> Result<MbLookupOutcome> {
         let url = format!(
-            "{}/recording/{}?inc=artist-credits+artist-rels+work-rels+releases&fmt=json",
+            "{}/recording/{}?inc=artist-credits+artist-rels+work-rels+releases+release-groups&fmt=json",
             self.base_url, mbid
         );
         self.fetch_entity(&url).await

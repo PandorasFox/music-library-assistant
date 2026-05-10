@@ -245,7 +245,7 @@ pub fn execute_pack_releases(
     let source_key = ExternalSource::AcoustID.to_key();
 
     // === Load all external matches (corpus only) ===
-    let all_rows = match read_only_db.get_external_matches_slim(source_key) {
+    let all_rows = match read_only_db.get_external_matches_for_corpus(source_key) {
         Ok(rows) => rows,
         Err(e) => {
             return Result::failure(

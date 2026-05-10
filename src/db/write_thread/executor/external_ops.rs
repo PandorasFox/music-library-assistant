@@ -11,7 +11,6 @@ use super::index_ops::current_unix_secs;
 // ============================================================================
 
 /// Execute InsertExternalMatch: insert a match from an external API.
-#[allow(clippy::too_many_arguments)] // args map 1:1 to SQL columns
 pub(super) fn execute_insert_external_match(
     db: &Database,
     inode: i64,
@@ -19,21 +18,18 @@ pub(super) fn execute_insert_external_match(
     source: i64,
     recording_id: &str,
     confidence: f64,
-    raw_response: Option<&[u8]>,
     fetched_at: i64,
 ) -> anyhow::Result<()> {
-
     db.conn().execute(
         r#"INSERT OR REPLACE INTO external_matches
-           (inode, fingerprint, source, recording_id, confidence, raw_response, fetched_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"#,
+           (inode, fingerprint, source, recording_id, confidence, fetched_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)"#,
         params![
             inode,
             fingerprint,
             source,
             recording_id,
             confidence,
-            raw_response,
             fetched_at
         ],
     )?;

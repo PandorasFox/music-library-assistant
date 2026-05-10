@@ -1,28 +1,36 @@
 //! External match signal derivation.
 //!
-//! Compares AcoustID match metadata against corpus tags, emitting
-//! ExternalMatch signals that classify each match as ExactMatch,
-//! ContentDiff, or MetadataOnly.
+//! For each (corpus inode → AcoustID recording_id) linkage in `external_matches`,
+//! resolves the recording's metadata from `mb_recording_cache` and compares
+//! against the corpus tags, emitting an `ExternalMatchSignal` classified as
+//! ExactMatch, ContentDiff, or MetadataOnly.
+//!
+//! ## Why MB cache, not AcoustID metadata
+//!
+//! AcoustID returns recording MBIDs reliably but the metadata it ships alongside
+//! is un-localized and picked from an arbitrary track that the recording *might*
+//! be — frequently wrong. We deliberately ignore it and use the MusicBrainz cache
+//! as the authoritative source of recording title, artist credits, and releases.
 
 use std::collections::HashMap;
 
 use crate::db::queries::external::ExternalMatchRow;
 use crate::db::types::Zone;
-use crate::external::acoustid::{self, AcoustIdRecording, AcoustIdResponse};
+use crate::external::musicbrainz::{parse_recording, MbArtistCredit, MbRecording, MbReleaseRef};
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{reconcile_corpus_signals, ComputedCorpusSignal};
 use crate::meta::computations::traits::ComputationContext;
 use crate::meta::external::ExternalSource;
 use crate::meta::signals::data::{
-    ExternalMatchData, ExternalMatchSignal, ExternalTagDiff, MatchClassification};
+    ExternalMatchData, ExternalMatchSignal, ExternalTagDiff, MatchClassification,
+};
 use crate::meta::signals::registry::TypedSignalWrite;
 
 use super::{Computation, Result};
 
-/// Execute DeriveExternalMatches — compare AcoustID metadata against corpus tags.
-pub fn execute_derive_external_matches(
-    ctx: &ComputationContext<'_>,
-) -> Result {
+/// Execute DeriveExternalMatches — compare MB-resolved recording metadata
+/// (for AcoustID-linked inodes) against corpus tags.
+pub fn execute_derive_external_matches(ctx: &ComputationContext<'_>) -> Result {
     let read_only_db = ctx.read_db;
     let witness = ctx.witness;
     let computation = Computation::DeriveExternalMatches;
@@ -32,7 +40,7 @@ pub fn execute_derive_external_matches(
     let source_key = ExternalSource::AcoustID.to_key();
 
     // 1. Query all external matches for corpus files (ordered by inode, confidence DESC).
-    let all_rows = match read_only_db.get_external_matches_for_derivation(source_key) {
+    let all_rows = match read_only_db.get_external_matches_for_corpus(source_key) {
         Ok(rows) => rows,
         Err(e) => {
             return Result::failure(
@@ -59,8 +67,8 @@ pub fn execute_derive_external_matches(
         return Result::success(computation, Vec::new());
     }
 
-    // 2. Group by inode, take first per group (highest confidence).
-    let best_per_inode = group_best_per_inode(all_rows);
+    // 2. Group by inode → (best row, total candidate count for that inode).
+    let (best_per_inode, candidates_per_inode) = group_best_per_inode(all_rows);
 
     log_general(format!(
         "[COMPUTE] DeriveExternalMatches: {} inodes with external matches",
@@ -71,10 +79,7 @@ pub fn execute_derive_external_matches(
     let files_with_tags = match read_only_db.get_all_audio_files_with_tags(Zone::Corpus, false) {
         Ok(f) => f,
         Err(e) => {
-            return Result::failure(
-                computation,
-                format!("Failed to query corpus files: {}", e),
-            );
+            return Result::failure(computation, format!("Failed to query corpus files: {}", e));
         }
     };
 
@@ -83,49 +88,43 @@ pub fn execute_derive_external_matches(
         .map(|(af, tags)| (af.inode(), tags))
         .collect();
 
-    // 4. For each inode with external matches: parse, compare, classify.
+    // 4. For each inode: pull recording from mb_recording_cache, compare, classify.
     let mut computed: Vec<ComputedCorpusSignal> = Vec::new();
     let mut exact = 0;
     let mut content_diff = 0;
     let mut metadata_only = 0;
-    let mut parse_failures = 0;
+    let mut mb_cache_missing = 0;
+    let mut mb_parse_failures = 0;
 
     for (inode, row) in &best_per_inode {
-        // Parse raw_response JSON → typed AcoustIdResponse.
-        let response = match &row.raw_response {
-            Some(raw) => match serde_json::from_slice::<AcoustIdResponse>(raw) {
-                Ok(r) => r,
-                Err(_) => {
-                    parse_failures += 1;
-                    continue;
-                }
-            },
-            None => {
-                parse_failures += 1;
+        let recording_json = match read_only_db.get_mb_recording_cache(&row.recording_id) {
+            Ok(Some((json, _))) => json,
+            Ok(None) => {
+                // MB recording fetch is asynchronous — the AcoustID match landed
+                // first, the MB recording will catch up on a later fetch cycle.
+                // Don't emit a signal for now; the next derivation pass will pick it up.
+                mb_cache_missing += 1;
+                continue;
+            }
+            Err(_) => {
+                mb_cache_missing += 1;
                 continue;
             }
         };
 
-        // Find the matched recording in the response.
-        let recording = match acoustid::find_recording_in_response(&response, &row.recording_id) {
-            Some(r) => r,
-            None => {
-                parse_failures += 1;
+        let recording = match parse_recording(&recording_json) {
+            Ok(r) => r,
+            Err(_) => {
+                mb_parse_failures += 1;
                 continue;
             }
         };
 
-        // Count total candidates across all results for this response.
-        let total_candidates: usize = response.results.iter().map(|r| r.recordings.len()).sum();
-
-        // Get corpus tags for this inode.
+        let total_candidates = *candidates_per_inode.get(inode).unwrap_or(&1);
         let corpus_tags = tag_map.get(inode);
 
-        // Compare tags and classify.
-        let (classification, diffs) = compare_recording_to_corpus(recording, corpus_tags);
-
-        // Pick best release (closest ALBUM match, or first if no ALBUM tag).
-        let (release_id, release_group_id) = pick_best_release(recording, corpus_tags);
+        let (classification, diffs) = compare_recording_to_corpus(&recording, corpus_tags);
+        let (release_id, release_group_id) = pick_best_release(&recording, corpus_tags);
 
         match classification {
             MatchClassification::ExactMatch => exact += 1,
@@ -158,27 +157,38 @@ pub fn execute_derive_external_matches(
         reconcile_corpus_signals::<ExternalMatchSignal>(read_only_db, &sender, computed, witness);
 
     log_general(format!(
-        "[COMPUTE] DeriveExternalMatches: exact={}, content_diff={}, metadata_only={}, parse_failures={} | signals: {}",
-        exact, content_diff, metadata_only, parse_failures, stats,
+        "[COMPUTE] DeriveExternalMatches: exact={}, content_diff={}, metadata_only={}, \
+         mb_cache_missing={}, mb_parse_failures={} | signals: {}",
+        exact, content_diff, metadata_only, mb_cache_missing, mb_parse_failures, stats,
     ));
 
     Result::success(computation, Vec::new())
 }
 
-/// Group external match rows by inode, taking the first per inode (highest confidence).
-fn group_best_per_inode(rows: Vec<ExternalMatchRow>) -> Vec<(i64, ExternalMatchRow)> {
+/// Group external match rows by inode.
+///
+/// Returns:
+/// - `best`: one (inode, highest-confidence row) per inode (rows are pre-sorted
+///   by confidence DESC, so the first occurrence wins)
+/// - `total_candidates`: total row count per inode, used as the
+///   `total_candidates` field on the emitted signal
+fn group_best_per_inode(
+    rows: Vec<ExternalMatchRow>,
+) -> (Vec<(i64, ExternalMatchRow)>, HashMap<i64, usize>) {
     let mut best: Vec<(i64, ExternalMatchRow)> = Vec::new();
     let mut last_inode: Option<i64> = None;
+    let mut totals: HashMap<i64, usize> = HashMap::new();
 
     for row in rows {
+        *totals.entry(row.inode).or_insert(0) += 1;
         if last_inode == Some(row.inode) {
-            continue; // Already took highest confidence for this inode.
+            continue;
         }
         last_inode = Some(row.inode);
         best.push((row.inode, row));
     }
 
-    best
+    (best, totals)
 }
 
 /// Compare a recording's metadata against corpus tags.
@@ -186,7 +196,7 @@ fn group_best_per_inode(rows: Vec<ExternalMatchRow>) -> Vec<(i64, ExternalMatchR
 /// Returns the overall classification and per-tag diffs.
 /// No normalization — raw string equality per the plan.
 fn compare_recording_to_corpus(
-    recording: &AcoustIdRecording,
+    recording: &MbRecording,
     corpus_tags: Option<&HashMap<String, Vec<String>>>,
 ) -> (MatchClassification, Vec<ExternalTagDiff>) {
     let mut diffs = Vec::new();
@@ -197,40 +207,42 @@ fn compare_recording_to_corpus(
     let tags = corpus_tags.unwrap_or(&empty_tags);
 
     // TITLE comparison.
-    if let Some(ref ext_title) = recording.title {
-        let corpus_title = tags.get("TITLE").and_then(|v| v.first());
-        match corpus_title {
-            Some(ct) if ct == ext_title => {} // ExactMatch for this tag.
-            Some(ct) => {
-                has_content_diff = true;
-                diffs.push(ExternalTagDiff {
-                    tag_name: "TITLE".to_string(),
-                    external_value: ext_title.clone(),
-                    corpus_value: Some(ct.clone()),
-                });
-            }
-            None => {
-                has_metadata_only = true;
-                diffs.push(ExternalTagDiff {
-                    tag_name: "TITLE".to_string(),
-                    external_value: ext_title.clone(),
-                    corpus_value: None,
-                });
-            }
+    let ext_title = &recording.title;
+    let corpus_title = tags.get("TITLE").and_then(|v| v.first());
+    match corpus_title {
+        Some(ct) if ct == ext_title => {} // ExactMatch for this tag.
+        Some(ct) => {
+            has_content_diff = true;
+            diffs.push(ExternalTagDiff {
+                tag_name: "TITLE".to_string(),
+                external_value: ext_title.clone(),
+                corpus_value: Some(ct.clone()),
+            });
+        }
+        None => {
+            has_metadata_only = true;
+            diffs.push(ExternalTagDiff {
+                tag_name: "TITLE".to_string(),
+                external_value: ext_title.clone(),
+                corpus_value: None,
+            });
         }
     }
 
     // ARTIST comparison.
-    if !recording.artists.is_empty() {
-        let ext_artist_names: Vec<&str> =
-            recording.artists.iter().map(|a| a.name.as_str()).collect();
+    if !recording.artist_credit.is_empty() {
+        let ext_artist_names: Vec<&str> = recording
+            .artist_credit
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
 
         let corpus_artists = tags.get("ARTIST");
         match corpus_artists {
             Some(ca) if !ca.is_empty() => {
                 if ca.len() == 1 {
                     // Single corpus ARTIST value: join external artists with joinphrase.
-                    let joined = join_artists_with_joinphrase(&recording.artists);
+                    let joined = join_mb_artist_credits(&recording.artist_credit);
                     if ca[0] != joined {
                         has_content_diff = true;
                         diffs.push(ExternalTagDiff {
@@ -248,7 +260,7 @@ fn compare_recording_to_corpus(
 
                     if ext_set != corpus_set {
                         has_content_diff = true;
-                        let joined = join_artists_with_joinphrase(&recording.artists);
+                        let joined = join_mb_artist_credits(&recording.artist_credit);
                         diffs.push(ExternalTagDiff {
                             tag_name: "ARTIST".to_string(),
                             external_value: joined,
@@ -259,7 +271,7 @@ fn compare_recording_to_corpus(
             }
             _ => {
                 has_metadata_only = true;
-                let joined = join_artists_with_joinphrase(&recording.artists);
+                let joined = join_mb_artist_credits(&recording.artist_credit);
                 diffs.push(ExternalTagDiff {
                     tag_name: "ARTIST".to_string(),
                     external_value: joined,
@@ -310,15 +322,16 @@ fn compare_recording_to_corpus(
     (classification, diffs)
 }
 
-/// Join artist names using their joinphrase fields.
-fn join_artists_with_joinphrase(artists: &[crate::external::acoustid::AcoustIdArtist]) -> String {
+/// Join MB artist credits using their joinphrase fields.
+///
+/// Mirrors the prior AcoustID-based join: name1 + joinphrase1 + name2 + joinphrase2 + ... + nameN.
+/// The last entry's joinphrase is omitted (MB usually leaves it empty anyway).
+fn join_mb_artist_credits(credits: &[MbArtistCredit]) -> String {
     let mut result = String::new();
-    for (i, artist) in artists.iter().enumerate() {
-        result.push_str(&artist.name);
-        if i < artists.len() - 1 {
-            if let Some(ref jp) = artist.joinphrase {
-                result.push_str(jp);
-            }
+    for (i, credit) in credits.iter().enumerate() {
+        result.push_str(&credit.name);
+        if i < credits.len() - 1 {
+            result.push_str(&credit.joinphrase);
         }
     }
     result
@@ -326,25 +339,21 @@ fn join_artists_with_joinphrase(artists: &[crate::external::acoustid::AcoustIdAr
 
 /// Pick the release whose title best matches corpus ALBUM tag.
 ///
-/// If corpus has an ALBUM tag, pick the release with an exact title match
-/// (or the first release if none match exactly).
-/// Returns (release_id, release_group_id).
+/// If corpus has an ALBUM tag, prefer a release with an exact title match;
+/// otherwise fall back to the first release. Returns (release_id, release_group_id).
 fn pick_best_release(
-    recording: &AcoustIdRecording,
+    recording: &MbRecording,
     corpus_tags: Option<&HashMap<String, Vec<String>>>,
 ) -> (Option<String>, Option<String>) {
     if recording.releases.is_empty() {
-        // Fall back to release groups if no releases.
-        let rg_id = recording.releasegroups.first().map(|rg| rg.id.clone());
-        return (None, rg_id);
+        return (None, None);
     }
 
     let corpus_album = corpus_tags
         .and_then(|t| t.get("ALBUM"))
         .and_then(|v| v.first());
 
-    let best = if let Some(ca) = corpus_album {
-        // Prefer exact title match.
+    let best: &MbReleaseRef = if let Some(ca) = corpus_album {
         recording
             .releases
             .iter()
@@ -355,9 +364,7 @@ fn pick_best_release(
     };
 
     let release_id = Some(best.id.clone());
-
-    // Find release group for the chosen release (if available).
-    let release_group_id = recording.releasegroups.first().map(|rg| rg.id.clone());
+    let release_group_id = best.release_group.as_ref().map(|rg| rg.id.clone());
 
     (release_id, release_group_id)
 }
@@ -367,7 +374,7 @@ fn pick_best_release(
 /// If corpus has an ALBUM tag, prefer a release whose title matches.
 /// Otherwise, take the first release's title.
 fn pick_best_release_title(
-    recording: &AcoustIdRecording,
+    recording: &MbRecording,
     corpus_album: Option<&str>,
 ) -> Option<String> {
     if recording.releases.is_empty() {
@@ -375,7 +382,6 @@ fn pick_best_release_title(
     }
 
     if let Some(ca) = corpus_album {
-        // Check for exact match first.
         if let Some(r) = recording
             .releases
             .iter()
@@ -385,6 +391,5 @@ fn pick_best_release_title(
         }
     }
 
-    // Fall back to first release with a title.
     recording.releases.iter().find_map(|r| r.title.clone())
 }

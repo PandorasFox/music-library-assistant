@@ -575,7 +575,6 @@ impl SignalWriteSender {
     ///
     /// Called by the Witch when draining fetch results, not from computation
     /// or mutation contexts, so no witness is required.
-    #[allow(clippy::too_many_arguments)] // channel-send boundary; args map 1:1 to DB columns
     pub fn insert_external_match(
         &self,
         inode: i64,
@@ -583,7 +582,6 @@ impl SignalWriteSender {
         source: i64,
         recording_id: &str,
         confidence: f64,
-        raw_response: Option<Vec<u8>>,
         fetched_at: i64,
     ) {
         self.mark_enqueued();
@@ -593,7 +591,6 @@ impl SignalWriteSender {
             source,
             recording_id: recording_id.to_string(),
             confidence,
-            raw_response,
             fetched_at,
         });
     }

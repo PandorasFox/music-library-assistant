@@ -171,6 +171,120 @@ pub fn all_data_migrations() -> Vec<DataMigrationEntry> {
             },
         },
         DataMigrationEntry {
+            id: "2026-05-drop-idx-audio-info-fingerprint",
+            description: "Drop idx_audio_info_fingerprint — indexing a 7.8 KB BLOB column doubled write amplification on every audio_info upsert; the only consumer joins via external_no_match's PK instead",
+            apply: |db| {
+                db.conn().execute_batch("DROP INDEX IF EXISTS idx_audio_info_fingerprint")?;
+                crate::logging::log_general(
+                    "[MIGRATION] Dropped idx_audio_info_fingerprint",
+                );
+                Ok(())
+            },
+        },
+        DataMigrationEntry {
+            id: "2026-05-drop-external-matches-raw-response",
+            description: "Drop external_matches.raw_response column (AcoustID is linkage-only now; metadata resolves via mb_recording_cache)",
+            apply: |db| {
+                let conn = db.conn();
+                let has_column: bool = conn
+                    .query_row(
+                        "SELECT COUNT(*) > 0 FROM pragma_table_info('external_matches') WHERE name = 'raw_response'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(false);
+                if !has_column {
+                    crate::logging::log_general(
+                        "[MIGRATION] external_matches.raw_response already absent; skipping",
+                    );
+                    return Ok(());
+                }
+                // SQLite ≥ 3.35 supports DROP COLUMN directly.
+                conn.execute_batch("ALTER TABLE external_matches DROP COLUMN raw_response")?;
+                crate::logging::log_general(
+                    "[MIGRATION] Dropped external_matches.raw_response column",
+                );
+                Ok(())
+            },
+        },
+        DataMigrationEntry {
+            id: "2026-05-wipe-mb-recording-cache-for-release-groups-inc",
+            description: "Wipe mb_recording_cache so entries re-fetch with `inc=...+release-groups` (needed by DeriveExternalMatches to read MbReleaseRef.release_group)",
+            apply: |db| {
+                let dropped = db
+                    .conn()
+                    .execute("DELETE FROM mb_recording_cache", [])
+                    .unwrap_or(0);
+                crate::logging::log_general(format!(
+                    "[MIGRATION] Cleared {} mb_recording_cache rows to re-fetch with release-groups inc",
+                    dropped
+                ));
+                Ok(())
+            },
+        },
+        DataMigrationEntry {
+            id: "2026-05-corpus-tags-collate-nocase",
+            description: "Rebuild corpus_tags with `tag_name COLLATE NOCASE` so existing indexes service case-insensitive lookups (kills `UPPER(tag_name)=?` non-sargability)",
+            apply: |db| {
+                let conn = db.conn();
+                // Skip if already NOCASE — guards repeated runs on fresh DBs created
+                // with the post-migration schema directly.
+                let existing_def: Option<String> = conn
+                    .query_row(
+                        "SELECT sql FROM sqlite_master WHERE type='table' AND name='corpus_tags'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .ok();
+                if let Some(sql) = &existing_def {
+                    if sql.to_uppercase().contains("COLLATE NOCASE") {
+                        crate::logging::log_general(
+                            "[MIGRATION] corpus_tags already COLLATE NOCASE; skipping rebuild",
+                        );
+                        return Ok(());
+                    }
+                }
+
+                // Rebuild via temp table. INSERT OR IGNORE collapses any case-only
+                // duplicate rows (e.g. ("Album","X") vs ("ALBUM","X")) under the
+                // new NOCASE primary key — they were always the same logical tag.
+                let before: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM corpus_tags", [], |row| row.get(0))
+                    .unwrap_or(0);
+
+                conn.execute_batch(
+                    "CREATE TABLE corpus_tags_new (
+                        inode INTEGER NOT NULL REFERENCES audio_info(inode) ON DELETE CASCADE,
+                        tag_name TEXT NOT NULL COLLATE NOCASE,
+                        tag_value TEXT NOT NULL,
+                        PRIMARY KEY (inode, tag_name, tag_value)
+                    );
+                    INSERT OR IGNORE INTO corpus_tags_new (inode, tag_name, tag_value)
+                        SELECT inode, tag_name, tag_value FROM corpus_tags;
+                    DROP TABLE corpus_tags;
+                    ALTER TABLE corpus_tags_new RENAME TO corpus_tags;
+                    DROP INDEX IF EXISTS idx_corpus_tags_inode;
+                    DROP INDEX IF EXISTS idx_corpus_tags_name;
+                    DROP INDEX IF EXISTS idx_corpus_tags_name_value;
+                    DROP INDEX IF EXISTS idx_corpus_tags_name_value_lower;
+                    CREATE INDEX idx_corpus_tags_inode ON corpus_tags(inode);
+                    CREATE INDEX idx_corpus_tags_name ON corpus_tags(tag_name);
+                    CREATE INDEX idx_corpus_tags_name_value ON corpus_tags(tag_name, tag_value);
+                    CREATE INDEX idx_corpus_tags_name_value_lower ON corpus_tags(tag_name, LOWER(tag_value));",
+                )?;
+
+                let after: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM corpus_tags", [], |row| row.get(0))
+                    .unwrap_or(0);
+                let collapsed = before - after;
+                crate::logging::log_general(format!(
+                    "[MIGRATION] corpus_tags rebuilt with COLLATE NOCASE: {} rows in, {} rows out ({} case-only duplicates collapsed)",
+                    before, after, collapsed,
+                ));
+                Ok(())
+            },
+        },
+        DataMigrationEntry {
             id: "2026-03-reseed-compound-tag-signals",
             description: "Re-dirty all compound-tag signal inodes (re-evaluate with plural-form check and MB-skip)",
             apply: |db| {

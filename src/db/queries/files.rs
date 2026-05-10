@@ -389,12 +389,16 @@ impl Database {
         zone: &str,
     ) -> Result<Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>)>>
     {
+        // GROUP_CONCAT(UPPER(...)) keeps callers' downstream presence checks
+        // case-insensitive even though tag_name is now NOCASE — they string-match
+        // the concatenated list directly. Worth revisiting if a normalized
+        // present_tags representation lands.
         let query = format!(
             r#"SELECT p.inode, p.path,
-                   (SELECT tag_value FROM {tag_table} WHERE inode = p.inode AND UPPER(tag_name) = 'ALBUM' LIMIT 1) as album,
+                   (SELECT tag_value FROM {tag_table} WHERE inode = p.inode AND tag_name = 'ALBUM' LIMIT 1) as album,
                    GROUP_CONCAT(UPPER(t.tag_name), ',') as present_tags,
-                   (SELECT tag_value FROM {tag_table} WHERE inode = p.inode AND UPPER(tag_name) = 'ARTIST' LIMIT 1) as artist,
-                   (SELECT tag_value FROM {tag_table} WHERE inode = p.inode AND UPPER(tag_name) = 'TITLE' LIMIT 1) as title
+                   (SELECT tag_value FROM {tag_table} WHERE inode = p.inode AND tag_name = 'ARTIST' LIMIT 1) as artist,
+                   (SELECT tag_value FROM {tag_table} WHERE inode = p.inode AND tag_name = 'TITLE' LIMIT 1) as title
             FROM inode_paths p
             JOIN inodes i ON p.inode = i.inode
             JOIN audio_info a ON p.inode = a.inode
@@ -428,8 +432,8 @@ impl Database {
                 FROM inode_paths p
                 JOIN inodes i ON p.inode = i.inode
                 JOIN audio_info a ON p.inode = a.inode
-                JOIN corpus_tags ct_album ON p.inode = ct_album.inode AND UPPER(ct_album.tag_name) = 'ALBUM'
-                JOIN corpus_tags ct_artist ON p.inode = ct_artist.inode AND UPPER(ct_artist.tag_name) = 'ARTIST'
+                JOIN corpus_tags ct_album ON p.inode = ct_album.inode AND ct_album.tag_name = 'ALBUM'
+                JOIN corpus_tags ct_artist ON p.inode = ct_artist.inode AND ct_artist.tag_name = 'ARTIST'
                 WHERE i.is_dir = 0 AND p.zone = 'corpus'
                 GROUP BY ct_album.tag_value
                 HAVING artist_count > 1
@@ -466,6 +470,24 @@ impl Database {
         let mut result = HashMap::new();
         for row in rows.flatten() {
             result.insert(row.0, row.1);
+        }
+        Ok(result)
+    }
+
+    /// Get the set of audio inodes for a zone (presence in `audio_info`).
+    ///
+    /// Use as a fast "is this inode an audio file?" membership test, replacing
+    /// per-file `get_audio_file_by_path` lookups inside hot loops.
+    pub fn get_audio_inodes_for_zone(&self, zone: Zone) -> Result<HashSet<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT a.inode FROM audio_info a \
+             JOIN inode_paths p ON a.inode = p.inode \
+             WHERE p.zone = ?1",
+        )?;
+        let rows = stmt.query_map(params![zone.as_str()], |row| row.get::<_, i64>(0))?;
+        let mut result = HashSet::new();
+        for row in rows.flatten() {
+            result.insert(row);
         }
         Ok(result)
     }
@@ -512,7 +534,7 @@ impl Database {
             JOIN audio_info a ON p.inode = a.inode
             JOIN corpus_tags ct ON p.inode = ct.inode
             WHERE i.is_dir = 0 AND p.zone = 'corpus'
-            ORDER BY p.inode, UPPER(ct.tag_name)
+            ORDER BY p.inode, ct.tag_name
         "#;
 
         let mut stmt = self.conn.prepare(query)?;
@@ -551,19 +573,19 @@ impl Database {
             JOIN inodes i ON p.inode = i.inode
             JOIN audio_info a ON p.inode = a.inode
             LEFT JOIN corpus_tags album
-                ON p.inode = album.inode AND UPPER(album.tag_name) = 'ALBUM'
+                ON p.inode = album.inode AND album.tag_name = 'ALBUM'
             LEFT JOIN corpus_tags artist
-                ON p.inode = artist.inode AND UPPER(artist.tag_name) = 'ARTIST'
+                ON p.inode = artist.inode AND artist.tag_name = 'ARTIST'
             LEFT JOIN corpus_tags album_artist
-                ON p.inode = album_artist.inode AND UPPER(album_artist.tag_name) IN {album_artist_in}
+                ON p.inode = album_artist.inode AND album_artist.tag_name IN {album_artist_in}
             LEFT JOIN corpus_tags catalog
-                ON p.inode = catalog.inode AND UPPER(catalog.tag_name) IN {catalog_number_in}
+                ON p.inode = catalog.inode AND catalog.tag_name IN {catalog_number_in}
             LEFT JOIN corpus_tags isrc
-                ON p.inode = isrc.inode AND UPPER(isrc.tag_name) = 'ISRC'
+                ON p.inode = isrc.inode AND isrc.tag_name = 'ISRC'
             LEFT JOIN corpus_tags year
-                ON p.inode = year.inode AND UPPER(year.tag_name) = 'YEAR'
+                ON p.inode = year.inode AND year.tag_name = 'YEAR'
             LEFT JOIN corpus_tags flagcomp
-                ON p.inode = flagcomp.inode AND UPPER(flagcomp.tag_name) = 'COMPILATION'
+                ON p.inode = flagcomp.inode AND flagcomp.tag_name = 'COMPILATION'
             WHERE i.is_dir = 0 AND p.zone = 'corpus' AND album.tag_value IS NOT NULL AND album.tag_value != ''
             GROUP BY p.inode
         "#
@@ -1011,7 +1033,7 @@ impl Database {
              FROM corpus_tags ct
              JOIN inode_paths p ON ct.inode = p.inode
              WHERE p.zone = 'corpus'
-               AND UPPER(ct.tag_name) = UPPER(?1)
+               AND ct.tag_name = ?1
                AND ct.tag_value LIKE ?2",
         )?;
 
@@ -1262,9 +1284,9 @@ impl Database {
             SELECT inode, path, artist, album, title FROM (
                 -- Path matches
                 SELECT p.inode, p.path,
-                    (SELECT tag_value FROM corpus_tags WHERE inode = p.inode AND UPPER(tag_name) = 'ARTIST' LIMIT 1) AS artist,
-                    (SELECT tag_value FROM corpus_tags WHERE inode = p.inode AND UPPER(tag_name) = 'ALBUM' LIMIT 1) AS album,
-                    (SELECT tag_value FROM corpus_tags WHERE inode = p.inode AND UPPER(tag_name) = 'TITLE' LIMIT 1) AS title
+                    (SELECT tag_value FROM corpus_tags WHERE inode = p.inode AND tag_name = 'ARTIST' LIMIT 1) AS artist,
+                    (SELECT tag_value FROM corpus_tags WHERE inode = p.inode AND tag_name = 'ALBUM' LIMIT 1) AS album,
+                    (SELECT tag_value FROM corpus_tags WHERE inode = p.inode AND tag_name = 'TITLE' LIMIT 1) AS title
                 FROM inode_paths p
                 JOIN inodes i ON p.inode = i.inode
                 JOIN audio_info a ON p.inode = a.inode
@@ -1275,15 +1297,15 @@ impl Database {
 
                 -- Tag value matches
                 SELECT p.inode, p.path,
-                    (SELECT tag_value FROM corpus_tags WHERE inode = p.inode AND UPPER(tag_name) = 'ARTIST' LIMIT 1) AS artist,
-                    (SELECT tag_value FROM corpus_tags WHERE inode = p.inode AND UPPER(tag_name) = 'ALBUM' LIMIT 1) AS album,
-                    (SELECT tag_value FROM corpus_tags WHERE inode = p.inode AND UPPER(tag_name) = 'TITLE' LIMIT 1) AS title
+                    (SELECT tag_value FROM corpus_tags WHERE inode = p.inode AND tag_name = 'ARTIST' LIMIT 1) AS artist,
+                    (SELECT tag_value FROM corpus_tags WHERE inode = p.inode AND tag_name = 'ALBUM' LIMIT 1) AS album,
+                    (SELECT tag_value FROM corpus_tags WHERE inode = p.inode AND tag_name = 'TITLE' LIMIT 1) AS title
                 FROM inode_paths p
                 JOIN inodes i ON p.inode = i.inode
                 JOIN audio_info a ON p.inode = a.inode
                 JOIN corpus_tags ct ON p.inode = ct.inode
                 WHERE p.zone = 'corpus' AND i.is_dir = 0
-                  AND UPPER(ct.tag_name) IN ('ARTIST', 'ALBUM', 'TITLE')
+                  AND ct.tag_name IN ('ARTIST', 'ALBUM', 'TITLE')
                   AND ct.tag_value LIKE ?1 ESCAPE '\'
             )
             ORDER BY path
@@ -1350,7 +1372,7 @@ impl Database {
                                 params.push(Box::new(cond.search_value.to_lowercase()));
                                 format!(
                                     "EXISTS (SELECT 1 FROM {tag_table} WHERE inode = p.inode \
-                                     AND UPPER(tag_name) = ?{tag_idx} \
+                                     AND tag_name = ?{tag_idx} \
                                      AND LOWER(tag_value) = ?{val_idx})"
                                 )
                             }
@@ -1358,7 +1380,7 @@ impl Database {
                                 params.push(Box::new(cond.search_value.to_lowercase()));
                                 format!(
                                     "NOT EXISTS (SELECT 1 FROM {tag_table} WHERE inode = p.inode \
-                                     AND UPPER(tag_name) = ?{tag_idx} \
+                                     AND tag_name = ?{tag_idx} \
                                      AND LOWER(tag_value) = ?{val_idx})"
                                 )
                             }
@@ -1367,7 +1389,7 @@ impl Database {
                                 params.push(Box::new(like));
                                 format!(
                                     "EXISTS (SELECT 1 FROM {tag_table} WHERE inode = p.inode \
-                                     AND UPPER(tag_name) = ?{tag_idx} \
+                                     AND tag_name = ?{tag_idx} \
                                      AND LOWER(tag_value) LIKE ?{val_idx} ESCAPE '\\')"
                                 )
                             }
@@ -1375,7 +1397,7 @@ impl Database {
                                 params.push(Box::new(cond.search_value.to_lowercase()));
                                 format!(
                                     "EXISTS (SELECT 1 FROM {tag_table} WHERE inode = p.inode \
-                                     AND UPPER(tag_name) = ?{tag_idx} \
+                                     AND tag_name = ?{tag_idx} \
                                      AND LOWER(tag_value) LIKE ?{val_idx})"
                                 )
                             }
@@ -1477,9 +1499,9 @@ impl Database {
 
         let sql = format!(
             "SELECT p.inode, p.path,
-                (SELECT tag_value FROM {tag_table} WHERE inode = p.inode AND UPPER(tag_name) = 'ARTIST' LIMIT 1) AS artist,
-                (SELECT tag_value FROM {tag_table} WHERE inode = p.inode AND UPPER(tag_name) = 'ALBUM' LIMIT 1) AS album,
-                (SELECT tag_value FROM {tag_table} WHERE inode = p.inode AND UPPER(tag_name) = 'TITLE' LIMIT 1) AS title
+                (SELECT tag_value FROM {tag_table} WHERE inode = p.inode AND tag_name = 'ARTIST' LIMIT 1) AS artist,
+                (SELECT tag_value FROM {tag_table} WHERE inode = p.inode AND tag_name = 'ALBUM' LIMIT 1) AS album,
+                (SELECT tag_value FROM {tag_table} WHERE inode = p.inode AND tag_name = 'TITLE' LIMIT 1) AS title
              FROM inode_paths p
              JOIN inodes i ON p.inode = i.inode
              JOIN audio_info a ON p.inode = a.inode
@@ -1534,7 +1556,7 @@ impl Database {
         // Step 1: Query TITLE tags for all inodes
         let placeholders = (0..inodes.len()).map(|_| "?").collect::<Vec<_>>().join(",");
         let title_sql = format!(
-            "SELECT inode, tag_value FROM {} WHERE UPPER(tag_name) = 'TITLE' AND inode IN ({})",
+            "SELECT inode, tag_value FROM {} WHERE tag_name = 'TITLE' AND inode IN ({})",
             tag_table, placeholders
         );
         let mut stmt = self.conn.prepare(&title_sql)?;
@@ -1595,7 +1617,7 @@ impl Database {
 
         let placeholders = (0..inodes.len()).map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!(
-            "SELECT inode, tag_value FROM {} WHERE UPPER(tag_name) = UPPER(?1) AND inode IN ({})",
+            "SELECT inode, tag_value FROM {} WHERE tag_name = ?1 AND inode IN ({})",
             tag_table, placeholders
         );
 

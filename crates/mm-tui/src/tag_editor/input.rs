@@ -266,6 +266,40 @@ impl UnifiedTagEditorState {
             }
         }
 
+        // In aggregated mode, bound cursor navigation by the aggregated view's
+        // entry count, not tag_sets[0] (which can be shorter than the union
+        // shown in the UI, causing premature jumps to the buttons row).
+        if self.is_aggregated_mode()
+            && self.core.form.edit_mode == FieldEditMode::Navigating
+            && matches!(action, InputAction::NavUp | InputAction::NavDown)
+        {
+            let agg_count = self
+                .core
+                .aggregated
+                .as_ref()
+                .map(|a| a.entry_count())
+                .unwrap_or(0);
+            match action {
+                InputAction::NavUp => {
+                    if self.core.form.cursor > 0 {
+                        self.core.form.cursor -= 1;
+                        self.core.form.scroll_to_cursor();
+                    }
+                }
+                InputAction::NavDown => {
+                    // Allow cursor to reach `agg_count` (the "New Tag" sentinel position).
+                    if self.core.form.cursor < agg_count {
+                        self.core.form.cursor += 1;
+                        self.core.form.scroll_to_cursor();
+                    } else {
+                        self.core.focus = FocusPane::Buttons;
+                    }
+                }
+                _ => {}
+            }
+            return UnifiedTagEditorAction::None;
+        }
+
         // In aggregated mode, intercept Delete/Backspace to mark tags as dropped
         // across all files via the AggregatedTagSet, rather than delegating to
         // FieldForm (which only touches tag_sets[0]).

@@ -3,8 +3,7 @@
 //! Provides the interactive UI elements for first-time setup, called from
 //! `run_tui()` when the Witch is in `AwaitingSetup` state:
 //!
-//! - `run_directory_picker()`: Interactive filesystem browser for selecting archive root.
-//! - `run_create_account()`: Form for creating the first administrator account.
+//! - `run_first_time_setup()`: Unified form collecting storage root + admin credentials.
 //!
 //! Infrastructure creation (config, dirs, DB) is handled by the Witch via `CompleteSetup`.
 
@@ -22,62 +21,133 @@ use crate::input;
 use crate::widgets::TextInputState;
 
 // ============================================================================
-// Directory Picker
+// First-Time Setup Form
 // ============================================================================
 
-/// Run the directory picker, returning the selected path.
-///
-/// Called from `run_tui()` during first-time setup. The caller (TUI) owns the terminal.
-/// If `suggested_root` is provided (e.g. from MM_ROOT env var), the picker
-/// navigates there initially.
-pub fn run_directory_picker<B: Backend>(
-    _terminal: &mut Terminal<B>,
-    _suggested_root: Option<PathBuf>,
-) -> Result<PathBuf> {
-    // TODO: reconnect when first-time setup directory picker is migrated to
-    // protocol-driven DirectoryBrowser (needs pre-auth filesystem listing query)
-    todo!("first-time setup directory picker needs protocol-driven migration")
+/// Output from first-time setup: storage root path and admin credentials.
+pub struct FirstTimeSetupResult {
+    pub storage_root: PathBuf,
+    pub username: String,
+    pub password: String,
 }
 
-// ============================================================================
-// Account Creation
-// ============================================================================
-
-/// State for the create-account step.
-pub struct CreateAccountState {
+/// State for the unified first-time setup form.
+///
+/// Currently uses text input for storage root. The `storage_root` field can be
+/// replaced with a directory picker component in the future while keeping the
+/// same external interface.
+pub struct FirstTimeSetupState {
+    /// Storage root path input. TODO: Replace with DirectoryPicker for better UX.
+    pub storage_root: TextInputState,
     pub username: TextInputState,
     pub password: TextInputState,
     pub confirm_password: TextInputState,
-    /// Which field has focus (0=username, 1=password, 2=confirm)
+    /// Which field has focus (0=storage_root, 1=username, 2=password, 3=confirm)
     pub focus: usize,
     /// Error message to display
     pub error: Option<String>,
 }
 
-impl CreateAccountState {
-    pub fn new() -> Self {
-        let mut username = TextInputState::new();
-        username.focused = true;
+impl FirstTimeSetupState {
+    pub fn new(suggested_root: Option<PathBuf>) -> Self {
+        let mut storage_root = TextInputState::new();
+        if let Some(path) = suggested_root {
+            storage_root.set_value(path.to_string_lossy().into_owned());
+        }
+        storage_root.focused = true;
+
         Self {
-            username,
+            storage_root,
+            username: TextInputState::new(),
             password: TextInputState::new(),
             confirm_password: TextInputState::new(),
             focus: 0,
             error: None,
         }
     }
+
+    fn field_count(&self) -> usize {
+        4
+    }
+
+    fn focus_field(&mut self, index: usize) {
+        // Unfocus all
+        self.storage_root.focused = false;
+        self.username.focused = false;
+        self.password.focused = false;
+        self.confirm_password.focused = false;
+        // Focus the target
+        self.focus = index % self.field_count();
+        match self.focus {
+            0 => self.storage_root.focused = true,
+            1 => self.username.focused = true,
+            2 => self.password.focused = true,
+            3 => self.confirm_password.focused = true,
+            _ => {}
+        }
+    }
+
+    fn focus_next(&mut self) {
+        self.focus_field(self.focus + 1);
+    }
+
+    fn focus_prev(&mut self) {
+        self.focus_field(if self.focus == 0 { self.field_count() - 1 } else { self.focus - 1 });
+    }
+
+    fn current_input(&mut self) -> &mut TextInputState {
+        match self.focus {
+            0 => &mut self.storage_root,
+            1 => &mut self.username,
+            2 => &mut self.password,
+            _ => &mut self.confirm_password,
+        }
+    }
+
+    fn validate(&self) -> Result<FirstTimeSetupResult, String> {
+        let storage_root_str = self.storage_root.value();
+        if storage_root_str.is_empty() {
+            return Err("Storage root cannot be empty".into());
+        }
+        let storage_root = PathBuf::from(storage_root_str);
+        if !storage_root.is_dir() {
+            return Err(format!("'{}' is not a directory", storage_root_str));
+        }
+
+        let username = self.username.value().to_string();
+        if username.is_empty() {
+            return Err("Username cannot be empty".into());
+        }
+
+        let password = self.password.value().to_string();
+        if password.is_empty() {
+            return Err("Password cannot be empty".into());
+        }
+
+        if password != self.confirm_password.value() {
+            return Err("Passwords do not match".into());
+        }
+
+        Ok(FirstTimeSetupResult {
+            storage_root,
+            username,
+            password,
+        })
+    }
 }
 
-/// Run the create-account form, returning (username, password).
+/// Run the unified first-time setup form.
 ///
-/// Called from `run_tui()` during first-time setup when `has_any_users` is false.
-pub fn run_create_account<B: Backend>(
+/// Collects storage root path and admin credentials in a single form.
+/// Returns the validated setup result or an error if cancelled.
+pub fn run_first_time_setup<B: Backend>(
     terminal: &mut Terminal<B>,
-) -> Result<(String, String)> {
-    let mut state = CreateAccountState::new();
+    suggested_root: Option<PathBuf>,
+) -> Result<FirstTimeSetupResult> {
+    let mut state = FirstTimeSetupState::new(suggested_root);
 
     loop {
-        terminal.draw(|f| render_create_account(f, &state))?;
+        terminal.draw(|f| render_first_time_setup(f, &state))?;
 
         if event::poll(std::time::Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
@@ -88,59 +158,20 @@ pub fn run_create_account<B: Backend>(
                         anyhow::bail!("Setup cancelled");
                     }
                     input::InputAction::CycleNext | input::InputAction::NavDown => {
-                        // Unfocus current, focus next
-                        match state.focus {
-                            0 => state.username.focused = false,
-                            1 => state.password.focused = false,
-                            2 => state.confirm_password.focused = false,
-                            _ => {}
-                        }
-                        state.focus = (state.focus + 1) % 3;
-                        match state.focus {
-                            0 => state.username.focused = true,
-                            1 => state.password.focused = true,
-                            2 => state.confirm_password.focused = true,
-                            _ => {}
-                        }
+                        state.focus_next();
                     }
                     input::InputAction::NavUp => {
-                        match state.focus {
-                            0 => state.username.focused = false,
-                            1 => state.password.focused = false,
-                            2 => state.confirm_password.focused = false,
-                            _ => {}
-                        }
-                        state.focus = if state.focus == 0 { 2 } else { state.focus - 1 };
-                        match state.focus {
-                            0 => state.username.focused = true,
-                            1 => state.password.focused = true,
-                            2 => state.confirm_password.focused = true,
-                            _ => {}
-                        }
+                        state.focus_prev();
                     }
                     input::InputAction::Confirm => {
-                        let username = state.username.value().to_string();
-                        let password = state.password.value().to_string();
-                        let confirm = state.confirm_password.value().to_string();
-
-                        if username.is_empty() {
-                            state.error = Some("Username cannot be empty".to_string());
-                        } else if password.is_empty() {
-                            state.error = Some("Password cannot be empty".to_string());
-                        } else if password != confirm {
-                            state.error = Some("Passwords do not match".to_string());
-                        } else {
-                            return Ok((username, password));
+                        match state.validate() {
+                            Ok(result) => return Ok(result),
+                            Err(msg) => state.error = Some(msg),
                         }
                     }
                     other => {
                         state.error = None;
-                        match state.focus {
-                            0 => { state.username.handle_input(&other); }
-                            1 => { state.password.handle_input(&other); }
-                            2 => { state.confirm_password.handle_input(&other); }
-                            _ => {}
-                        }
+                        state.current_input().handle_input(&other);
                     }
                 }
             }
@@ -148,12 +179,12 @@ pub fn run_create_account<B: Backend>(
     }
 }
 
-fn render_create_account(f: &mut ratatui::Frame, state: &CreateAccountState) {
+fn render_first_time_setup(f: &mut ratatui::Frame, state: &FirstTimeSetupState) {
     let area = f.area();
 
-    // Center a 50x12 box
-    let popup_width = 50u16.min(area.width.saturating_sub(4));
-    let popup_height = 12u16.min(area.height.saturating_sub(4));
+    // Center a 60x16 box
+    let popup_width = 60u16.min(area.width.saturating_sub(4));
+    let popup_height = 16u16.min(area.height.saturating_sub(4));
     let x = (area.width.saturating_sub(popup_width)) / 2;
     let y = (area.height.saturating_sub(popup_height)) / 2;
     let popup = Rect::new(x, y, popup_width, popup_height);
@@ -163,7 +194,7 @@ fn render_create_account(f: &mut ratatui::Frame, state: &CreateAccountState) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Green))
-        .title(" Create Admin Account ")
+        .title(" First-Time Setup ")
         .title_alignment(Alignment::Center);
     let inner = block.inner(popup);
     f.render_widget(block, popup);
@@ -171,74 +202,62 @@ fn render_create_account(f: &mut ratatui::Frame, state: &CreateAccountState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(3), // storage root (needs more space for path)
             Constraint::Length(2), // username
             Constraint::Length(2), // password
             Constraint::Length(2), // confirm
-            Constraint::Length(1), // error/hint
+            Constraint::Length(2), // error/hint
             Constraint::Min(0),
         ])
         .split(inner);
 
+    // Storage root
+    render_field(f, chunks[0], "Storage Root:", state.storage_root.value(), state.focus == 0, false);
+
     // Username
-    let label_style = if state.focus == 0 {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    f.render_widget(
-        Paragraph::new(vec![
-            Line::from(Span::styled("Username:", label_style)),
-            Line::from(Span::styled(
-                state.username.value(),
-                Style::default().fg(Color::White),
-            )),
-        ]),
-        chunks[0],
-    );
+    render_field(f, chunks[1], "Username:", state.username.value(), state.focus == 1, false);
 
     // Password
-    let label_style = if state.focus == 1 {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    let masked: String = "*".repeat(state.password.value().len());
-    f.render_widget(
-        Paragraph::new(vec![
-            Line::from(Span::styled("Password:", label_style)),
-            Line::from(Span::styled(masked, Style::default().fg(Color::White))),
-        ]),
-        chunks[1],
-    );
+    render_field(f, chunks[2], "Password:", state.password.value(), state.focus == 2, true);
 
-    // Confirm
-    let label_style = if state.focus == 2 {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    let masked: String = "*".repeat(state.confirm_password.value().len());
-    f.render_widget(
-        Paragraph::new(vec![
-            Line::from(Span::styled("Confirm:", label_style)),
-            Line::from(Span::styled(masked, Style::default().fg(Color::White))),
-        ]),
-        chunks[2],
-    );
+    // Confirm password
+    render_field(f, chunks[3], "Confirm:", state.confirm_password.value(), state.focus == 3, true);
 
     // Error or hint
     if let Some(ref err) = state.error {
         f.render_widget(
             Paragraph::new(Span::styled(err, Style::default().fg(Color::Red))),
-            chunks[3],
+            chunks[4],
         );
     } else {
         f.render_widget(
             Paragraph::new(Span::styled(
-                "Tab: next field  Enter: submit  Esc: cancel",
+                "Tab/Arrows: navigate  Enter: submit  Esc: cancel",
                 Style::default().fg(Color::DarkGray),
             )),
-            chunks[3],
+            chunks[4],
         );
     }
+}
+
+fn render_field(f: &mut ratatui::Frame, area: Rect, label: &str, value: &str, focused: bool, masked: bool) {
+    let label_style = if focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let display_value = if masked {
+        "*".repeat(value.len())
+    } else {
+        value.to_string()
+    };
+
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(label, label_style)),
+            Line::from(Span::styled(display_value, Style::default().fg(Color::White))),
+        ]),
+        area,
+    );
 }

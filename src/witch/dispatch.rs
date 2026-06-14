@@ -311,7 +311,10 @@ impl super::Witch {
                     }
                     UnauthenticatedBody::SetupQuery => {
                         let needs_setup = self.startup_state == super::types::WitchStartupState::AwaitingSetup;
-                        let suggested_root = std::env::var("MM_ROOT").ok().map(std::path::PathBuf::from);
+                        let suggested_root = std::env::var("MM_ROOT")
+                            .ok()
+                            .map(std::path::PathBuf::from)
+                            .or_else(|| config::load_config().ok().map(|c| c.storage_root));
                         Ok(UnauthenticatedResponse::SetupStatus { needs_setup, suggested_root })
                     }
                     UnauthenticatedBody::CompleteSetup { root, first_user } => {

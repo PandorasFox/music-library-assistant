@@ -151,18 +151,20 @@ fn execute_transcode_impl(
     let dest_path = target_format.dest_path(source_path);
 
     // If target already exists (e.g., from a previous incomplete transcode),
-    // stash it first so we can create a fresh transcode
+    // stash it first so we can create a fresh transcode.
+    // NOTE: Use a separate stash location — "originals" is reserved for source files.
     if dest_path.exists() {
         crate::logging::log_general(format!(
             "[TRANSCODE] Target already exists, stashing old file: {}",
             dest_path.display()
         ));
-        file_ops::execute_move_to_stash(&dest_path, stash_name, stash_root).with_context(|| {
-            format!(
-                "Failed to stash existing target file: {}",
-                dest_path.display()
-            )
-        })?;
+        file_ops::execute_move_to_stash(&dest_path, "transcode_replaced", stash_root)
+            .with_context(|| {
+                format!(
+                    "Failed to stash existing target file: {}",
+                    dest_path.display()
+                )
+            })?;
     }
 
     // Transcode via native pipeline. If this fails (including post-encode

@@ -469,7 +469,7 @@ pub fn execute_move_to_stash(path: &Path, stash_name: &str, stash_root: &Path) -
         }
     }
 
-    fs::rename(path, &dest).with_context(|| {
+    move_file(path, &dest).with_context(|| {
         format!(
             "Failed to move {} to stash at {}",
             path.display(),
@@ -478,6 +478,32 @@ pub fn execute_move_to_stash(path: &Path, stash_name: &str, stash_root: &Path) -
     })?;
 
     Ok(())
+}
+
+/// Move a file, falling back to copy+delete if rename fails with EXDEV (cross-device).
+fn move_file(src: &Path, dest: &Path) -> Result<()> {
+    // EXDEV = 18 on Linux (cross-device link)
+    const EXDEV: i32 = 18;
+
+    match fs::rename(src, dest) {
+        Ok(()) => Ok(()),
+        Err(e) if e.raw_os_error() == Some(EXDEV) => {
+            // Cross-device move: copy then delete
+            crate::logging::log_general(format!(
+                "[WARNING] Cross-device move fallback (copy+delete): {} -> {}",
+                src.display(),
+                dest.display()
+            ));
+            fs::copy(src, dest).with_context(|| {
+                format!("Failed to copy {} to {}", src.display(), dest.display())
+            })?;
+            fs::remove_file(src).with_context(|| {
+                format!("Failed to remove source after copy: {}", src.display())
+            })?;
+            Ok(())
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 #[cfg(test)]

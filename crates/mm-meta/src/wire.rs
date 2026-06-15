@@ -126,12 +126,39 @@ pub enum HandleCommand {
 // Socket Path
 // ============================================================================
 
-/// Default socket path: `$XDG_RUNTIME_DIR/mm.sock`.
+/// Well-known system socket path for the mm service.
+pub const SYSTEM_SOCKET_PATH: &str = "/run/mm/mm.sock";
+
+/// Default socket path for creating a socket (server): `$XDG_RUNTIME_DIR/mm.sock`.
 ///
 /// Returns `None` if `XDG_RUNTIME_DIR` is not set.
 pub fn default_socket_path() -> Option<std::path::PathBuf> {
     std::env::var_os("XDG_RUNTIME_DIR")
         .map(|dir| std::path::Path::new(&dir).join("mm.sock"))
+}
+
+/// Find an existing socket to connect to (client).
+///
+/// Checks in order:
+/// 1. `$XDG_RUNTIME_DIR/mm.sock` (user's local mm instance)
+/// 2. `/run/mm/mm.sock` (system service)
+///
+/// Returns `None` if no socket exists.
+pub fn find_socket_path() -> Option<std::path::PathBuf> {
+    // Try user's XDG runtime socket first
+    if let Some(path) = default_socket_path() {
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    // Fall back to system service socket
+    let system_path = std::path::PathBuf::from(SYSTEM_SOCKET_PATH);
+    if system_path.exists() {
+        return Some(system_path);
+    }
+
+    None
 }
 
 // ============================================================================

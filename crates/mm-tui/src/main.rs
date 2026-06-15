@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use mm_meta::wire::default_socket_path;
+use mm_meta::wire::{find_socket_path, SYSTEM_SOCKET_PATH};
 
 fn main() {
     let socket_path = parse_socket_path();
@@ -43,7 +43,8 @@ fn parse_socket_path() -> PathBuf {
             eprintln!("Usage: mm-tui [OPTIONS]");
             eprintln!();
             eprintln!("Options:");
-            eprintln!("  -s, --socket <PATH>  Unix socket to connect to (default: $XDG_RUNTIME_DIR/mm.sock)");
+            eprintln!("  -s, --socket <PATH>  Unix socket to connect to");
+            eprintln!("                       (default: $XDG_RUNTIME_DIR/mm.sock or {SYSTEM_SOCKET_PATH})");
             eprintln!("  -h, --help           Show this help");
             std::process::exit(0);
         }
@@ -51,8 +52,10 @@ fn parse_socket_path() -> PathBuf {
         eprintln!("try: mm-tui --help");
         std::process::exit(1);
     }
-    default_socket_path().unwrap_or_else(|| {
-        eprintln!("error: XDG_RUNTIME_DIR not set (use --socket to specify path)");
+    find_socket_path().unwrap_or_else(|| {
+        eprintln!("error: no mm server socket found");
+        eprintln!("checked: $XDG_RUNTIME_DIR/mm.sock and {SYSTEM_SOCKET_PATH}");
+        eprintln!("is the mm server running? (use --socket to specify path)");
         std::process::exit(1);
     })
 }

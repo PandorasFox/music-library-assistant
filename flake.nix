@@ -43,20 +43,20 @@
 
               serviceUser = lib.mkOption {
                 type = lib.types.str;
-                default = "mm";
+                default = "music-magic";
                 description = "System user to run Music Magic service as";
               };
 
               serviceGroup = lib.mkOption {
                 type = lib.types.str;
-                default = "mm";
+                default = "music-magic";
                 description = "System group to run Music Magic service as";
               };
 
               dataDir = lib.mkOption {
                 type = lib.types.path;
-                default = "/var/lib/music-magic";
-                description = "Directory for database and state";
+                default = "/var/lib/mm";
+                description = "Directory for database and state (/var/lib/mm by default)";
               };
 
               adminUser = lib.mkOption {
@@ -74,6 +74,16 @@
                   If null, first-time setup must be completed interactively via mm-tui.
                 '';
                 example = "/run/secrets/mm-admin-password";
+              };
+
+              runtimeDir = lib.mkOption {
+                type = lib.types.path;
+                default = "/run/mm";
+                description = ''
+                  Directory for the Unix socket (mm.sock).
+                  Users in serviceGroup can connect via mm-tui by setting:
+                    XDG_RUNTIME_DIR=/run/mm mm-tui
+                '';
               };
             };
 
@@ -93,8 +103,12 @@
                 wantedBy = [ "multi-user.target" ];
 
                 environment = {
-                  XDG_CONFIG_HOME = "${cfg.dataDir}/.config";
-                  XDG_DATA_HOME = "${cfg.dataDir}/.local/share";
+                  # XDG bases are parent of dataDir; app appends /mm, so:
+                  #   config: /var/lib/mm/config.kdl
+                  #   database: /var/lib/mm/mm.db
+                  XDG_CONFIG_HOME = builtins.dirOf cfg.dataDir;
+                  XDG_DATA_HOME = builtins.dirOf cfg.dataDir;
+                  XDG_RUNTIME_DIR = cfg.runtimeDir;
                 };
 
                 serviceConfig = {
@@ -105,22 +119,23 @@
                   Restart = "on-failure";
                   RestartSec = "5s";
 
+                  # Runtime directory for socket (created automatically on service start)
+                  RuntimeDirectory = baseNameOf cfg.runtimeDir;
+                  RuntimeDirectoryMode = "0770";
+
                   # Hardening
                   NoNewPrivileges = true;
-                  ProtectSystem = "strict";
+                  ProtectSystem = "full";  # Only protects /usr, /boot, /efi; /var and /srv stay writable
                   ProtectHome = true;
                   PrivateTmp = true;
-                  ReadWritePaths = [
-                    cfg.dataDir
-                    cfg.storageRoot
-                  ] ++ lib.optional (cfg.librariesRoot != null) cfg.librariesRoot
-                    ++ lib.optional (cfg.stashRoot != null) cfg.stashRoot;
+                  # NOTE: Do NOT use ReadWritePaths - it creates a mount namespace with
+                  # separate bind mounts that cause EXDEV on rename() between paths.
                 };
 
                 preStart = ''
-                  # Generate config.kdl
-                  mkdir -p ${cfg.dataDir}/.config/mm
-                  cat > ${cfg.dataDir}/.config/mm/config.kdl <<EOF
+                  # Generate config.kdl at $XDG_CONFIG_HOME/mm/config.kdl = ${cfg.dataDir}/config.kdl
+                  mkdir -p ${cfg.dataDir}
+                  cat > ${cfg.dataDir}/config.kdl <<EOF
                   storage-root "${cfg.storageRoot}"
                   ${lib.optionalString (cfg.librariesRoot != null) ''libraries-root "${cfg.librariesRoot}"''}
                   ${lib.optionalString (cfg.stashRoot != null) ''stash-root "${cfg.stashRoot}"''}
@@ -128,7 +143,7 @@
 
                   ${lib.optionalString (cfg.adminPasswordFile != null) ''
                     # Initialize database with admin user if it doesn't exist
-                    if [ ! -f ${cfg.dataDir}/.local/share/mm/mm.db ]; then
+                    if [ ! -f ${cfg.dataDir}/mm.db ]; then
                       ${pkg}/bin/mm --init-user ${cfg.adminUser} --password-file ${cfg.adminPasswordFile}
                     fi
                   ''}

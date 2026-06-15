@@ -71,6 +71,14 @@ pub(super) fn spawn_listener(
     // Bind synchronously so the socket is ready before we return.
     let std_listener = match std::os::unix::net::UnixListener::bind(&path) {
         Ok(l) => {
+            // Set socket permissions to 0770 for group access (clients need write to connect)
+            use std::os::unix::fs::PermissionsExt;
+            if let Err(e) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o770)) {
+                crate::logging::log_general(format!(
+                    "[SOCKET] Warning: failed to set permissions on {}: {e}",
+                    path.display()
+                ));
+            }
             crate::logging::log_general(format!(
                 "[SOCKET] Listening on {}",
                 path.display()

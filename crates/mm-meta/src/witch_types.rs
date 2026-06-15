@@ -114,16 +114,23 @@ pub struct SourceProgress {
     pub retries: usize,
 }
 
-/// Combined progress for both external sources.
+/// Combined progress for all three external sources.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct FetchProgress {
     pub acoustid: SourceProgress,
     pub mb: SourceProgress,
+    pub discogs: SourceProgress,
     /// Current effective AcoustID requests/sec (from rate limiter).
     pub acoustid_rps: f32,
     /// Current effective MB requests/sec (from adaptive rate limiter).
     pub mb_rps: f32,
+    /// Current effective Discogs requests/sec (from adaptive rate limiter).
+    pub discogs_rps: f32,
+    /// False when the Discogs queue is intentionally inert (no token configured).
+    /// The TUI uses this to render a clear "not configured" hint instead of a
+    /// stuck-at-zero progress line.
+    pub discogs_enabled: bool,
 }
 
 /// Progress snapshot for Cover Art Archive fetching.

@@ -33,6 +33,7 @@ mod deploy;
 mod duplicates;
 mod external_matches;
 mod formats;
+mod genre;
 pub(crate) mod image_index;
 mod path_schema;
 mod release_packing;
@@ -49,6 +50,7 @@ pub use deploy::*;
 pub use duplicates::*;
 pub use external_matches::*;
 pub use formats::*;
+pub use genre::*;
 pub use image_index::*;
 pub use path_schema::*;
 pub use release_packing::*;
@@ -116,6 +118,23 @@ pub enum Computation {
     /// Finds similar `genre` tag values that could be unified.
     /// Reconciles only `TagCanonicitySignal` rows keyed `genre:*`.
     DetectGenreTagCanonicalizations,
+
+    /// Import existing GENRE tag values into the `inode_genres` ledger.
+    ///
+    /// Scans every corpus inode's GENRE tag values, resolves each through
+    /// `genre_aliases`, writes `(inode, genre_id, source=FileTagImport)`
+    /// ledger rows, and queues unresolved raw strings into
+    /// `unresolved_genre_observations` so operators can map them in the
+    /// vocabulary editor.
+    ImportGenresFromTags,
+
+    /// Drain `discogs_release_cache` into the `inode_genres` ledger.
+    ///
+    /// Maps each cached Discogs release to its packed inodes via
+    /// `mb_release_discogs_links` + release-packing signals, extracts Discogs
+    /// Genres and Styles, resolves them through `genre_aliases`, and writes
+    /// `(inode, genre_id, source=Discogs, kind=Genre|Style)` ledger rows.
+    DeriveDiscogsGenreLedger,
 
     /// Detect albums with inconsistent album_artist tags.
     ///
@@ -359,6 +378,8 @@ impl Computation {
             Computation::DetectAlbumArtistTagCanonicalizations => "Detecting albumartist canonicalizations",
             Computation::DetectAlbumTagCanonicalizations => "Detecting album canonicalizations",
             Computation::DetectGenreTagCanonicalizations => "Detecting genre canonicalizations",
+            Computation::ImportGenresFromTags => "Importing GENRE tags into ledger",
+            Computation::DeriveDiscogsGenreLedger => "Deriving Discogs genres into ledger",
             Computation::DetectInconsistentAlbumArtist => "Detecting inconsistent album_artist",
             Computation::DetectCompoundTagValues => "Scheduling compound tag detection",
             Computation::DetectCompoundTagsForInode { .. } => "Detecting compound tags",
@@ -421,6 +442,8 @@ impl Computation {
             Computation::DetectGenreTagCanonicalizations => {
                 execute_detect_genre_canonicalizations(ctx)
             }
+            Computation::ImportGenresFromTags => execute_import_genres_from_tags(ctx),
+            Computation::DeriveDiscogsGenreLedger => execute_derive_discogs_genre_ledger(ctx),
             Computation::DetectInconsistentAlbumArtist => {
                 execute_detect_inconsistent_album_artist(ctx)
             }

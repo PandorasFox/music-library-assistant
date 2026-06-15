@@ -959,7 +959,11 @@ fn score_candidates_against_tracklist(
 
                 candidates.push(CandidateAssignment {
                     inode: *inode,
-                    recording_id: rec_match.recording_id.clone(),
+                    // Use the slot's MB recording, not the candidate's source
+                    // recording — for synthetic/pinned candidates the source
+                    // is empty, but Hungarian's assignment to this slot makes
+                    // the slot's recording authoritative either way.
+                    recording_id: track.recording.id.clone(),
                     release_id: release_id.to_string(),
                     medium_pos: medium.position,
                     track_pos: track.position,

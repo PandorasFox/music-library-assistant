@@ -474,6 +474,21 @@ impl Database {
         Ok(result)
     }
 
+    /// Inodes with multiple path rows in a given zone (intra-zone hardlinks).
+    ///
+    /// MovedFile signal detection collapses inode→path via HashMap; for an inode
+    /// with N paths in the zone the walker and DB each pick one arbitrarily, so
+    /// disk_path vs indexed_path comparison becomes order-dependent. These inodes
+    /// must be excluded from move detection — the signal model represents a
+    /// single move, which doesn't apply to multi-path inodes.
+    pub fn get_multipath_inodes_for_zone(&self, zone: &str) -> Result<HashSet<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT inode FROM inode_paths WHERE zone = ?1 GROUP BY inode HAVING COUNT(*) > 1",
+        )?;
+        let rows = stmt.query_map(params![zone], |row| row.get::<_, i64>(0))?;
+        Ok(rows.flatten().collect())
+    }
+
     /// Get the set of audio inodes for a zone (presence in `audio_info`).
     ///
     /// Use as a fast "is this inode an audio file?" membership test, replacing

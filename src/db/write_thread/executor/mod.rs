@@ -4,8 +4,13 @@
 //! and all `execute_*` functions that perform the actual SQL operations.
 
 mod external_ops;
+mod genre_ops;
 mod index_ops;
 mod packing_ops;
+
+pub use genre_ops::{
+    execute_apply_genre_vocabulary_edits, InodeGenreRow, UnresolvedGenreObservation,
+};
 
 use rusqlite::params;
 
@@ -626,6 +631,30 @@ pub(super) fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             });
         }
 
+        DbWriteOp::UpsertDiscogsReleaseCache {
+            release_id,
+            raw_json,
+            fetched_at,
+        } => {
+            with_retry("upsert_discogs_release_cache", release_id, || {
+                external_ops::execute_upsert_discogs_release_cache(
+                    db, release_id, raw_json, *fetched_at,
+                )
+            });
+        }
+
+        DbWriteOp::SetAppMetadata { key, value } => {
+            with_retry("set_app_metadata", key, || {
+                db.conn().execute(
+                    "INSERT INTO app_metadata (key, value, updated_at) \
+                     VALUES (?1, ?2, datetime('now')) \
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                    rusqlite::params![key, value],
+                )?;
+                Ok(())
+            });
+        }
+
         DbWriteOp::UpsertCaaReleaseCache {
             release_id,
             status,
@@ -709,6 +738,27 @@ pub(super) fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             });
         }
 
+        DbWriteOp::WriteInodeGenres { rows } => {
+            with_retry("write_inode_genres", "batch", || {
+                genre_ops::execute_write_inode_genres(db, rows)
+            });
+        }
+
+        DbWriteOp::ClearInodeGenresForSource { inode, source } => {
+            with_retry("clear_inode_genres_for_source", "single", || {
+                genre_ops::execute_clear_inode_genres_for_source(db, *inode, *source)
+            });
+        }
+
+        DbWriteOp::BumpUnresolvedGenreObservations { observations } => {
+            with_retry("bump_unresolved_genre_observations", "batch", || {
+                genre_ops::execute_bump_unresolved_genre_observations(db, observations)
+            });
+        }
+
+        DbWriteOp::ApplyGenreVocabularyEdits { .. } => {
+            unreachable!("ApplyGenreVocabularyEdits handled in run_db_thread loop")
+        }
         DbWriteOp::SetCacheSize { .. } => unreachable!("SetCacheSize handled in run_db_thread loop"),
         DbWriteOp::Shutdown => unreachable!("Shutdown handled in run_db_thread loop"),
     }

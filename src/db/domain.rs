@@ -817,6 +817,32 @@ impl_domain_query! {
     }
 }
 
+impl_domain_query! {
+    GetGenreVocabulary => mm_meta::domain_query_types::GenreVocabulary,
+    db.get_genre_vocabulary()
+}
+
+impl_domain_query! {
+    GetUnresolvedGenreObservations => mm_meta::domain_query_types::UnresolvedGenreObservations,
+    db.get_unresolved_genre_observations()
+}
+
+impl_domain_query! {
+    GetGenrePromotionReview => mm_meta::domain_query_types::GenrePromotionReview,
+    db.get_genre_promotion_review()
+}
+
+impl_domain_query! {
+    GetGenrePromotionInodeDetail => mm_meta::domain_query_types::GenrePromotionInodeDetail, |s, db| {
+        db.get_genre_promotion_inode_detail(&s.release_id).unwrap_or_default()
+    }
+}
+
+impl_domain_query! {
+    GetGenreCoverageSummary => mm_meta::domain_query_types::GenreCoverageSummary,
+    db.get_genre_coverage_summary()
+}
+
 /// Load AcoustID matches filtered by confidence tier, with inline MB recording summaries.
 fn load_acoustid_matches(
     confidence: mm_meta::views::external_matches::AcoustidConfidence,
@@ -1178,6 +1204,11 @@ dispatch_domain_query_impl! {
     GetCompoundSplitResolution,
     GetAcoustidMatches,
     GetReleaseReview,
+    GetGenreVocabulary,
+    GetUnresolvedGenreObservations,
+    GetGenrePromotionReview,
+    GetGenrePromotionInodeDetail,
+    GetGenreCoverageSummary,
 }
 
 // ============================================================================

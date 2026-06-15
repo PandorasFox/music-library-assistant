@@ -14,6 +14,8 @@ import { Config } from "./views/Config";
 import { Transaction } from "./views/Transaction";
 import { ExternalMatches } from "./views/ExternalMatches";
 import { VaOverrides } from "./views/VaOverrides";
+import { GenreVocabulary } from "./views/GenreVocabulary";
+import { GenrePromotion } from "./views/GenrePromotion";
 import { Deploy } from "./views/Deploy";
 import { Resolve } from "./views/Resolve";
 import { TagEditorRoute } from "./views/TagEditor";
@@ -96,6 +98,8 @@ const router = createHashRouter([
       { path: "config", element: <Config /> },
       { path: "external", element: <ExternalMatches /> },
       { path: "va-overrides", element: <VaOverrides /> },
+      { path: "genres", element: <GenreVocabulary /> },
+      { path: "promote-genres", element: <GenrePromotion /> },
       { path: "deploy", element: <Deploy /> },
       { path: "resolve/:type", element: <Resolve /> },
       { path: "tags", element: <TagEditorRoute /> },

@@ -270,6 +270,17 @@ impl super::Witch {
                     ));
                     // Queue derivation immediately since mutations may have changed file state
                     self.watcher_derivation_needed = true;
+
+                    // Startup obligation: the Inodes→Full auto-index queued
+                    // mutations and parked them behind the linger gate. Fire
+                    // content analysis now so the deploy/release pipeline
+                    // reclassifies dirty inodes carried across the restart,
+                    // without waiting on the linger → fetch chain. One-shot —
+                    // only fires after the initial post-Inodes auto-index pass.
+                    if self.pending_startup_content_analysis {
+                        self.pending_startup_content_analysis = false;
+                        work.content_analysis = true;
+                    }
                 } else if self.pending_recomputation_scope.is_some() {
                     // Re-derivation completed after a mutation session.
                     // The pending scope was stored when mutations drained — now

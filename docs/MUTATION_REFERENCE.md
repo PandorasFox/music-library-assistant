@@ -35,7 +35,7 @@ deployment operations.
 | Stage | Order | Mutations |
 |-------|-------|-----------|
 | Config | 0 | ApplyConfigEdits, ApplyDirConfigEdit, ApplyBatchDirConfigEdits |
-| DB | 1 | ApplyTagOps, AcknowledgeMtimeOnly, EmitCanonicalTag, EmitExpectedOverlap, EmitExpectedDuplicate, EmitExpectedMissingTag, IndexFileFromPath, UpdateFilePath, ApplyDbTagsToDisk |
+| DB | 1 | ApplyTagOps (incl. genre promotion staging), AcknowledgeMtimeOnly, EmitCanonicalTag, EmitExpectedOverlap, EmitExpectedDuplicate, EmitExpectedMissingTag, IndexFileFromPath, UpdateFilePath, ApplyDbTagsToDisk, EditGenreVocabulary |
 | DiskFlush | 2 | Transcode, Move, StashFromZone, StashLeftovers, DropFromIndex, DropDirectoryFromIndex |
 | DiskDeploy | 3 | HardLink, LibraryMove |
 | *(ChainEmitted)* | — | FlushTagsToDisk, AssimilateDiskTagsToDb *(spawned during execution, never in transactions)* |
@@ -165,6 +165,34 @@ The EmitExpectedMissingTag mutation is used when an operator confirms that certa
 | ApplyBatchDirConfigEdits | — | — | — | — | Atomically applies multiple dir config edits to dirs.kdl in a single read-modify-write. Produced by coalescing multiple ApplyDirConfigEdit mutations at transaction commit time — never directly staged. Recomputation scope: union of per-entry scopes |
 
 The ApplyConfigEdits mutation is created by the Config Editor view when the operator saves edited config fields. It carries the original KDL text, old config, and new config. On execution, it backs up `config.kdl` to `config.kdl.bak`, then applies field-level edits to the KDL document preserving comments and formatting. The new config is propagated back to the main thread via `TaskResult.config_update`, where `Witch::tick()` updates the `SharedConfig` (Arc<RwLock<Config>>). `is_db_only: false` (writes to filesystem), `signal_clear_scope: None`, `affected_inodes: empty`. No spawned computations or signal effects.
+
+### Genre Vocabulary Operations
+
+| Mutation | Spawns Mutations | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
+|----------|------------------|---------------------|-----------------|-----------------|-------|
+| EditGenreVocabulary | — | **ImportGenresFromTags** | — | — | DB-only — writes `genre_names`, `genre_aliases`, `genre_implies`, and (on Merge) re-points `inode_genres` rows. Carries a `Vec<GenreVocabularyOp>` (AddName / AddAlias / RemoveAlias / AddImplication / RemoveImplication / MergeGenres). Singleton DecisionKey `GenreVocabularyEdit` — re-staging within a transaction replaces the prior batch. Each batch runs in one DB write transaction; failures abort the whole batch. `signal_clear_scope: None`, `affected_inodes: empty`, `recomputation_scope: EMPTY`. The spawned `ImportGenresFromTags` is dirty-inode-aware: it re-resolves only inodes currently flagged in `dirty_inodes(import_genres_from_tags)`. Previously-unresolved observations covering already-derived inodes will be picked up on the next TAGS-scope mutation that touches those inodes, or via a manual bootstrap (wipe `inode_genres` rows with `source=FileTagImport`). |
+
+The EditGenreVocabulary mutation is created by the Genre Vocabulary editor (TUI or React `/genres` view) when the operator commits a batch of vocabulary edits (mapping unresolved observations to canonical names, adding aliases or implications, merging duplicate canonical entries). The web frontend builds the op list and POSTs it to `/tx/edit-genre-vocabulary`, which fans out to `TransactionPayload::BatchEditGenreVocabulary` → `Witch::batch_edit_genre_vocabulary()`, which stages a single Decision with one EditGenreVocabulary mutation on the active (or freshly-opened) transaction. The TUI builds the ops in-process and stages directly via `ConfirmationGesture`. MergeGenres is destructive (deletes the merged-from row) and is validated by the executor (refuses self-merge; requires both ids to exist). Other ops use `INSERT OR IGNORE` / `DELETE` so duplicate edits within a batch are absorbed.
+
+### Genre Promotion (Phase 6)
+
+| Decision Key | Spawns Mutations | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
+|----------|------------------|---------------------|-----------------|-----------------|-------|
+| GenrePromote { release_id } | **ApplyTagOps** (staged), **FlushTagsToDisk** (chain-emitted by ApplyTagOps executor per inode) | — | — | Standard ApplyTagOps signal-clear scope: `MutableOnly` for the affected corpus inodes | One Decision per release, keyed by release_id (re-staging replaces). Mutations are produced by the pure builder `build_genre_promotion_decisions` (`crates/mm-meta/src/external/genre_promote.rs`) which flattens `inode_genres` ledger rows + operator chip exclusions through the configured `GenreWriteLayout` (default: `MergedGenresFirst`). One ApplyTagOps mutation per packed inode (each carries the inode's own TagOp set — per-inode tag granularity preserved; two inodes in the same release CAN land different tag sets). The `inode_genres` ledger itself is NEVER mutated — promotion is a one-way flush. |
+
+Two server-side staging entrypoints share the same builder:
+
+1. **Per-release explicit** — `TransactionPayload::BatchPromoteGenres { applications }`, route `POST /tx/promote-genres`. Each `GenrePromotionApplication` carries `release_id`, `inodes` (empty = server fans out to all packed inodes for the release), and `excluded` (release-level chip exclusions). The chip-edit UI flow.
+2. **Inode-list bulk** — `TransactionPayload::BatchPromoteGenresForInodes { inodes }`, route `POST /tx/promote-genres-for-inodes`. Caller supplies a flat inode list; server resolves each to its packed release via `signal_release_packing` and fans out to per-release applications with empty exclusions (full promote). Over `opinions.genre_write_back.bulk_cap` (default 5000) → `TransactionError::Other`. The "search → promote everything" flow.
+
+Both endpoints invoke `Witch::run_promote_pipeline` which loads ledger + canonical names + current corpus_tags for the union of affected inodes, runs the pure builder, and stages one `GenrePromote` Decision per release. The `ApplyTagOps` executor handles the disk flush via its existing chain-emit of `FlushTagsToDisk`.
+
+**Write-back policy** is configured under `opinions.genre_write_back.layout` (KDL block `genre-write-back`):
+- `merged-genres-first` (default): GENRE = genres ∪ styles (genres ordered first).
+- `separate-genre-style`: GENRE = genres only, STYLE = styles only.
+- `umbrellas-genre-specifics-style`: reserved for closure-driven umbrella derivation; currently equivalent to `merged-genres-first` (requires populated `genre_implies` graph to differentiate).
+
+Authoritative semantic: the staged TagOp set makes the file's GENRE/STYLE values EQUAL to the flattened ledger view. Any current value not in the expected set is dropped. Operators wanting to preserve non-ledger values must first map them via the vocabulary editor so they land in the ledger as `FileTagImport`.
 
 ---
 

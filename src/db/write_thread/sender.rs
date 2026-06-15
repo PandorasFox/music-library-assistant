@@ -738,6 +738,96 @@ impl SignalWriteSender {
         });
     }
 
+    /// Upsert a Discogs release cache entry (witnessless — only the scheduler
+    /// thread invokes this from its result handler).
+    pub fn upsert_discogs_release_cache(
+        &self,
+        release_id: &str,
+        raw_json: Vec<u8>,
+        fetched_at: i64,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::UpsertDiscogsReleaseCache {
+            release_id: release_id.to_string(),
+            raw_json,
+            fetched_at,
+        });
+    }
+
+    /// Upsert a row in `app_metadata`. Used for computation watermarks
+    /// (e.g. the last successful Discogs ledger run timestamp).
+    pub fn set_app_metadata(
+        &self,
+        key: &str,
+        value: &str,
+        _witness: &impl SignalWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::SetAppMetadata {
+            key: key.to_string(),
+            value: value.to_string(),
+        });
+    }
+
+    // =========================================================================
+    // Genre Ledger Operations
+    // =========================================================================
+
+    /// Bulk write rows into `inode_genres` (genre provenance ledger).
+    pub fn write_inode_genres(
+        &self,
+        rows: Vec<super::executor::InodeGenreRow>,
+        _witness: &impl SignalWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::WriteInodeGenres { rows });
+    }
+
+    /// Clear `inode_genres` rows for one inode scoped to a single provenance source.
+    /// Used by re-ingest paths so removed-tag values don't linger.
+    pub fn clear_inode_genres_for_source(
+        &self,
+        inode: i64,
+        source: i64,
+        _witness: &impl SignalWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self
+            .tx
+            .send(DbWriteOp::ClearInodeGenresForSource { inode, source });
+    }
+
+    /// Bump or insert raw-value rows in `unresolved_genre_observations`.
+    /// Phase 2 alias editor surfaces these for operator-driven mapping.
+    pub fn bump_unresolved_genre_observations(
+        &self,
+        observations: Vec<super::executor::UnresolvedGenreObservation>,
+        _witness: &impl SignalWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self
+            .tx
+            .send(DbWriteOp::BumpUnresolvedGenreObservations { observations });
+    }
+
+    /// Apply a batch of genre-vocabulary edit ops and block until the
+    /// db_thread reports success or failure. Used by the
+    /// `EditGenreVocabularyMutation` executor so the operator's transaction
+    /// gets a precise pass/fail rather than silent fire-and-forget.
+    pub fn apply_genre_vocabulary_edits_blocking(
+        &self,
+        ops: Vec<mm_meta::mutations::genre_vocabulary::GenreVocabularyOp>,
+    ) -> anyhow::Result<()> {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        self.mark_enqueued();
+        let _ = self
+            .tx
+            .send(DbWriteOp::ApplyGenreVocabularyEdits { ops, result_tx: tx });
+        rx.recv()
+            .map_err(|_| anyhow::anyhow!("db_thread disconnected during vocabulary edit"))?
+            .map_err(|e| anyhow::anyhow!("vocabulary edit failed: {e}"))
+    }
+
     // =========================================================================
     // Release Packing Pipeline Operations
     // =========================================================================

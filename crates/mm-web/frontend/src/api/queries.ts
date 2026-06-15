@@ -21,6 +21,11 @@ import type {
   PackingKnotData,
   DirectoryClusterModalData,
   VaOverrideReview,
+  GenreVocabulary,
+  UnresolvedGenreObservations,
+  GenrePromotionReview,
+  GenrePromotionInodeDetail,
+  GenreCoverageSummary,
 } from "./generated/types";
 
 // -- Query keys --
@@ -53,6 +58,12 @@ export const queryKeys = {
   directoryClusters: ["directory-cluster-data"] as const,
   releaseOverlaps: ["release-overlap-data"] as const,
   vaOverrideReview: ["va-override-review"] as const,
+  genreVocabulary: ["genre-vocabulary"] as const,
+  unresolvedGenres: ["unresolved-genre-observations"] as const,
+  genrePromotionReview: ["genre-promotion-review"] as const,
+  genrePromotionInodeDetail: (release_id: string) =>
+    ["genre-promotion-inode-detail", release_id] as const,
+  genreCoverageSummary: ["genre-coverage-summary"] as const,
 } as const;
 
 // -- Hooks --
@@ -237,6 +248,51 @@ export function useVaOverrideReview() {
     queryKey: queryKeys.vaOverrideReview,
     queryFn: () =>
       get<VaOverrideReview>(`/queries/va-override-review`),
+  });
+}
+
+export function useGenreVocabulary() {
+  return useQuery({
+    queryKey: queryKeys.genreVocabulary,
+    queryFn: () => get<GenreVocabulary>(`/queries/genre-vocabulary`),
+  });
+}
+
+export function useUnresolvedGenreObservations() {
+  return useQuery({
+    queryKey: queryKeys.unresolvedGenres,
+    queryFn: () =>
+      get<UnresolvedGenreObservations>(`/queries/unresolved-genre-observations`),
+  });
+}
+
+export function useGenrePromotionReview() {
+  return useQuery({
+    queryKey: queryKeys.genrePromotionReview,
+    queryFn: () =>
+      get<GenrePromotionReview>(`/queries/genre-promotion-review`),
+  });
+}
+
+export function useGenrePromotionInodeDetail(release_id: string | null) {
+  return useQuery({
+    queryKey: queryKeys.genrePromotionInodeDetail(release_id ?? ""),
+    enabled: release_id != null && release_id.length > 0,
+    queryFn: () =>
+      get<GenrePromotionInodeDetail>(
+        `/queries/genre-promotion-inode-detail?release_id=${encodeURIComponent(
+          release_id ?? "",
+        )}`,
+      ),
+  });
+}
+
+export function useGenreCoverageSummary() {
+  return useQuery({
+    queryKey: queryKeys.genreCoverageSummary,
+    queryFn: () =>
+      get<GenreCoverageSummary>(`/queries/genre-coverage-summary`),
+    refetchInterval: 30_000,
   });
 }
 

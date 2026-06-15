@@ -40,6 +40,7 @@ use crate::db::Database;
 use crate::external::acoustid::{AcoustIDClient, LookupOutcome};
 use crate::external::coverart::CoverArtClient;
 use crate::external::deezer::DeezerClient;
+use crate::external::discogs::{DiscogsClient, DiscogsLookupOutcome};
 use crate::external::musicbrainz::{MbLookupOutcome, MusicBrainzClient};
 use crate::meta::external::ExternalSource;
 use mm_meta::config::CoverArtSanctity;
@@ -268,6 +269,28 @@ async fn scheduler_loop(
                         });
                     }
                 }
+
+                // Dispatch Discogs if enabled, limiter ready, and queue non-empty.
+                // Existing-cache check happens at queue-population time; we don't
+                // re-check per tick (Discogs entries don't have a TTL — once fetched,
+                // they stay until an operator manually invalidates).
+                if b.discogs_enabled
+                    && !b.discogs_queue.is_empty()
+                    && b.discogs_limiter.time_until_ready() == Duration::ZERO
+                {
+                    let release_id = b.discogs_queue.pop_front().unwrap();
+                    b.discogs_limiter.mark_request();
+                    b.discogs_in_flight += 1;
+                    let client = b.discogs_client.clone();
+                    let id = release_id.clone();
+                    in_flight.spawn(async move {
+                        let outcome = execute_discogs_fetch(&client, &id).await;
+                        FetchResult::Discogs {
+                            outcome,
+                            release_id,
+                        }
+                    });
+                }
             }
 
             Some(result) = in_flight.join_next(), if !in_flight.is_empty() => {
@@ -342,6 +365,28 @@ async fn scheduler_loop(
                                     }
                                 }
 
+                                // Chain-emit: if this was a Release fetch, the cache
+                                // executor has now refreshed `mb_release_discogs_links`.
+                                // Pick up any new Discogs id for the queue so the
+                                // current pass can flow through to Discogs without
+                                // waiting for the next batch.
+                                if b.discogs_enabled && item.kind == MbEntityKind::Release {
+                                    if let Ok(Some(discogs_id)) =
+                                        db.discogs_release_for_mb_release(&item.mbid)
+                                    {
+                                        let needs_fetch = !db
+                                            .discogs_release_cached(&discogs_id)
+                                            .unwrap_or(true);
+                                        if needs_fetch
+                                            && b.discogs_queued_ids.insert(discogs_id.clone())
+                                        {
+                                            b.discogs_queue.push_back(discogs_id);
+                                            b.discogs_stats.total += 1;
+                                            b.discogs_done = false;
+                                        }
+                                    }
+                                }
+
                                 b.mb_limiter.record_success();
                             }
                             MbOutcome::NotFound => {
@@ -372,6 +417,40 @@ async fn scheduler_loop(
                                     ));
                                     b.mb_stats.processed += 1;
                                 }
+                            }
+                        }
+                        send_progress(&message_tx, b);
+                    }
+
+                    FetchResult::Discogs {
+                        outcome,
+                        release_id,
+                    } => {
+                        b.discogs_in_flight -= 1;
+                        match outcome {
+                            DiscogsOutcome::Found => {
+                                b.discogs_stats.matched += 1;
+                                b.discogs_stats.processed += 1;
+                                b.discogs_limiter.record_success();
+                            }
+                            DiscogsOutcome::NotFound => {
+                                b.discogs_stats.no_match += 1;
+                                b.discogs_stats.processed += 1;
+                                b.discogs_limiter.record_success();
+                            }
+                            DiscogsOutcome::RateLimited => {
+                                crate::logging::log_general(format!(
+                                    "[FETCH] Discogs rate limited for release {}",
+                                    release_id
+                                ));
+                                b.discogs_stats.retries += 1;
+                                b.discogs_queue.push_front(release_id);
+                                b.discogs_limiter.apply_backoff();
+                                b.discogs_limiter.mark_request();
+                            }
+                            DiscogsOutcome::Error => {
+                                b.discogs_stats.retries += 1;
+                                b.discogs_stats.processed += 1;
                             }
                         }
                         send_progress(&message_tx, b);
@@ -414,7 +493,30 @@ async fn scheduler_loop(
                     });
                 }
 
-                if b.acoustid_done && b.mb_done && in_flight.is_empty() {
+                // Discogs "done" is gated on MB done as well: MB release fetches
+                // can chain-enqueue new Discogs work via the linkage table, so
+                // we mustn't declare Discogs done while MB is still discovering
+                // new releases.
+                if !b.discogs_done
+                    && b.mb_done
+                    && b.discogs_queue.is_empty()
+                    && b.discogs_in_flight == 0
+                {
+                    b.discogs_done = true;
+                    crate::logging::log_general(format!(
+                        "[FETCH] Discogs done: {} processed, {} cached, {} not-found, {} retries",
+                        b.discogs_stats.processed,
+                        b.discogs_stats.matched,
+                        b.discogs_stats.no_match,
+                        b.discogs_stats.retries,
+                    ));
+                    let _ = message_tx.send(SchedulerMessage::SourceDone {
+                        source: ExternalSource::Discogs,
+                        stats: b.discogs_stats.clone(),
+                    });
+                }
+
+                if b.acoustid_done && b.mb_done && b.discogs_done && in_flight.is_empty() {
                     let _ = message_tx.send(SchedulerMessage::AllDone);
                     batch = None;
                 }
@@ -500,19 +602,40 @@ async fn scheduler_loop(
 struct BatchState {
     acoustid_queue: VecDeque<AcoustIdQueueItem>,
     mb_queue: VecDeque<MbQueueItem>,
+    /// Discogs release IDs to fetch. Populated at `init_batch` time from
+    /// `mb_release_discogs_links` LEFT JOIN with `discogs_release_cache`, and
+    /// extended on the fly when an MB release fetch discovers a new link.
+    discogs_queue: VecDeque<String>,
     acoustid_limiter: RateLimiter,
     mb_limiter: AdaptiveRateLimiter,
+    /// Discogs uses an adaptive limiter even though the API exposes a flat
+    /// 60/min ceiling — sustained bursts can still trip 429s, so we treat
+    /// the configured rps as a hard cap that we may back off below.
+    discogs_limiter: AdaptiveRateLimiter,
     acoustid_stats: SourceProgress,
     mb_stats: SourceProgress,
+    discogs_stats: SourceProgress,
     acoustid_done: bool,
     mb_done: bool,
+    discogs_done: bool,
     mb_queued_ids: HashSet<String>,
+    /// Discogs release IDs we've already queued or in-flight. Prevents
+    /// duplicate enqueues when the same Discogs id is reachable from multiple
+    /// MB releases (e.g., master ↔ release relationships).
+    discogs_queued_ids: HashSet<String>,
     /// Number of AcoustID items currently in-flight (dispatched, not yet returned).
     acoustid_in_flight: usize,
     /// Number of MB items currently in-flight.
     mb_in_flight: usize,
+    /// Number of Discogs items currently in-flight.
+    discogs_in_flight: usize,
     acoustid_client: AcoustIDClient,
     mb_client: MusicBrainzClient,
+    discogs_client: DiscogsClient,
+    /// True when a Discogs token is configured. When false the scheduler
+    /// short-circuits the Discogs queue and marks the source done with
+    /// `processed = total = 0` so the run still terminates cleanly.
+    discogs_enabled: bool,
     auto_enrich: bool,
     ttl_secs: i64,
     mb_rps_ceiling: u32,
@@ -562,7 +685,7 @@ fn init_batch(
     db: &Database,
     shared_config: &SharedConfig,
 ) -> BatchState {
-    let (api_key, rps, mb_rps, mb_base_url, auto_enrich, ttl_secs, excluded) = {
+    let (api_key, rps, mb_rps, mb_base_url, auto_enrich, ttl_secs, excluded, discogs_token, discogs_rps) = {
         let config = shared_config.read().expect("SharedConfig lock poisoned");
         let em = &config.opinions.external_matching;
         (
@@ -573,11 +696,14 @@ fn init_batch(
             em.auto_enrich_on_match,
             (em.mb_cache_ttl_days as i64) * 86400,
             config.acoustid_excluded_db_prefixes(),
+            em.discogs_token.clone(),
+            em.discogs_requests_per_second,
         )
     };
 
     let mut acoustid_queue: VecDeque<AcoustIdQueueItem> = VecDeque::new();
     let mut mb_queue: VecDeque<MbQueueItem> = VecDeque::new();
+    let mut discogs_queue: VecDeque<String> = VecDeque::new();
 
     let acoustid_limiter = RateLimiter::new_acoustid(rps);
     let is_local_mirror = mb_base_url != crate::config::ExternalMatchingConfig::DEFAULT_MB_BASE_URL;
@@ -586,12 +712,16 @@ fn init_batch(
     } else {
         AdaptiveRateLimiter::new(mb_rps)
     };
+    let discogs_limiter = AdaptiveRateLimiter::new(discogs_rps);
 
     let mut acoustid_stats = SourceProgress::default();
     let mut mb_stats = SourceProgress::default();
+    let mut discogs_stats = SourceProgress::default();
     let mut acoustid_done = false;
     let mut mb_done = false;
+    let mut discogs_done = false;
     let mut mb_queued_ids: HashSet<String> = HashSet::new();
+    let mut discogs_queued_ids: HashSet<String> = HashSet::new();
 
     // Populate AcoustID queue
     if api_key.is_empty() {
@@ -613,24 +743,56 @@ fn init_batch(
         mb_done = true;
     }
 
+    // Populate Discogs queue from any MB→Discogs linkage rows whose Discogs
+    // JSON isn't yet cached. Requires a configured token.
+    let discogs_enabled = !discogs_token.is_empty();
+    if discogs_enabled {
+        if let Ok(ids) = db.get_unfetched_discogs_release_ids() {
+            for id in ids {
+                if discogs_queued_ids.insert(id.clone()) {
+                    discogs_queue.push_back(id);
+                }
+            }
+            discogs_stats.total = discogs_queue.len();
+        }
+        if discogs_queue.is_empty() {
+            // Empty queue still terminates cleanly; mark done so AllDone fires.
+            discogs_done = true;
+        }
+    } else {
+        crate::logging::log_general(
+            "[FETCH] No Discogs token configured; skipping Discogs queue",
+        );
+        discogs_done = true;
+    }
+
     // Build async clients
     let acoustid_client = AcoustIDClient::new(api_key);
     let mb_client = MusicBrainzClient::new(&mb_base_url);
+    let discogs_client = DiscogsClient::new(discogs_token);
 
     BatchState {
         acoustid_queue,
         mb_queue,
+        discogs_queue,
         acoustid_limiter,
         mb_limiter,
+        discogs_limiter,
         acoustid_stats,
         mb_stats,
+        discogs_stats,
         acoustid_done,
         mb_done,
+        discogs_done,
         mb_queued_ids,
+        discogs_queued_ids,
         acoustid_in_flight: 0,
         mb_in_flight: 0,
+        discogs_in_flight: 0,
         acoustid_client,
         mb_client,
+        discogs_client,
+        discogs_enabled,
         auto_enrich,
         ttl_secs,
         mb_rps_ceiling: mb_rps,
@@ -700,6 +862,10 @@ enum FetchResult {
         outcome: MbOutcome,
         item: MbQueueItem,
     },
+    Discogs {
+        outcome: DiscogsOutcome,
+        release_id: String,
+    },
 }
 
 /// Scheduler-internal outcome from an AcoustID lookup.
@@ -713,6 +879,14 @@ enum AcoustIdOutcome {
 /// Scheduler-internal outcome from a MB fetch.
 enum MbOutcome {
     Found { discovered_entities: Vec<(MbEntityKind, String)> },
+    NotFound,
+    RateLimited,
+    Error,
+}
+
+/// Scheduler-internal outcome from a Discogs fetch.
+enum DiscogsOutcome {
+    Found,
     NotFound,
     RateLimited,
     Error,
@@ -749,6 +923,32 @@ async fn execute_acoustid_lookup(
     }
 }
 
+/// Execute a Discogs release fetch. Writes the raw JSON to
+/// `discogs_release_cache` on success. Does not chain-emit further fetches;
+/// the Phase 5 computation drains the cache asynchronously.
+async fn execute_discogs_fetch(
+    client: &DiscogsClient,
+    release_id: &str,
+) -> DiscogsOutcome {
+    match client.fetch_release(release_id).await {
+        Ok(DiscogsLookupOutcome::Found(raw_json)) => {
+            if let Some(sender) = write_thread::signal_sender() {
+                sender.upsert_discogs_release_cache(release_id, raw_json, now_unix());
+            }
+            DiscogsOutcome::Found
+        }
+        Ok(DiscogsLookupOutcome::NotFound) => DiscogsOutcome::NotFound,
+        Ok(DiscogsLookupOutcome::RateLimited) => DiscogsOutcome::RateLimited,
+        Err(e) => {
+            crate::logging::log_error(format!(
+                "[FETCH] Discogs release {} failed: {:#}",
+                release_id, e
+            ));
+            DiscogsOutcome::Error
+        }
+    }
+}
+
 /// Execute a MusicBrainz entity fetch. Writes cache + discovered entities to DB.
 async fn execute_mb_fetch(
     client: &MusicBrainzClient,
@@ -779,25 +979,30 @@ async fn execute_mb_fetch(
                 }
             }
 
-            // Extract and persist discovered entities (recordings only)
-            let discovered_entities = if kind == MbEntityKind::Recording {
-                let entities =
-                    extract_entities_from_recording(&raw_json, mbid)
-                        .unwrap_or_default();
+            // Extract and persist discovered entities. Recording fetches surface
+            // their credit artists + listed releases; release fetches surface the
+            // per-track recordings (so we end up with a per-recording cache row
+            // for every track on every fetched release — packing-time slot
+            // assignments via elimination/synthetic paths can then resolve to
+            // recordings the AcoustID chain never matched).
+            let discovered_entities = match kind {
+                MbEntityKind::Recording => {
+                    extract_entities_from_recording(&raw_json, mbid).unwrap_or_default()
+                }
+                MbEntityKind::Release => {
+                    extract_entities_from_release(&raw_json).unwrap_or_default()
+                }
+                MbEntityKind::Artist => Vec::new(),
+            };
 
-                if !entities.is_empty() {
-                    if let Some(sender) = write_thread::signal_sender() {
-                        let now = now_unix();
-                        for (ek, ref eid) in &entities {
-                            sender.insert_mb_known_entity(eid, ek.as_str(), Some(mbid), now);
-                        }
+            if !discovered_entities.is_empty() {
+                if let Some(sender) = write_thread::signal_sender() {
+                    let now = now_unix();
+                    for (ek, ref eid) in &discovered_entities {
+                        sender.insert_mb_known_entity(eid, ek.as_str(), Some(mbid), now);
                     }
                 }
-
-                entities
-            } else {
-                Vec::new()
-            };
+            }
 
             MbOutcome::Found { discovered_entities }
         }
@@ -1004,7 +1209,7 @@ fn populate_mb_queue(db: &Database, ttl_secs: i64, queue: &mut VecDeque<MbQueueI
     }
 }
 
-/// Send a combined progress snapshot for both sources.
+/// Send a combined progress snapshot for all three sources.
 fn send_progress(
     message_tx: &UnboundedSender<SchedulerMessage>,
     batch: &BatchState,
@@ -1012,8 +1217,11 @@ fn send_progress(
     let _ = message_tx.send(SchedulerMessage::Progress(FetchProgress {
         acoustid: batch.acoustid_stats.clone(),
         mb: batch.mb_stats.clone(),
+        discogs: batch.discogs_stats.clone(),
         acoustid_rps: batch.acoustid_limiter.effective_rps() as f32,
         mb_rps: batch.mb_limiter.current_rps() as f32,
+        discogs_rps: batch.discogs_limiter.current_rps() as f32,
+        discogs_enabled: batch.discogs_enabled,
     }));
 }
 
@@ -1055,6 +1263,50 @@ fn extract_entities_from_recording(
     for release in &recording.releases {
         if seen.insert(release.id.clone()) {
             entities.push((MbEntityKind::Release, release.id.clone()));
+        }
+    }
+
+    if entities.is_empty() {
+        None
+    } else {
+        Some(entities)
+    }
+}
+
+/// Extract per-track recording MBIDs (plus release-level credit artists) from a
+/// cached release JSON response.
+///
+/// The MB release endpoint inlines `media[].tracks[].recording.{id,title}` but
+/// not per-recording artist credits or relations. Surfacing those recording IDs
+/// here lets the scheduler chain-fetch each one, populating mb_recording_cache
+/// for downstream tag generation whether or not AcoustID ever matched the
+/// individual inode.
+fn extract_entities_from_release(raw_json: &[u8]) -> Option<Vec<(MbEntityKind, String)>> {
+    let release = crate::external::musicbrainz::parse_release(raw_json).ok()?;
+
+    let mut entities = Vec::new();
+    let mut seen = HashSet::new();
+
+    for credit in &release.artist_credit {
+        if seen.insert(credit.artist.id.clone()) {
+            entities.push((MbEntityKind::Artist, credit.artist.id.clone()));
+        }
+    }
+
+    for medium in &release.media {
+        for track in &medium.tracks {
+            if !track.recording.id.is_empty()
+                && seen.insert(track.recording.id.clone())
+            {
+                entities.push((MbEntityKind::Recording, track.recording.id.clone()));
+            }
+        }
+        for track in &medium.data_tracks {
+            if !track.recording.id.is_empty()
+                && seen.insert(track.recording.id.clone())
+            {
+                entities.push((MbEntityKind::Recording, track.recording.id.clone()));
+            }
         }
     }
 

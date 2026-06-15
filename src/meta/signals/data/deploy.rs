@@ -81,6 +81,12 @@ pub struct LibraryStaleSignal {
 impl_library_keyed!(LibraryStaleSignal, "library_stale");
 
 /// Multiple corpus files deploy to the same library path.
+///
+/// `inodes[0]` is the alphabetical tiebreak winner (by corpus path); the
+/// remaining entries are losers. `get_deploy_conflict_loser_inodes` reads
+/// the loser set so `DeriveDeployHealthSignals` can reclassify any library
+/// file currently hardlinked to a loser as Leftover — the deploy pipeline
+/// will stash it before deploying the winner.
 #[derive(Debug, Clone)]
 pub struct DeployConflictSignal {
     pub key: String,

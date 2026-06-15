@@ -46,6 +46,7 @@ pub fn execute_schedule_content_analysis(
             Computation::DetectInconsistentAlbumArtist,
             Computation::DetectCompoundTagValues,
             Computation::DetectDiscExtractions,
+            Computation::ImportGenresFromTags,
         ]);
     }
 
@@ -115,6 +116,18 @@ pub fn execute_schedule_content_analysis(
         ])
     {
         spawn.push(Computation::DeriveExternalMatches);
+    }
+
+    // Drain Discogs cache → ledger. Sensible at startup and whenever new
+    // external data lands (Discogs fetches set EXTERNAL on `SourceDone` with
+    // matched > 0). It is intentionally NOT on the TAGS bucket: most TAGS
+    // mutations (manual tag edits, canonicalizations) don't change which
+    // Discogs releases map to which inodes, so re-deriving every TAGS cycle
+    // was pure waste. Release-packing changes happen on TAGS too, but the
+    // ledger is idempotent under PK `(inode, genre_id, source, kind)` and
+    // the next EXTERNAL pass (or a manual rerun) will pick them up.
+    if run_all || s.contains(RecomputationScope::EXTERNAL) {
+        spawn.push(Computation::DeriveDiscogsGenreLedger);
     }
 
     let total_possible = 13; // approximate total without library-specific ones

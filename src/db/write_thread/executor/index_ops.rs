@@ -11,6 +11,30 @@ use super::super::types::*;
 // Shared Helpers
 // ============================================================================
 
+/// Write `signal_file_in_corpus` for an indexed corpus audio inode within an
+/// open transaction.
+///
+/// FileInCorpus is owned by the indexer: it's a deterministic consequence of
+/// inserting a corpus audio inode into the `inodes` table. Writing it in the
+/// same transaction as the inode row guarantees the signal cannot be lost to
+/// watcher-observation gaps (e.g. files arriving during a restart's initial
+/// scan window or post-AUTO-INDEX before the next DeriveCorpusSignals tick).
+fn write_corpus_file_presence(
+    tx: &rusqlite::Transaction<'_>,
+    inode: i64,
+    path: &str,
+) -> anyhow::Result<()> {
+    use crate::meta::signals::data::FileInCorpusSignal;
+    use crate::meta::signals::store::CorpusSignalStore;
+    FileInCorpusSignal {
+        inode,
+        path: path.to_string(),
+        generation: 0,
+    }
+    .insert(tx)?;
+    Ok(())
+}
+
 /// Current time as Unix epoch seconds (i64).
 pub(super) fn current_unix_secs() -> i64 {
     std::time::SystemTime::now()
@@ -216,6 +240,12 @@ pub(super) fn execute_index_audio_file(
 
     // Apply tags using the unified helper
     apply_tagset_to_inode(&tx, file_data.inode, tags, tag_table)?;
+
+    // FileInCorpus is owned by indexing — emit atomically with the inode insert
+    // so the signal cannot be lost to a watcher-observation gap.
+    if file_data.zone == "corpus" {
+        write_corpus_file_presence(&tx, file_data.inode, path)?;
+    }
 
     tx.commit()?;
     Ok(())
@@ -446,6 +476,12 @@ pub(super) fn execute_update_track_path_with_metadata(
         params![new_inode, old_inode],
     )?;
 
+    // FileInCorpus is owned by indexing — emit for the new corpus inode in the
+    // same transaction as the inode/audio_info inserts.
+    if zone == "corpus" {
+        write_corpus_file_presence(&tx, new_inode, new_path)?;
+    }
+
     // Clean up old inode if orphaned
     if old_inode != new_inode {
         let count: i64 = tx.query_row(
@@ -489,6 +525,9 @@ pub(super) fn execute_update_track_path_with_metadata(
                 "DELETE FROM dirty_inodes WHERE inode = ?1",
                 params![old_inode],
             )?;
+            // Sweep all corpus signals (FileInCorpus, HealthyFile, etc.) so the
+            // orphaned inode doesn't leave stale rows behind.
+            crate::meta::signals::registry::clear_all_corpus_signals(&tx, old_inode);
         }
     }
 
@@ -533,6 +572,10 @@ pub(super) fn execute_upsert_file_entry(
         "INSERT OR IGNORE INTO inode_paths (inode, zone, path) VALUES (?1, ?2, ?3)",
         params![file_entry.inode, zone, path],
     )?;
+
+    if zone == "corpus" {
+        write_corpus_file_presence(&tx, file_entry.inode, path)?;
+    }
 
     tx.commit()?;
     Ok(())

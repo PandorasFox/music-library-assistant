@@ -26,6 +26,7 @@ mod executor;
 pub mod types;
 mod sender;
 
+pub use executor::{InodeGenreRow, UnresolvedGenreObservation};
 pub use sender::SignalWriteSender;
 pub use types::*;
 
@@ -437,6 +438,49 @@ enum DbWriteOp {
         discovered_at: i64,
     },
 
+    /// Upsert a Discogs release cache entry.
+    UpsertDiscogsReleaseCache {
+        release_id: String,
+        raw_json: Vec<u8>,
+        fetched_at: i64,
+    },
+
+    /// Upsert a row in the `app_metadata` key/value table. Used for
+    /// computation watermarks (e.g. last Discogs ledger run timestamp).
+    SetAppMetadata {
+        key: String,
+        value: String,
+    },
+
+    // =========================================================================
+    // Genre Ledger Operations (provenance-tracked per-inode genre assertions)
+    // =========================================================================
+    /// Bulk insert/upsert rows into `inode_genres` (the genre ledger).
+    WriteInodeGenres {
+        rows: Vec<executor::InodeGenreRow>,
+    },
+
+    /// Delete `inode_genres` rows for one (inode, source) pair before re-ingest.
+    /// Removed-tag values stop lingering after the importer re-runs.
+    ClearInodeGenresForSource {
+        inode: i64,
+        source: i64,
+    },
+
+    /// Bump the (raw_value, source) row in `unresolved_genre_observations`,
+    /// inserting count=1 on conflict.
+    BumpUnresolvedGenreObservations {
+        observations: Vec<executor::UnresolvedGenreObservation>,
+    },
+
+    /// Apply a batch of genre-vocabulary edits in one transaction and report
+    /// success back to the calling mutation executor. Sync-result, modeled
+    /// after `ExecuteVacuum`/`ApplyReconciliation`.
+    ApplyGenreVocabularyEdits {
+        ops: Vec<mm_meta::mutations::genre_vocabulary::GenreVocabularyOp>,
+        result_tx: std::sync::mpsc::SyncSender<Result<(), String>>,
+    },
+
     // =========================================================================
     // Shutdown
     // =========================================================================
@@ -535,6 +579,12 @@ impl DbWriteOp {
             DbWriteOp::UpsertCaaReleaseCache { .. } => "UpsertCaaReleaseCache",
             DbWriteOp::UpsertDeezerIsrcCache { .. } => "UpsertDeezerIsrcCache",
             DbWriteOp::InsertMbKnownEntity { .. } => "InsertMbKnownEntity",
+            DbWriteOp::UpsertDiscogsReleaseCache { .. } => "UpsertDiscogsReleaseCache",
+            DbWriteOp::SetAppMetadata { .. } => "SetAppMetadata",
+            DbWriteOp::WriteInodeGenres { .. } => "WriteInodeGenres",
+            DbWriteOp::ClearInodeGenresForSource { .. } => "ClearInodeGenresForSource",
+            DbWriteOp::BumpUnresolvedGenreObservations { .. } => "BumpUnresolvedGenreObservations",
+            DbWriteOp::ApplyGenreVocabularyEdits { .. } => "ApplyGenreVocabularyEdits",
             DbWriteOp::ExecuteVacuum { .. } => "ExecuteVacuum",
             DbWriteOp::ApplyReconciliation { .. } => "ApplyReconciliation",
             DbWriteOp::TruncatePackingTables => "TruncatePackingTables",
@@ -560,6 +610,9 @@ impl DbWriteOp {
             DbWriteOp::WritePackingScores { rows } => rows.len(),
             DbWriteOp::WritePackingCandidates { rows } => rows.len(),
             DbWriteOp::WritePendingAcoustIdSubmissions { rows } => rows.len(),
+            DbWriteOp::WriteInodeGenres { rows } => rows.len(),
+            DbWriteOp::BumpUnresolvedGenreObservations { observations } => observations.len(),
+            DbWriteOp::ApplyGenreVocabularyEdits { ops, .. } => ops.len(),
             _ => 1,
         }
     }
@@ -739,6 +792,16 @@ fn run_db_thread(signal_rx: Receiver<DbWriteOp>, stats: Arc<SharedStats>) {
                 if result.is_ok() {
                     crate::logging::log_general("[DB_THREAD] Schema reconciliation completed");
                 }
+                let _ = result_tx.send(result);
+                stats.queue_depth.fetch_sub(1, Ordering::Relaxed);
+                if stats.queue_depth.load(Ordering::Relaxed) == 0 {
+                    stats.queue_empty.store(true, Ordering::Release);
+                }
+            }
+            Ok(DbWriteOp::ApplyGenreVocabularyEdits { ops, result_tx }) => {
+                let result =
+                    executor::execute_apply_genre_vocabulary_edits(&db, &ops)
+                        .map_err(|e| format!("{:#}", e));
                 let _ = result_tx.send(result);
                 stats.queue_depth.fetch_sub(1, Ordering::Relaxed);
                 if stats.queue_depth.load(Ordering::Relaxed) == 0 {

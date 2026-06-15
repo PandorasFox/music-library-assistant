@@ -546,6 +546,40 @@ impl super::Witch {
             staging.inode_tags.len(),
         ));
 
+        // 5b. Self-heal missing per-recording cache rows. Packing can route an
+        //     inode to a track slot via paths that never went through AcoustID
+        //     (pinned synthetics, elimination matches), so the slot's recording
+        //     may not be cached even though the packing tier says Perfect. Tag
+        //     generation needs each recording's full artist_credit + relations,
+        //     so seed the missing IDs into mb_known_entities, kick a fetch, and
+        //     ask the operator to retry rather than silently dropping tracks.
+        let missing_recordings: Vec<String> = all_recording_ids
+            .iter()
+            .filter(|rid| !staging.bundle.recordings.contains_key(*rid))
+            .cloned()
+            .collect();
+        if !missing_recordings.is_empty() {
+            crate::logging::log_general(format!(
+                "[BATCH_APPROVE] {} recording(s) missing from MB cache — seeding + triggering fetch",
+                missing_recordings.len(),
+            ));
+            if let Some(sender) = crate::db::write_thread::signal_sender() {
+                let now = chrono::Utc::now().timestamp();
+                for rid in &missing_recordings {
+                    sender.insert_mb_known_entity(rid, "recording", Some("batch_approve"), now);
+                }
+            }
+            // Drop read locks before kicking the fetch (scheduler thread will
+            // be reading the DB).
+            drop(read_db);
+            drop(db);
+            let _ = self.request_external_fetch();
+            return Err(TransactionError::Other(format!(
+                "Fetching {} missing MusicBrainz recording(s) — retry approval in a moment",
+                missing_recordings.len(),
+            )));
+        }
+
         // 6. Build decisions (pure transformation, no DB).
         let (decisions, summary) =
             mm_meta::external::approval::build_release_approval_decisions(
@@ -744,5 +778,319 @@ impl super::Witch {
         }
 
         Ok(summary)
+    }
+
+    /// Stage per-release promotion decisions on the active transaction
+    /// (opening a fresh one if none active). Mirrors `batch_apply_va_overrides`:
+    /// loads ledger + canonical names + current tags from a read-only
+    /// snapshot, runs the pure builder, stages one decision per release with
+    /// `GenrePromote { release_id }` as the key (re-staging replaces).
+    pub fn batch_promote_genres(
+        &mut self,
+        mut applications: Vec<mm_meta::external::genre_promote::GenrePromotionApplication>,
+    ) -> Result<mm_meta::protocol::GenrePromotionStagingSummary, TransactionError> {
+        if applications.is_empty() {
+            return Err(TransactionError::Other(
+                "no genre-promotion applications supplied".to_string(),
+            ));
+        }
+
+        // Server-side inode resolution: an application with `inodes` empty
+        // means "promote every packed inode for this release". Lets the
+        // client send chip exclusions without needing to fetch per-inode
+        // detail first.
+        let needs_resolution = applications.iter().any(|a| a.inodes.is_empty());
+        if needs_resolution {
+            let db_path = crate::config::get_db_path()
+                .map_err(|e| TransactionError::Other(format!("get_db_path: {e}")))?;
+            let db = crate::db::Database::open_read_only(&db_path)
+                .map_err(|e| TransactionError::Other(format!("open_read_only: {e}")))?;
+            let read_db = crate::db::ReadOnlyDb::new(&db);
+            for app in &mut applications {
+                if !app.inodes.is_empty() {
+                    continue;
+                }
+                let inodes = read_db
+                    .get_inodes_for_packed_release(&app.release_id)
+                    .unwrap_or_default();
+                app.inodes = inodes;
+            }
+        }
+
+        // After resolution, drop any application still empty (release with
+        // no packed inodes).
+        applications.retain(|a| !a.inodes.is_empty());
+        if applications.is_empty() {
+            return Err(TransactionError::Other(
+                "no packed inodes found for any selected release".to_string(),
+            ));
+        }
+
+        self.run_promote_pipeline(applications, /* extra_skipped_unpacked */ 0)
+    }
+
+    /// Inode-list bulk promotion. Resolves each inode to its packed release,
+    /// groups, builds one full-promote application per release, runs the
+    /// pure builder. Over `genre_write_back.bulk_cap` inodes → error.
+    pub fn batch_promote_genres_for_inodes(
+        &mut self,
+        inodes: Vec<i64>,
+    ) -> Result<mm_meta::protocol::GenrePromotionStagingSummary, TransactionError> {
+        use mm_meta::external::genre_promote::GenrePromotionApplication;
+        use std::collections::HashMap;
+
+        if inodes.is_empty() {
+            return Err(TransactionError::Other(
+                "no inodes supplied for bulk promotion".to_string(),
+            ));
+        }
+
+        let bulk_cap = self
+            .shared_config
+            .as_ref()
+            .and_then(|c| c.read().ok())
+            .map(|c| c.opinions.genre_write_back.bulk_cap)
+            .unwrap_or(5000);
+        if inodes.len() > bulk_cap {
+            return Err(TransactionError::Other(format!(
+                "inode-list bulk promotion: {} inodes exceeds bulk_cap {}; \
+                 split the batch or raise genre-write-back.bulk-cap",
+                inodes.len(),
+                bulk_cap,
+            )));
+        }
+
+        let db_path = crate::config::get_db_path()
+            .map_err(|e| TransactionError::Other(format!("get_db_path: {e}")))?;
+        let db = crate::db::Database::open_read_only(&db_path)
+            .map_err(|e| TransactionError::Other(format!("open_read_only: {e}")))?;
+        let read_db = crate::db::ReadOnlyDb::new(&db);
+
+        // Resolve each inode → its packed release. Build per-release groups.
+        let mut per_release: HashMap<String, Vec<i64>> = HashMap::new();
+        let mut skipped_unpacked: usize = 0;
+        let packing = read_db
+            .get_release_packing_signal_data()
+            .map_err(|e| TransactionError::Other(format!("packing scan: {e}")))?;
+        // inode → release_id map. Skips inodes with no packed release.
+        let mut inode_release: HashMap<i64, String> = HashMap::with_capacity(packing.len());
+        for (inode, _path, data) in packing {
+            inode_release.insert(inode, data.release_id);
+        }
+        for inode in &inodes {
+            match inode_release.get(inode) {
+                Some(release_id) => {
+                    per_release
+                        .entry(release_id.clone())
+                        .or_default()
+                        .push(*inode);
+                }
+                None => skipped_unpacked += 1,
+            }
+        }
+        drop(read_db);
+        drop(db);
+
+        if per_release.is_empty() {
+            return Err(TransactionError::Other(format!(
+                "no supplied inodes are packed to any release ({} skipped)",
+                skipped_unpacked,
+            )));
+        }
+
+        let applications: Vec<GenrePromotionApplication> = per_release
+            .into_iter()
+            .map(|(release_id, inodes)| GenrePromotionApplication {
+                release_id,
+                inodes,
+                excluded: Vec::new(),
+            })
+            .collect();
+
+        self.run_promote_pipeline(applications, skipped_unpacked)
+    }
+
+    /// Shared pipeline used by both promote entrypoints:
+    /// 1. Open a fresh read-only DB connection.
+    /// 2. Load ledger rows + canonical names + current corpus_tags for the
+    ///    union of inodes across all applications.
+    /// 3. Run the pure builder with the configured `GenreWriteLayout`.
+    /// 4. Open a transaction if none active, stage one decision per release.
+    fn run_promote_pipeline(
+        &mut self,
+        applications: Vec<mm_meta::external::genre_promote::GenrePromotionApplication>,
+        skipped_unpacked: usize,
+    ) -> Result<mm_meta::protocol::GenrePromotionStagingSummary, TransactionError> {
+        use mm_meta::external::genre_promote::build_genre_promotion_decisions;
+        use std::collections::HashSet;
+
+        let layout = self
+            .shared_config
+            .as_ref()
+            .and_then(|c| c.read().ok())
+            .map(|c| c.opinions.genre_write_back.layout)
+            .unwrap_or_default();
+
+        // Union of all inodes across applications.
+        let mut all_inodes_set: HashSet<i64> = HashSet::new();
+        for app in &applications {
+            for i in &app.inodes {
+                all_inodes_set.insert(*i);
+            }
+        }
+        let all_inodes: Vec<i64> = all_inodes_set.iter().copied().collect();
+
+        let db_path = crate::config::get_db_path()
+            .map_err(|e| TransactionError::Other(format!("get_db_path: {e}")))?;
+        let db = crate::db::Database::open_read_only(&db_path)
+            .map_err(|e| TransactionError::Other(format!("open_read_only: {e}")))?;
+        let read_db = crate::db::ReadOnlyDb::new(&db);
+
+        let ledger_by_inode = read_db
+            .get_ledger_for_inodes(&all_inodes)
+            .map_err(|e| TransactionError::Other(format!("load ledger: {e}")))?;
+        let canonical_names = read_db
+            .get_canonical_genre_names()
+            .map_err(|e| TransactionError::Other(format!("load canonical names: {e}")))?;
+        let current_tags_vec = read_db
+            .get_tags_batch_for_zone(&all_inodes, crate::db::types::Zone::Corpus)
+            .map_err(|e| TransactionError::Other(format!("load current tags: {e}")))?;
+        let mut current_tags: std::collections::HashMap<i64, Vec<(String, String)>> =
+            current_tags_vec.into_iter().collect();
+        // Inodes with no tag rows still need an entry so the builder treats
+        // them as "no current values" rather than "missing inode" (it just
+        // reads None.unwrap_or_default(), so this is cosmetic — but it makes
+        // the contract explicit).
+        for i in &all_inodes {
+            current_tags.entry(*i).or_default();
+        }
+
+        drop(read_db);
+        drop(db);
+
+        let (decisions, builder_summary) = build_genre_promotion_decisions(
+            &applications,
+            &ledger_by_inode,
+            &canonical_names,
+            &current_tags,
+            layout,
+        );
+
+        if decisions.is_empty() {
+            return Err(TransactionError::Other(format!(
+                "no tag operations produced (every selected inode was already \
+                 at the target tag set or had no ledger rows; \
+                 already_matching={}, no_ledger={}, skipped_empty={}, skipped_unpacked={})",
+                builder_summary.already_matching_inodes,
+                builder_summary.inodes_without_ledger,
+                builder_summary.skipped_empty_applications,
+                skipped_unpacked,
+            )));
+        }
+
+        let appending = self.pending_transaction.is_some();
+        if !appending {
+            let label = format!(
+                "Promote {}",
+                mm_utils::count_noun(builder_summary.staged_releases, "release"),
+            );
+            self.start_transaction(&label)?;
+        }
+
+        crate::logging::log_general(format!(
+            "[PROMOTE] {} {} releases [{} inodes] (already_matching={}, \
+             no_ledger={}, skipped_unpacked={})",
+            if appending { "appending" } else { "streaming" },
+            builder_summary.staged_releases,
+            builder_summary.staged_inodes,
+            builder_summary.already_matching_inodes,
+            builder_summary.inodes_without_ledger,
+            skipped_unpacked,
+        ));
+
+        for ad in decisions {
+            let key = DecisionKey::GenrePromote {
+                release_id: ad.release_id.clone(),
+            };
+            // Each per-inode op set becomes one ApplyTagOps mutation. The
+            // ApplyTagOps executor chain-emits FlushTagsToDisk per affected
+            // inode, so disk synchronization happens automatically — we don't
+            // (and can't, without path/zone resolution here) stage the disk
+            // flush directly.
+            let mutations: Vec<Mutation> = ad
+                .per_inode_ops
+                .into_iter()
+                .filter(|ops| !ops.is_empty())
+                .map(|ops| {
+                    Mutation::ApplyTagOps(ApplyTagOpsMutation {
+                        ops,
+                        zone: Zone::Corpus,
+                    })
+                })
+                .collect();
+            self.add_decision(
+                key,
+                Decision {
+                    label: ad.label,
+                    mutations,
+                },
+            )?;
+        }
+
+        Ok(mm_meta::protocol::GenrePromotionStagingSummary {
+            staged_releases: builder_summary.staged_releases,
+            staged_inodes: builder_summary.staged_inodes,
+            already_matching_inodes: builder_summary.already_matching_inodes,
+            inodes_without_ledger: builder_summary.inodes_without_ledger,
+            skipped_empty_applications: builder_summary.skipped_empty_applications,
+            skipped_unpacked_inodes: skipped_unpacked,
+        })
+    }
+
+    /// Stage a batch of genre-vocabulary edit ops on the active transaction
+    /// (or open a fresh one). Singleton-keyed: re-issuing within the same
+    /// transaction replaces the prior ops batch.
+    pub fn batch_edit_genre_vocabulary(
+        &mut self,
+        ops: Vec<mm_meta::mutations::genre_vocabulary::GenreVocabularyOp>,
+    ) -> Result<mm_meta::protocol::GenreVocabularySummary, TransactionError> {
+        use crate::meta::mutations::genre_vocabulary::EditGenreVocabularyMutation;
+
+        if ops.is_empty() {
+            return Err(TransactionError::Other(
+                "no genre-vocabulary ops supplied".to_string(),
+            ));
+        }
+
+        let staged_ops = ops.len();
+        let mutation = Mutation::EditGenreVocabulary(EditGenreVocabularyMutation { ops });
+
+        let appending = self.pending_transaction.is_some();
+        if !appending {
+            let label = format!(
+                "Genre vocabulary: {}",
+                mm_utils::count_noun(staged_ops, "edit"),
+            );
+            self.start_transaction(&label)?;
+        }
+
+        crate::logging::log_general(format!(
+            "[VOCAB] {} genre vocabulary edit batch ({} ops) into transaction",
+            if appending { "appending" } else { "streaming" },
+            staged_ops,
+        ));
+
+        self.add_decision(
+            DecisionKey::GenreVocabularyEdit,
+            Decision {
+                label: format!(
+                    "Apply {}",
+                    mm_utils::count_noun(staged_ops, "vocabulary edit"),
+                ),
+                mutations: vec![mutation],
+            },
+        )?;
+
+        Ok(mm_meta::protocol::GenreVocabularySummary { staged_ops })
     }
 }

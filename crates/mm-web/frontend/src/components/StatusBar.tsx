@@ -37,12 +37,23 @@ function FetchIndicator({ status }: { status: WitchStatus }) {
     return null;
 
   const fp = status.external_fetch_progress;
-  const total = fp.acoustid.total + fp.mb.total;
-  const processed = fp.acoustid.processed + fp.mb.processed;
+  // Per-source breakdown so an at-a-glance reader can tell *which* source is
+  // bottlenecking. Discogs only renders if enabled (token configured) and has
+  // queued work.
+  const parts: string[] = [];
+  if (fp.acoustid.total > 0) {
+    parts.push(`AID ${fp.acoustid.processed}/${fp.acoustid.total}`);
+  }
+  if (fp.mb.total > 0) {
+    parts.push(`MB ${fp.mb.processed}/${fp.mb.total}`);
+  }
+  if (fp.discogs_enabled && fp.discogs.total > 0) {
+    parts.push(`DG ${fp.discogs.processed}/${fp.discogs.total}`);
+  }
 
   return (
     <span className="status-fetch">
-      Fetch {processed}/{total}
+      Fetch {parts.length > 0 ? parts.join(" + ") : "active"}
     </span>
   );
 }

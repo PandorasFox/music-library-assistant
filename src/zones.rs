@@ -22,15 +22,14 @@ pub trait AudioZone: Send + Sync + 'static {
     const ZONE: Zone;
     const ZONE_STR: &'static str;
 
-    /// Signal emitted when a file is first observed on disk in this zone.
+    /// Signal that a corpus audio inode is indexed in this zone. Written by the
+    /// indexing executor inside the same transaction as the inode insert.
     type FilePresenceSignal: CorpusSignalStore;
     /// Signal for files on disk but not yet indexed (no audio_info).
     type UnindexedSignal: CorpusSignalStore;
     /// Signal for files that are indexed and verified healthy.
     type HealthySignal: CorpusSignalStore;
 
-    /// Construct the file-presence signal write for this zone.
-    fn file_presence_signal(inode: i64, path: String, generation: u8) -> TypedSignalWrite;
     /// Construct the unindexed signal write for this zone.
     fn unindexed_signal(inode: i64, path: String) -> TypedSignalWrite;
     /// Construct the healthy signal write for this zone.
@@ -133,14 +132,6 @@ impl AudioZone for CorpusZone {
     type FilePresenceSignal = crate::meta::signals::data::FileInCorpusSignal;
     type UnindexedSignal = crate::meta::signals::data::UnindexedFileSignal;
     type HealthySignal = crate::meta::signals::data::HealthyFileSignal;
-
-    fn file_presence_signal(inode: i64, path: String, generation: u8) -> TypedSignalWrite {
-        TypedSignalWrite::FileInCorpus(crate::meta::signals::data::FileInCorpusSignal {
-            inode,
-            path,
-            generation,
-        })
-    }
 
     fn unindexed_signal(inode: i64, path: String) -> TypedSignalWrite {
         TypedSignalWrite::UnindexedFile(crate::meta::signals::data::UnindexedFileSignal {

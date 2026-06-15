@@ -64,6 +64,134 @@ pub struct VaOverrideReview {
 }
 
 // ============================================================================
+// Genre Vocabulary (Phase 2 vocabulary editor)
+// ============================================================================
+
+/// One canonical genre row with its aliases and outgoing implication edges.
+///
+/// The vocabulary editor renders this as the primary row in the editor UI;
+/// aliases are inline chips, implications are a sibling list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenreNameEntry {
+    pub id: i64,
+    pub canonical_name: String,
+    pub display_name: String,
+    /// Aliases pointing to this canonical id. Includes the canonical self-alias.
+    pub aliases: Vec<String>,
+    /// Parents that this canonical id implies (genre_implies edges where
+    /// child_id == this.id). Stored as parent ids for compact wire format —
+    /// the UI resolves them against the same `GenreVocabulary.entries` list.
+    pub implies_parents: Vec<i64>,
+    /// Ledger row count attributing to this canonical id. Lets the editor
+    /// show coverage stats next to each name and warn before destructive ops
+    /// like Merge.
+    pub ledger_row_count: i64,
+}
+
+/// One pending raw genre observation that didn't resolve to any canonical row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnresolvedGenreRow {
+    pub raw_value: String,
+    /// `GenreSource` discriminant from `mm_meta::external::genre_source`.
+    pub source: u8,
+    pub observation_count: i64,
+    pub last_seen_at: i64,
+}
+
+/// Response type for `GetGenreVocabulary`.
+///
+/// Coverage stats live on each `GenreNameEntry`, so the editor can show
+/// "ledger coverage: N rows" per canonical name without a separate query.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GenreVocabulary {
+    pub entries: Vec<GenreNameEntry>,
+}
+
+/// Response type for `GetUnresolvedGenreObservations`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UnresolvedGenreObservations {
+    pub rows: Vec<UnresolvedGenreRow>,
+}
+
+// ============================================================================
+// Genre Promotion Review (Phase 6)
+// ============================================================================
+
+/// One chip the promotion UI renders inside a release row.
+///
+/// `inode_count` lets the UI grey out chips that apply to only a small
+/// minority of the release's inodes (a hint that the chip may be wrong).
+/// `sources_bits` is a packed bitset over `GenreSource` discriminants:
+/// bit (source - 1) is set when at least one ledger row with that source
+/// contributed the chip. The UI renders source badges from this.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenrePromotionChip {
+    pub genre_id: i64,
+    pub canonical_name: String,
+    /// 0 = Genre, 1 = Style. Matches `GenreKind`.
+    pub kind: u8,
+    pub inode_count: usize,
+    pub sources_bits: u8,
+}
+
+/// One release row in the primary promotion review list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenrePromotionReviewRow {
+    pub release_id: String,
+    pub release_title: String,
+    pub release_artist: String,
+    pub packed_inode_count: usize,
+    /// Union of (genre_id, kind) chips across every packed inode's ledger.
+    pub proposed_chips: Vec<GenrePromotionChip>,
+    /// Most-common current GENRE value across packed inodes (sampled at
+    /// query time). `None` if no packed inode has any GENRE tag.
+    pub current_genre_summary: Option<String>,
+    /// True iff every packed inode shares the same current GENRE value.
+    /// False when values disagree (the summary picks the most-common).
+    pub current_genre_uniform: bool,
+    /// Same `sources_bits` semantic as `GenrePromotionChip`, but rolled up
+    /// across all chips in the row. The UI uses this for the release-level
+    /// "Discogs-confirmed" badge.
+    pub sources_bits: u8,
+}
+
+/// Response type for `GetGenrePromotionReview`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GenrePromotionReview {
+    pub rows: Vec<GenrePromotionReviewRow>,
+}
+
+/// Per-inode chip breakdown — lazy-loaded by the expand affordance.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenrePromotionInodeRow {
+    pub inode: i64,
+    pub path: String,
+    pub chips: Vec<GenrePromotionChip>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GenrePromotionInodeDetail {
+    pub release_id: String,
+    pub rows: Vec<GenrePromotionInodeRow>,
+}
+
+/// Aggregate counters surfaced on the Health view + promotion view header.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct GenreCoverageSummary {
+    pub total_audio_inodes: i64,
+    pub inodes_with_any_ledger: i64,
+    pub inodes_with_discogs_ledger: i64,
+    pub inodes_with_filetag_ledger: i64,
+    /// Inodes whose ledger view (under default write policy) is already
+    /// present in `corpus_tags`. Cheap heuristic for "already promoted".
+    pub inodes_already_promoted: i64,
+    /// Ledger rows exist but `corpus_tags` doesn't match. The default
+    /// promotion list defaults to these.
+    pub pending_promotion: i64,
+    pub unresolved_observations: i64,
+}
+
+// ============================================================================
 // Recording Batch Result
 // ============================================================================
 

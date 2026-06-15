@@ -285,6 +285,70 @@ pub fn all_data_migrations() -> Vec<DataMigrationEntry> {
             },
         },
         DataMigrationEntry {
+            id: "2026-05-seed-canonical-genre-vocabulary",
+            description: "Seed genre_names + genre_aliases with a canonical core vocabulary so the alias editor has something to map TO. Idempotent: skips if any rows already exist.",
+            apply: |db| seed_canonical_genre_vocabulary(db),
+        },
+        DataMigrationEntry {
+            id: "2026-05-genre-aliases-composite-pk",
+            description: "Rebuild genre_aliases with composite PK (alias, genre_id) so one raw value can map to multiple canonical genres (e.g. comma-joined tags).",
+            apply: |db| {
+                let conn = db.conn();
+                // Detect already-migrated state via column count on the PK.
+                let already_composite: bool = conn
+                    .query_row(
+                        "SELECT sql FROM sqlite_master WHERE type='table' AND name='genre_aliases'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .ok()
+                    .map(|sql| sql.to_uppercase().contains("PRIMARY KEY (ALIAS, GENRE_ID)"))
+                    .unwrap_or(false);
+                if already_composite {
+                    crate::logging::log_general(
+                        "[MIGRATION] genre_aliases already composite-keyed; skipping rebuild",
+                    );
+                    return Ok(());
+                }
+                conn.execute_batch(
+                    "CREATE TABLE genre_aliases_new (
+                        alias TEXT NOT NULL COLLATE NOCASE,
+                        genre_id INTEGER NOT NULL REFERENCES genre_names(id) ON DELETE CASCADE,
+                        PRIMARY KEY (alias, genre_id)
+                    );
+                    INSERT OR IGNORE INTO genre_aliases_new (alias, genre_id)
+                        SELECT alias, genre_id FROM genre_aliases;
+                    DROP TABLE genre_aliases;
+                    ALTER TABLE genre_aliases_new RENAME TO genre_aliases;
+                    DROP INDEX IF EXISTS idx_genre_aliases_genre;
+                    CREATE INDEX idx_genre_aliases_genre ON genre_aliases(genre_id);",
+                )?;
+                let count: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM genre_aliases", [], |row| row.get(0))
+                    .unwrap_or(0);
+                crate::logging::log_general(format!(
+                    "[MIGRATION] genre_aliases rebuilt with composite PK: {} rows preserved",
+                    count,
+                ));
+                Ok(())
+            },
+        },
+        DataMigrationEntry {
+            id: "2026-05-wipe-mb-release-cache-for-url-rels-inc",
+            description: "Drop mb_release_cache rows so the scheduler re-fetches with `inc=...+url-rels` (needed to discover Discogs release links on each MB release).",
+            apply: |db| {
+                let dropped = db
+                    .conn()
+                    .execute("DELETE FROM mb_release_cache", [])
+                    .unwrap_or(0);
+                crate::logging::log_general(format!(
+                    "[MIGRATION] Cleared {} mb_release_cache rows to re-fetch with url-rels inc",
+                    dropped
+                ));
+                Ok(())
+            },
+        },
+        DataMigrationEntry {
             id: "2026-03-reseed-compound-tag-signals",
             description: "Re-dirty all compound-tag signal inodes (re-evaluate with plural-form check and MB-skip)",
             apply: |db| {
@@ -305,7 +369,142 @@ pub fn all_data_migrations() -> Vec<DataMigrationEntry> {
                 Ok(())
             },
         },
+        DataMigrationEntry {
+            id: "2026-05-backfill-file-in-corpus-from-index",
+            description: "Backfill signal_file_in_corpus for every indexed corpus audio inode \
+                          (FileInCorpus is now indexer-owned; this catches inodes that were \
+                          indexed during a watcher-observation gap and never received the signal).",
+            apply: |db| {
+                let inserted = db.conn().execute(
+                    "INSERT OR IGNORE INTO signal_file_in_corpus (inode, path, generation, data_hash) \
+                     SELECT p.inode, p.path, 0, 0 \
+                     FROM inode_paths p \
+                     JOIN inodes i ON i.inode = p.inode \
+                     JOIN audio_info a ON a.inode = p.inode \
+                     WHERE p.zone = 'corpus' AND i.is_dir = 0",
+                    [],
+                )?;
+                crate::logging::log_general(format!(
+                    "[MIGRATION] Backfilled {} signal_file_in_corpus rows for indexed corpus audio inodes",
+                    inserted,
+                ));
+                Ok(())
+            },
+        },
     ]
+}
+
+/// Seed the canonical genre vocabulary.
+///
+/// Populates `genre_names` with a small starter set of well-known genres and
+/// `genre_aliases` with their canonical self-aliases plus the most common
+/// spelling/punctuation variants seen in real-world tag data. The Phase 2
+/// vocabulary editor will let operators grow this over time.
+///
+/// Idempotent: if `genre_names` already has any rows the migration short-circuits,
+/// so re-applying it on a corpus where an operator has curated the vocabulary
+/// won't trample their work.
+fn seed_canonical_genre_vocabulary(db: &Database) -> Result<()> {
+    // Data migrations execute inside the reconciler's outer transaction.
+    // Don't open a nested one — SQLite refuses with "cannot start a
+    // transaction within a transaction" and the whole reconciliation aborts.
+    let conn = db.conn();
+
+    let existing: i64 = conn
+        .query_row("SELECT COUNT(*) FROM genre_names", [], |row| row.get(0))
+        .unwrap_or(0);
+    if existing > 0 {
+        crate::logging::log_general(format!(
+            "[MIGRATION] genre_names already has {} rows; skipping seed",
+            existing,
+        ));
+        return Ok(());
+    }
+
+    // (canonical_name, display_name, additional_aliases...)
+    //
+    // Conservative starter set — broad enough to cover the majority of
+    // observed tag values without imposing strong opinions on microgenres.
+    // The point isn't completeness; it's giving the alias editor a target.
+    let seed: &[(&str, &str, &[&str])] = &[
+        ("Rock", "Rock", &[]),
+        ("Pop", "Pop", &[]),
+        ("Electronic", "Electronic", &["Electronica"]),
+        ("Hip Hop", "Hip Hop", &["Hip-Hop", "HipHop", "Rap"]),
+        ("Jazz", "Jazz", &[]),
+        ("Classical", "Classical", &[]),
+        ("Folk", "Folk", &[]),
+        ("Country", "Country", &[]),
+        ("R&B", "R&B", &["RnB", "R'n'B", "Rhythm and Blues"]),
+        ("Soul", "Soul", &[]),
+        ("Funk", "Funk", &[]),
+        ("Reggae", "Reggae", &[]),
+        ("Metal", "Metal", &["Heavy Metal"]),
+        ("Punk", "Punk", &["Punk Rock"]),
+        ("Blues", "Blues", &[]),
+        ("Indie", "Indie", &["Indie Rock"]),
+        ("Alternative", "Alternative", &["Alternative Rock", "Alt Rock"]),
+        ("World", "World", &["World Music"]),
+        ("Soundtrack", "Soundtrack", &["OST", "Original Soundtrack"]),
+        ("Ambient", "Ambient", &[]),
+        ("House", "House", &[]),
+        ("Techno", "Techno", &[]),
+        ("Trance", "Trance", &[]),
+        ("Drum and Bass", "Drum and Bass", &[
+            "Drum & Bass",
+            "Drum n Bass",
+            "Drum'n'Bass",
+            "DnB",
+            "D&B",
+        ]),
+        ("Dubstep", "Dubstep", &[]),
+        ("Garage", "Garage", &[]),
+        ("Disco", "Disco", &[]),
+        ("Synthwave", "Synthwave", &[]),
+        ("Industrial", "Industrial", &[]),
+        ("Gospel", "Gospel", &[]),
+        ("Latin", "Latin", &[]),
+        ("Bluegrass", "Bluegrass", &[]),
+        ("Ska", "Ska", &[]),
+        ("Experimental", "Experimental", &[]),
+        ("Spoken Word", "Spoken Word", &[]),
+        ("New Age", "New Age", &[]),
+    ];
+
+    let mut inserted_names: i64 = 0;
+    let mut inserted_aliases: i64 = 0;
+
+    for (canonical, display, extras) in seed {
+        conn.execute(
+            "INSERT INTO genre_names (canonical_name, display_name) VALUES (?1, ?2)",
+            rusqlite::params![canonical, display],
+        )?;
+        let id: i64 = conn.last_insert_rowid();
+        inserted_names += 1;
+
+        // Self-alias so resolve_genre() can match the canonical form via the
+        // alias table without a second lookup path.
+        conn.execute(
+            "INSERT OR IGNORE INTO genre_aliases (alias, genre_id) VALUES (?1, ?2)",
+            rusqlite::params![canonical, id],
+        )?;
+        inserted_aliases += 1;
+
+        for alias in *extras {
+            let changed = conn.execute(
+                "INSERT OR IGNORE INTO genre_aliases (alias, genre_id) VALUES (?1, ?2)",
+                rusqlite::params![alias, id],
+            )?;
+            inserted_aliases += changed as i64;
+        }
+    }
+
+    crate::logging::log_general(format!(
+        "[MIGRATION] Seeded genre vocabulary: {} canonical names, {} aliases",
+        inserted_names, inserted_aliases,
+    ));
+
+    Ok(())
 }
 
 /// Check whether a data migration has already been applied.

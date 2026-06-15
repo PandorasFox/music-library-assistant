@@ -338,6 +338,141 @@ pub fn schema_inventory() -> Vec<TableEntry> {
     });
 
     // =================================================================
+    // Discogs caches + MB→Discogs linkage (Core — populated by Phase 4+)
+    // =================================================================
+
+    // Raw Discogs release JSON cache. Mirrors `mb_release_cache` shape; the
+    // scheduler upserts these rows as the Discogs queue drains.
+    tables.push(TableEntry {
+        name: "discogs_release_cache",
+        kind: TableKind::Core,
+        create_sql: "CREATE TABLE IF NOT EXISTS discogs_release_cache (
+            release_id TEXT PRIMARY KEY,
+            raw_json BLOB NOT NULL,
+            fetched_at INTEGER NOT NULL
+        )",
+        index_sql: &[],
+    });
+
+    // MB release → Discogs release linkage, extracted from MB cache `url-rels`.
+    // Populated as a side effect of every `mb_release_cache` write so the
+    // Phase 4 scheduler can drain it without re-parsing every cached JSON.
+    // Multi-row per MB release is allowed (a release can carry multiple
+    // Discogs URLs, e.g. when several regional pressings link back).
+    tables.push(TableEntry {
+        name: "mb_release_discogs_links",
+        kind: TableKind::Core,
+        create_sql: "CREATE TABLE IF NOT EXISTS mb_release_discogs_links (
+            mb_release_id TEXT NOT NULL,
+            discogs_release_id TEXT NOT NULL,
+            discovered_at INTEGER NOT NULL,
+            PRIMARY KEY (mb_release_id, discogs_release_id)
+        )",
+        index_sql: &[
+            "CREATE INDEX IF NOT EXISTS idx_mb_release_discogs_links_discogs ON mb_release_discogs_links(discogs_release_id)",
+        ],
+    });
+
+    // =================================================================
+    // Genre vocabulary + provenance ledger (Core — operator-curated)
+    // =================================================================
+
+    // Canonical genre vocabulary. `canonical_name` is COLLATE NOCASE-unique
+    // so "Rock" / "rock" / "ROCK" collapse to one row at insert time.
+    tables.push(TableEntry {
+        name: "genre_names",
+        kind: TableKind::Core,
+        create_sql: "CREATE TABLE IF NOT EXISTS genre_names (
+            id INTEGER PRIMARY KEY,
+            canonical_name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            display_name TEXT NOT NULL
+        )",
+        index_sql: &[],
+    });
+
+    // Many-to-many alias map. A single raw value can legitimately map to
+    // multiple canonical genres — e.g. a comma-joined tag like "alternative,
+    // pop, rock" (often seen in French-language pipelines) should resolve to
+    // three ledger rows, not one. Composite PK admits the same `alias` text
+    // against multiple `genre_id` values; canonical names appear as
+    // self-aliases so a single alias-table lookup serves both ingestion and
+    // canonical-name resolution.
+    tables.push(TableEntry {
+        name: "genre_aliases",
+        kind: TableKind::Core,
+        create_sql: "CREATE TABLE IF NOT EXISTS genre_aliases (
+            alias TEXT NOT NULL COLLATE NOCASE,
+            genre_id INTEGER NOT NULL REFERENCES genre_names(id) ON DELETE CASCADE,
+            PRIMARY KEY (alias, genre_id)
+        )",
+        index_sql: &[
+            "CREATE INDEX IF NOT EXISTS idx_genre_aliases_genre ON genre_aliases(genre_id)",
+        ],
+    });
+
+    // Many-to-many DAG: "Liquid Funk" implies "Drum and Bass"; "Drumstep"
+    // implies both DnB AND Dubstep. Implication closure is computed at
+    // query time via recursive CTE — never materialized.
+    tables.push(TableEntry {
+        name: "genre_implies",
+        kind: TableKind::Core,
+        create_sql: "CREATE TABLE IF NOT EXISTS genre_implies (
+            child_id INTEGER NOT NULL REFERENCES genre_names(id) ON DELETE CASCADE,
+            parent_id INTEGER NOT NULL REFERENCES genre_names(id) ON DELETE CASCADE,
+            PRIMARY KEY (child_id, parent_id),
+            CHECK (child_id <> parent_id)
+        )",
+        index_sql: &[
+            "CREATE INDEX IF NOT EXISTS idx_genre_implies_parent ON genre_implies(parent_id)",
+        ],
+    });
+
+    // Per-inode genre ledger with provenance preserved per source.
+    // The PK includes `source` and `kind` so the same genre asserted by
+    // multiple sources, or as both Genre and Style (Discogs), keeps every
+    // row distinct — clearing one provenance can't trample another's.
+    // `kind`: 0=Genre, 1=Style (Discogs-native distinction; arbitrary for
+    // other sources, which always write 0).
+    tables.push(TableEntry {
+        name: "inode_genres",
+        kind: TableKind::Core,
+        create_sql: "CREATE TABLE IF NOT EXISTS inode_genres (
+            inode INTEGER NOT NULL REFERENCES audio_info(inode) ON DELETE CASCADE,
+            genre_id INTEGER NOT NULL REFERENCES genre_names(id) ON DELETE CASCADE,
+            source INTEGER NOT NULL,
+            kind INTEGER NOT NULL DEFAULT 0,
+            source_ref TEXT,
+            raw_value TEXT,
+            confidence REAL,
+            observed_at INTEGER NOT NULL,
+            PRIMARY KEY (inode, genre_id, source, kind)
+        )",
+        index_sql: &[
+            "CREATE INDEX IF NOT EXISTS idx_inode_genres_inode ON inode_genres(inode)",
+            "CREATE INDEX IF NOT EXISTS idx_inode_genres_genre ON inode_genres(genre_id)",
+            "CREATE INDEX IF NOT EXISTS idx_inode_genres_source ON inode_genres(source)",
+        ],
+    });
+
+    // Queue of raw genre strings that didn't resolve to any canonical row.
+    // The Phase 2 alias-editor UI surfaces this prominently so operators
+    // can map unmapped values into the vocabulary.
+    tables.push(TableEntry {
+        name: "unresolved_genre_observations",
+        kind: TableKind::Core,
+        create_sql: "CREATE TABLE IF NOT EXISTS unresolved_genre_observations (
+            raw_value TEXT NOT NULL COLLATE NOCASE,
+            source INTEGER NOT NULL,
+            observation_count INTEGER NOT NULL DEFAULT 1,
+            last_seen_at INTEGER NOT NULL,
+            PRIMARY KEY (raw_value, source)
+        )",
+        index_sql: &[
+            "CREATE INDEX IF NOT EXISTS idx_unresolved_genre_count ON unresolved_genre_observations(observation_count DESC)",
+        ],
+    });
+
+    // =================================================================
     // Signal tables (Decision + Computed) — generated by signal_registry!
     // =================================================================
 

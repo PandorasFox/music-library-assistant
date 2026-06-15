@@ -61,6 +61,10 @@ fn tx_to_json(tr: TransactionResponse) -> Result<Json<serde_json::Value>, ApiErr
             "skipped_releases": s.skipped_releases,
             "already_matching_inodes": s.already_matching_inodes,
         }))),
+        TransactionResponse::GenreVocabularyStaged(s) => Ok(Json(serde_json::json!({
+            "staged_ops": s.staged_ops,
+        }))),
+        TransactionResponse::GenrePromotionStaged(s) => Ok(promotion_summary_json(s)),
         TransactionResponse::Error(e) => Err(ProtocolError::Transaction(e).into()),
     }
 }
@@ -262,6 +266,134 @@ pub async fn apply_va_overrides(
             "unexpected response from BatchApplyVaOverrides: {other:?}"
         ))),
     }
+}
+
+// ============================================================================
+// POST /tx/edit-genre-vocabulary
+// ============================================================================
+
+#[derive(Deserialize)]
+pub struct EditGenreVocabularyRequest {
+    ops: Vec<mm_meta::mutations::genre_vocabulary::GenreVocabularyOp>,
+}
+
+/// Server-side staging of a batch of genre-vocabulary edits. Wraps the ops
+/// into a single `EditGenreVocabularyMutation`, builds a Decision keyed
+/// `GenreVocabularyEdit` (singleton — re-issuing replaces the prior batch),
+/// and stages it. Opens a fresh transaction if none active. Does NOT confirm.
+pub async fn edit_genre_vocabulary(
+    State(state): State<AppState>,
+    BearerToken(token): BearerToken,
+    Json(body): Json<EditGenreVocabularyRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if body.ops.is_empty() {
+        return Err(ApiError::BadRequest("no vocabulary ops".into()));
+    }
+
+    let tr = send_tx(
+        &state,
+        token,
+        TransactionPayload::BatchEditGenreVocabulary { ops: body.ops },
+    )
+    .await?;
+    match tr {
+        TransactionResponse::GenreVocabularyStaged(s) => Ok(Json(serde_json::json!({
+            "staged_ops": s.staged_ops,
+        }))),
+        TransactionResponse::Error(e) => Err(ProtocolError::Transaction(e).into()),
+        other => Err(ApiError::Internal(format!(
+            "unexpected response from BatchEditGenreVocabulary: {other:?}"
+        ))),
+    }
+}
+
+// ============================================================================
+// POST /tx/promote-genres
+// ============================================================================
+
+#[derive(Deserialize)]
+pub struct PromoteGenresRequest {
+    applications: Vec<mm_meta::external::genre_promote::GenrePromotionApplication>,
+}
+
+/// Server-side per-release genre promotion. Operator chip-edits in the
+/// React review view; each application carries the release's selected
+/// inodes and operator-curated chip exclusions. Stages one decision per
+/// release keyed `GenrePromote { release_id }` — re-staging replaces.
+pub async fn promote_genres(
+    State(state): State<AppState>,
+    BearerToken(token): BearerToken,
+    Json(body): Json<PromoteGenresRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if body.applications.is_empty() {
+        return Err(ApiError::BadRequest("no applications".into()));
+    }
+    let tr = send_tx(
+        &state,
+        token,
+        TransactionPayload::BatchPromoteGenres {
+            applications: body.applications,
+        },
+    )
+    .await?;
+    match tr {
+        TransactionResponse::GenrePromotionStaged(s) => Ok(promotion_summary_json(s)),
+        TransactionResponse::Error(e) => Err(ProtocolError::Transaction(e).into()),
+        other => Err(ApiError::Internal(format!(
+            "unexpected response from BatchPromoteGenres: {other:?}"
+        ))),
+    }
+}
+
+// ============================================================================
+// POST /tx/promote-genres-for-inodes
+// ============================================================================
+
+#[derive(Deserialize)]
+pub struct PromoteGenresForInodesRequest {
+    inodes: Vec<i64>,
+}
+
+/// Server-side bulk genre promotion. Operator (or upstream tooling)
+/// supplies an inode list; server fans out to per-release applications
+/// (full promote, no exclusions) and stages decisions on the transaction.
+/// Over `genre-write-back.bulk-cap` (default 5000) → transaction error.
+pub async fn promote_genres_for_inodes(
+    State(state): State<AppState>,
+    BearerToken(token): BearerToken,
+    Json(body): Json<PromoteGenresForInodesRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if body.inodes.is_empty() {
+        return Err(ApiError::BadRequest("no inodes".into()));
+    }
+    let tr = send_tx(
+        &state,
+        token,
+        TransactionPayload::BatchPromoteGenresForInodes {
+            inodes: body.inodes,
+        },
+    )
+    .await?;
+    match tr {
+        TransactionResponse::GenrePromotionStaged(s) => Ok(promotion_summary_json(s)),
+        TransactionResponse::Error(e) => Err(ProtocolError::Transaction(e).into()),
+        other => Err(ApiError::Internal(format!(
+            "unexpected response from BatchPromoteGenresForInodes: {other:?}"
+        ))),
+    }
+}
+
+fn promotion_summary_json(
+    s: mm_meta::protocol::GenrePromotionStagingSummary,
+) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "staged_releases": s.staged_releases,
+        "staged_inodes": s.staged_inodes,
+        "already_matching_inodes": s.already_matching_inodes,
+        "inodes_without_ledger": s.inodes_without_ledger,
+        "skipped_empty_applications": s.skipped_empty_applications,
+        "skipped_unpacked_inodes": s.skipped_unpacked_inodes,
+    }))
 }
 
 // ============================================================================

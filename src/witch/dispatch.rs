@@ -209,6 +209,30 @@ impl super::Witch {
                                         Err(e) => TransactionResponse::Error(e),
                                     }
                                 }
+                                TransactionPayload::BatchEditGenreVocabulary { ops } => {
+                                    match w.batch_edit_genre_vocabulary(ops) {
+                                        Ok(summary) => {
+                                            TransactionResponse::GenreVocabularyStaged(summary)
+                                        }
+                                        Err(e) => TransactionResponse::Error(e),
+                                    }
+                                }
+                                TransactionPayload::BatchPromoteGenres { applications } => {
+                                    match w.batch_promote_genres(applications) {
+                                        Ok(summary) => {
+                                            TransactionResponse::GenrePromotionStaged(summary)
+                                        }
+                                        Err(e) => TransactionResponse::Error(e),
+                                    }
+                                }
+                                TransactionPayload::BatchPromoteGenresForInodes { inodes } => {
+                                    match w.batch_promote_genres_for_inodes(inodes) {
+                                        Ok(summary) => {
+                                            TransactionResponse::GenrePromotionStaged(summary)
+                                        }
+                                        Err(e) => TransactionResponse::Error(e),
+                                    }
+                                }
                             };
                             Ok(AuthenticatedResponse::Transaction(response))
                         }

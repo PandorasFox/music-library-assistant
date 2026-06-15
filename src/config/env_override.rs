@@ -46,6 +46,11 @@ fn apply_curated(config: &mut Config) {
         config.opinions.external_matching.acoustid_api_key = val;
     }
 
+    if let Ok(val) = env::var("MM_DISCOGS_TOKEN") {
+        logging::log_general("env override: MM_DISCOGS_TOKEN = <redacted>");
+        config.opinions.external_matching.discogs_token = val;
+    }
+
     if let Ok(val) = env::var("MM_MB_BASE_URL") {
         logging::log_general(format!("env override: MM_MB_BASE_URL = {val}"));
         config.opinions.external_matching.mb_base_url = val;
@@ -384,6 +389,16 @@ fn apply_generic_field(config: &mut Config, block: &str, field: &str, val: &str)
         (Opinions::KDL_BLOCK_EXTERNAL_MATCHING, ExternalMatchingConfig::KDL_MB_CACHE_TTL) => {
             if let Ok(n) = val.parse::<u32>() {
                 config.opinions.external_matching.mb_cache_ttl_days = n;
+                return true;
+            }
+        }
+        (Opinions::KDL_BLOCK_EXTERNAL_MATCHING, ExternalMatchingConfig::KDL_DISCOGS_TOKEN) => {
+            config.opinions.external_matching.discogs_token = val.to_string();
+            return true;
+        }
+        (Opinions::KDL_BLOCK_EXTERNAL_MATCHING, ExternalMatchingConfig::KDL_DISCOGS_REQ_PER_SEC) => {
+            if let Ok(n) = val.parse::<u32>() {
+                config.opinions.external_matching.discogs_requests_per_second = n;
                 return true;
             }
         }

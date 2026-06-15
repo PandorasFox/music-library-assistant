@@ -150,6 +150,33 @@ impl Database {
         Ok(results)
     }
 
+    /// Inodes that lost a deploy-path tiebreak.
+    ///
+    /// For each `signal_deploy_conflict` row, the BLOB encodes the inodes
+    /// involved in the conflict with `inodes[0]` as the alphabetical tiebreak
+    /// winner. This helper returns the set of non-winner inodes — i.e. corpus
+    /// inodes whose deployments are superseded and whose library hardlinks
+    /// must be stashed before the winner is deployed.
+    pub fn get_deploy_conflict_loser_inodes(&self) -> Result<std::collections::HashSet<i64>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT data FROM signal_deploy_conflict")?;
+        let rows = stmt.query_map(params![], |row| {
+            let blob: Vec<u8> = row.get(0)?;
+            Ok(blob)
+        })?;
+        let mut losers = std::collections::HashSet::new();
+        for blob in rows {
+            let blob = blob?;
+            let inodes: Vec<i64> = bincode::deserialize(&blob).unwrap_or_default();
+            // inodes[0] is the winner; the rest lost the tiebreak.
+            for &inode in inodes.iter().skip(1) {
+                losers.insert(inode);
+            }
+        }
+        Ok(losers)
+    }
+
     /// Get all deploy conflict groups (multiple corpus files → same library path).
     ///
     /// Sorted by key for consistent display.

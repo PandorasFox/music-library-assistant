@@ -25,7 +25,7 @@ Signals are atomic facts about corpus state. They follow these principles:
 
 | Signal | Emitted By | Cleared By | Meaning |
 |--------|------------|------------|---------|
-| FileInCorpus | ScanCorpusDirectory | DeriveCorpusSignals (stale reconciliation) | File discovered on disk |
+| FileInCorpus | IndexAudioFile / UpsertFileEntry / UpdateTrackPathWithMetadata (write-thread executor, same tx as inode insert) | DropFromIndex (clear_all_corpus_signals), Derive(corpus) GC backstop for orphaned rows | Corpus audio inode is indexed in the DB. Deterministic on indexing, not on watcher observation. |
 | UnindexedFile | DeriveDirectorySignals | DeriveDirectorySignals, mutations | On disk but not in index |
 | MissingFile | DeriveDirectorySignals | DeriveDirectorySignals, mutations | In index but not on disk |
 | MissingDirectory | ScheduleSecondLevelDerivations | ScheduleSecondLevelDerivations, DropDirectoryFromIndex | Indexed directory no longer on disk |
@@ -36,7 +36,7 @@ Signals are atomic facts about corpus state. They follow these principles:
 | OutOfBandTagSync | VerifyTags | VerifyTags, resolution mutations | One-way tag difference (syncable) |
 | OutOfBandTagConflict | VerifyTags | VerifyTags, resolution mutations | Two-way tag conflict |
 | MtimeOnlyMismatch | VerifyTags | VerifyTags, AcknowledgeMtimeOnly | Mtime changed, tags identical |
-| MovedFile | DeriveCorpusSignals | UpdateFilePath | Same inode at different path. Columns: `old_path`. Same-zone: disk path differs from indexed path in `both` set |
+| MovedFile | DeriveCorpusSignals | UpdateFilePath | Same inode at different path. Columns: `old_path`. Same-zone: disk path differs from indexed path in `both` set. Skipped for image files and for inodes with multiple `inode_paths` rows in the zone (hardlinks — the single-path move model can't represent them, and ack would collide on `PRIMARY KEY (inode, zone, path)`) |
 | InodeChanged | *(not currently emitted — replaced by watcher FileRemoved+FileCreated)* | AcknowledgeInodeChanged | File was replaced (same path, new inode) |
 | ExpectedMissingTag | EmitExpectedMissingTag | — | Operator-confirmed expected missing tag (persistent suppression). Table: `signal_expected_missing_tag`. Suppresses MissingAlbumSingleSignal for this inode in DetectMissingTags |
 | MusicBrainzTagged | DetectMusicBrainzTagged | DetectMusicBrainzTagged | File has both configured MB track + release tags present (fully matched to a MusicBrainz release). Table: `signal_musicbrainz_tagged` (inode PK). Files with this signal are elided from tag-based health checks (MissingTags, TagCanonicity, CompoundTag, InconsistentAlbumArtist, DiscExtraction, PathTagMismatch) |
@@ -84,7 +84,7 @@ For each track, re-queue an `ApplyDbTagsToDisk` mutation. Since `ApplyDbTagsToDi
 
 | Signal | Emitted By | Cleared By | Meaning |
 |--------|------------|------------|---------|
-| LibraryLeftover | DeriveDeployHealthSignals | UpdateDeploySignals, mutations | Library file with no corpus backing |
+| LibraryLeftover | DeriveDeployHealthSignals | UpdateDeploySignals, mutations | Library file with no corpus backing — OR — library file hardlinked to a corpus inode that lost a deploy-path tiebreak (superseded deployment; reclassified via DeployConflict losers) — OR — sidecar image at a library album directory that contains no audio (orphaned cover). Sidecars are NOT checked against the corpus-side parent dir (a single cover-art inode can be hardlinked into many library albums; the only meaningful test is whether the album dir still holds audio). |
 | LibraryStale | DeriveDeployHealthSignals | UpdateDeploySignals, LibraryMove | Library file at wrong path (audio or sidecar image) |
 | DeployReady | DeriveCorpusDeployStatus | UpdateDeploySignals, HardLink | Healthy corpus file not deployed. Metadata: `{ "deploy_path": "..." }` |
 | DeployedHealthy | DeriveCorpusDeployStatus, UpdateDeploySignals | DeriveCorpusDeployStatus | Healthy corpus file correctly deployed. Metadata: `{ "library_path": "{library_name}/..." }` |
@@ -121,7 +121,7 @@ Aggregate signals group multiple tracks by a shared characteristic. They use set
 | AlternativeReleasePacking | ResolvePackingComponent + tier orchestrators (isolated nodes + knot discography winners) | Bulk-cleared at pipeline start (ComputeReleaseMappings) | Alternative release with identical inode signature (same corpus files) to a winning release. Different pressings/editions/regional variants that pack identically. Key: `{winner_release_id}:{alt_release_id}`. Data (bincode BLOB): `winner_release_id`, `winner_release_title`, `alternative_release_id`, `alternative_release_title`, `alternative_release_artist`, `alternative_score`, `winner_score`, `inode_count`. Table: `signal_alternative_release_packing`. Detected during dedup-by-inode-signature in partial tiers (FullMatch/Incomplete/Single) and via bookkeeping in Perfect tier. Scoped per individual winning release — only proposals with byte-identical sorted inode sets qualify |
 | VariousArtistsOverride | ResolvePackingComponent + tier orchestrators (isolated nodes + knot discography winners) | Bulk-cleared at pipeline start (ComputeReleaseMappings) | Suggested non-VA artist for a winning release with "Various Artists" as album artist. Key: winner `release_id`. Data (bincode BLOB): `release_id`, `release_title`, `suggested_artist`, `source` (ExactAlternative or CompetingProposal). Table: `signal_various_artists_override`. Two-tier lookup: (1) most frequent non-VA artist from exact alternative siblings, (2) fallback to most frequent non-VA artist from competing proposals in the same component that overlap the winner's inodes |
 | SameRecordingDifferentRelease | AnalyzeFingerprintOverlaps | AnalyzeFingerprintOverlaps (via reconciliation) | Same MusicBrainz recording on different releases. Key: MB recording MBID. Data (bincode BLOB): `recording_id`, `entries[]` (each with `inode`, `path`, `mb_release_id`, `mb_track_id`, `album`, `file_type`, `bitrate_kbps`, `sample_rate`, `duration_ms`). Emitted when two fingerprint-matching files share a MUSICBRAINZ_TRACKID but have different MUSICBRAINZ_ALBUMID values. Table: `signal_same_recording_different_release` |
-| DeployConflict | DetectDeployConflicts | DetectDeployConflicts | Multiple tracks mapping to same library path |
+| DeployConflict | DetectDeployConflicts (audio-only) | DetectDeployConflicts | Multiple audio tracks mapping to the same library path. Data (BLOB): Vec of corpus inodes; **`inodes[0]` is the alphabetical tiebreak winner**, the remainder are losers. Image sidecars are intentionally excluded (they have no tags and would all hash to `[no album artist]/cover.jpg`); sidecar collisions are tracked by `signal_sidecar_deploy_conflict` keyed on (album, role). `get_deploy_conflict_loser_inodes` reads this so `DeriveDeployHealthSignals` can reclassify any library file hardlinked to a loser as Leftover — the deploy pipeline stashes it before the winner deploys, preventing "Destination already exists (different inode)" failures |
 | ReleaseOverlap | DetectReleaseOverlaps | DetectReleaseOverlaps | Cross-source releases targeting the same album directory. Key: album directory (e.g., "Artist/Album"). Data (bincode BLOB): `releases[]` (each with `source_dir`, `release_dir`, `can_stash`, `inodes[]`, `corpus_paths[]`), `file_count`. Only emitted for cross-source overlaps (2+ configured sources). **UI Resolution:** Insights view → "Release overlaps" entry → DirectoryClusterModal with per-directory Stash/EditTags options |
 
 ---
@@ -169,7 +169,7 @@ From `CLAUDE.md`:
 
 `DeriveCorpusSignals` includes a GC pass that clears orphaned corpus signals. After computing the known inode universe (disk inodes ∪ indexed inodes), it scans each corpus signal table for inodes outside that universe and deletes them. This catches signals that persist due to mutations that previously failed to return their affected inodes, or any future bugs in the post-mutation signal clearing pipeline.
 
-Signal tables scanned: UnindexedFile, MissingFile, MovedFile, HealthyFile, CorruptFile, LosslessRemux, MtimeOnlyMismatch, OutOfBandTagSync, OutOfBandTagConflict, SubparDuplicate, CompoundTag, DeployReady, DeployedHealthy, SidecarDeployReady, MissingDirectory, ExternalMatch, ExpectedMissingTag, PathTagMismatch, ReleasePacking, UnmatchedCorpusTrack. FileInCorpus is excluded (it IS the disk observation). Note: UnfilledReleaseSlot is an aggregate signal (not inode-keyed) and is not subject to corpus GC backstop.
+Signal tables scanned: FileInCorpus, UnindexedFile, MissingFile, MovedFile, HealthyFile, CorruptFile, LosslessRemux, MtimeOnlyMismatch, OutOfBandTagSync, OutOfBandTagConflict, SubparDuplicate, CompoundTag, DeployReady, DeployedHealthy, SidecarDeployReady, MissingDirectory, ExternalMatch, ExpectedMissingTag, PathTagMismatch, ReleasePacking, UnmatchedCorpusTrack. FileInCorpus is included now that it's indexer-written rather than disk-observation-derived — orphaned rows (inode no longer in `inodes` table) are GC'd here as a backstop in case a DropFromIndex path missed its cleanup. Note: UnfilledReleaseSlot is an aggregate signal (not inode-keyed) and is not subject to corpus GC backstop.
 
 ### Good Signals
 - `UnindexedFile` for path X (one file)
@@ -183,3 +183,21 @@ Signal tables scanned: UnindexedFile, MissingFile, MovedFile, HealthyFile, Corru
 ### Non-Signal Tracking: Sidecar Image Files
 
 Sidecar cover images (cover.jpg, folder.png, etc.) are tracked via the `inode_paths` table (zone='corpus') joined with `inodes` (mtime, size) and `image_info` (format, width, height, role) rather than signals. Image metadata is populated by the `IndexImageFile` computation. Deployment of sidecar images alongside audio files is handled by `HardLink` mutation. This follows the principle that signals are for actionable corpus health facts, not for inventory tracking that is better served by direct table storage.
+
+### Non-Signal Tracking: Genre Provenance Ledger
+
+The `inode_genres` table records every (inode, canonical genre, source, kind) assertion observed across sources (FileTagImport, MusicBrainz, Discogs, AudiomuseInferred, Manual). It is a ledger of OBSERVATIONS, not an actionable signal — the ledger answers "what genres have we ever seen attributed to this file, and where did each come from?", which is inventory rather than corpus-health state. The Phase 6 `GenrePromote` mutation reads ledger rows + the operator-curated `genre_implies` graph to flush a chosen subset into `corpus_tags` and file disk tags. Genre vocabulary curation (canonical names, aliases, implications) lives in three sibling tables (`genre_names`, `genre_aliases`, `genre_implies`) and is also non-signal.
+
+Unmapped raw strings encountered by ingestion are coalesced into `unresolved_genre_observations` (raw_value + source + count + last_seen_at) so the Phase 2 vocabulary editor can surface them for operator mapping. This too is inventory, not a corpus-health signal.
+
+### Non-Signal Tracking: Discogs Cache + MB→Discogs Linkage
+
+`discogs_release_cache(release_id PK, raw_json BLOB, fetched_at)` holds raw Discogs release JSON keyed by Discogs release id. Populated by the `ExternalFetch` scheduler's Discogs queue (auth via `external-matching.discogs-token` in config) and consumed by `DeriveDiscogsGenreLedger`. The cache is non-signal because it isn't actionable on its own — it's source data the computation reads.
+
+The Discogs ledger derivation is **watermark-gated**: `app_metadata.discogs_genre_ledger_watermark` records the largest `fetched_at` processed by the last successful run, so cycles with no new Discogs fetches skip the parse/resolve pass entirely. The computation is scheduled only on startup (`scope = None`) or when `EXTERNAL` scope is flagged by a `SourceDone { matched > 0 }` event from the fetch scheduler.
+
+`mb_release_discogs_links(mb_release_id, discogs_release_id, discovered_at, PK on both)` is the bridge: the MB cache executor parses `url-rels` on every MB release cache write and refreshes this table in the same transaction. The scheduler drains it via a LEFT JOIN against `discogs_release_cache` to know what Discogs work remains. Phase 5's computation joins this table with `signal_release_packing` to fan Discogs genres back out to packed inodes.
+
+### Non-Signal Tracking: Genre Promotion (Phase 6)
+
+Phase 6's `GenrePromote` decision is an operator-gated write-through from `inode_genres` (the ledger) to `corpus_tags` (DB) + file disk tags. There are no Phase-6-specific signals: promotion produces only `ApplyTagOps` mutations (with chain-emitted `FlushTagsToDisk`), and the standard `MutableOnly` signal-clear scope handles per-inode signal invalidation post-mutation. The promotion review surface is built from `inode_genres` joined with `signal_release_packing` at query time (`GetGenrePromotionReview`, `GetGenrePromotionInodeDetail`, `GetGenreCoverageSummary` in `mm-meta::domain_queries`) — no promotion-specific signal table exists, by design (the ledger is the source of truth and signals would duplicate state).

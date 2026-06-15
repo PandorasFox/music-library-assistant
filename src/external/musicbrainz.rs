@@ -68,10 +68,16 @@ impl MusicBrainzClient {
     }
 
     /// Fetch a release by MBID with artist credits, recordings, media (tracklist),
-    /// and release-group classification (for compilation detection).
+    /// release-group classification (for compilation detection), and URL relations
+    /// (for cross-source linkage — most importantly, the Discogs release URL).
+    ///
+    /// `url-rels` adds a `relations` array at the release top level whose entries
+    /// of type `"discogs"` point at the corresponding Discogs release page. This
+    /// is the high-precision, free path for finding a release's Discogs id
+    /// without name-based fuzzy search.
     pub async fn fetch_release(&self, mbid: &str) -> Result<MbLookupOutcome> {
         let url = format!(
-            "{}/release/{}?inc=recordings+media+artist-credits+release-groups&fmt=json",
+            "{}/release/{}?inc=recordings+media+artist-credits+release-groups+url-rels&fmt=json",
             self.base_url, mbid
         );
         self.fetch_entity(&url).await

@@ -55,6 +55,14 @@ pub enum DecisionKey {
     /// Apply a VariousArtistsOverride suggestion: rewrite ALBUMARTIST on every
     /// inode currently packed to the given release.
     VaOverrideApplication { release_id: String },
+    /// Apply a batch of genre vocabulary edits (canonical names, aliases,
+    /// implications, merges). Singleton key: only one vocab-edit decision
+    /// can be staged per transaction — re-issuing replaces the prior ops.
+    GenreVocabularyEdit,
+    /// Promote the `inode_genres` ledger for one release into `corpus_tags`
+    /// + on-disk GENRE/STYLE values. Per-release keying — re-staging the
+    /// same release with edited exclusions replaces the prior batch.
+    GenrePromote { release_id: String },
 }
 
 impl DecisionKey {
@@ -69,6 +77,7 @@ impl DecisionKey {
             DecisionKey::ArtistPluralNormalization => Some(DecisionKeyKind::ArtistPluralNormalization),
             DecisionKey::LosslessRemux => Some(DecisionKeyKind::LosslessRemux),
             DecisionKey::SubparDuplicate => Some(DecisionKeyKind::SubparDuplicate),
+            DecisionKey::GenreVocabularyEdit => Some(DecisionKeyKind::GenreVocabularyEdit),
             _ => None,
         }
     }
@@ -127,6 +136,16 @@ impl DecisionKey {
             DecisionKey::MbReleaseApproval { .. } => &[ApplyTagOps, ApplyDirConfigEdit],
             // VA-override application → tag ops only (rewrites ALBUMARTIST on packed inodes)
             DecisionKey::VaOverrideApplication { .. } => &[ApplyTagOps],
+            // Genre vocabulary edit → batch of vocabulary mutations only.
+            // No file tag side effects until Phase 6's `GenrePromote`.
+            DecisionKey::GenreVocabularyEdit => &[EditGenreVocabulary],
+            // Genre promote → tag ops only. The ApplyTagOps executor
+            // chain-emits FlushTagsToDisk per inode to sync to disk, so
+            // staging needs only ApplyTagOps. The ledger itself is NEVER
+            // mutated by this decision — `inode_genres` stays as a pure
+            // observation log; promote is a one-way flush from ledger to
+            // corpus_tags + file disk.
+            DecisionKey::GenrePromote { .. } => &[ApplyTagOps],
         }
     }
 }
@@ -182,6 +201,10 @@ impl std::fmt::Display for DecisionKey {
             DecisionKey::VaOverrideApplication { release_id } => {
                 write!(f, "VA Override:{}", release_id)
             }
+            DecisionKey::GenreVocabularyEdit => write!(f, "Genre Vocabulary Edit"),
+            DecisionKey::GenrePromote { release_id } => {
+                write!(f, "Genre Promote:{}", release_id)
+            }
         }
     }
 }
@@ -198,6 +221,7 @@ pub enum DecisionKeyKind {
     ArtistPluralNormalization,
     LosslessRemux,
     SubparDuplicate,
+    GenreVocabularyEdit,
 }
 
 // ============================================================================

@@ -107,6 +107,8 @@ pub use mm_meta::computations::PipelineStage;
 pub struct FetchRequest {
     /// MusicBrainz release IDs to ensure are cached.
     pub mb_release_ids: Vec<String>,
+    /// MusicBrainz recording IDs to ensure are cached.
+    pub mb_recording_ids: Vec<String>,
     /// Computations to queue after fetch completes.
     pub then: Vec<Computation>,
 }
@@ -117,8 +119,22 @@ pub struct FetchRequest {
 
 /// Tag-scope per-inode computations: dirty-marked when a mutation's
 /// recomputation scope contains `TAGS`. Their outputs depend on tag content.
-pub const PER_INODE_TAG_SCOPE_COMPUTATIONS: &[&str] =
-    &["compound_tag", "lossless_remux", "sidecar_deploy", "release_packing"];
+pub const PER_INODE_TAG_SCOPE_COMPUTATIONS: &[&str] = &[
+    "compound_tag",
+    "lossless_remux",
+    "sidecar_deploy",
+    "release_packing",
+    IMPORT_GENRES_FROM_TAGS_COMPUTATION,
+];
+
+/// Dirty-tracking key for `ImportGenresFromTags`.
+///
+/// Marked dirty for any inode whose mutation has TAGS scope. The computation
+/// drains the queue per-inode: re-reads the inode's `GENRE` tag values, wipes
+/// the existing `FileTagImport`-source ledger rows for that inode, and
+/// re-derives. Empties → no-op (skips the full-corpus scan that used to fire
+/// every TAGS-scope cycle).
+pub const IMPORT_GENRES_FROM_TAGS_COMPUTATION: &str = "import_genres_from_tags";
 
 /// Dirty-tracking key for `DeriveCorpusDeployStatus`.
 ///

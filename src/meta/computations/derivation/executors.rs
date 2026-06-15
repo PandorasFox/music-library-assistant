@@ -175,37 +175,10 @@ fn derive_zone_signals<Z: DeriveZoneSignals>(
         "[COMPUTE] Derive({zone}): starting global inode comparison"
     ));
 
-    // ========================================================================
-    // Reconcile file-presence signals against observed disk state
-    // ========================================================================
-    let existing = read_only_db
-        .get_file_presence_inodes::<Z>()
-        .unwrap_or_default();
-    let mut fp_new = 0usize;
-    let mut fp_stale = 0usize;
-
-    for (inode, meta) in &observed_inodes {
-        if !existing.contains_key(inode) {
-            sender.write_typed_signal(
-                Z::file_presence_signal(*inode, meta.path.clone(), 0),
-                witness,
-            );
-            fp_new += 1;
-        }
-    }
-
-    for inode in existing.keys() {
-        if !observed_inodes.contains_key(inode) {
-            sender.clear_corpus_signal::<Z::FilePresenceSignal>(*inode, witness);
-            fp_stale += 1;
-        }
-    }
-
-    if fp_new > 0 || fp_stale > 0 {
-        log_general(format!(
-            "[COMPUTE] Derive({zone}): file-presence reconciled: {fp_new} new, {fp_stale} stale cleared"
-        ));
-    }
+    // FileInCorpus is owned by the indexing executor (write_corpus_file_presence)
+    // and travels in the same transaction as the inode insert. The Witch's
+    // in-memory `observed_inodes` map is not authoritative for the signal —
+    // a restart that wipes that map must not silently clear the signal here.
 
     // ========================================================================
     // Get indexed state and compute set operations
@@ -227,6 +200,14 @@ fn derive_zone_signals<Z: DeriveZoneSignals>(
         disk_inodes.len(),
         indexed_inodes.len()
     ));
+
+    // Hardlinked inodes (multiple paths within this zone) — must be excluded
+    // from MovedFile detection. The walker and DB both collapse inode→path via
+    // HashMap, so for these inodes the picked paths disagree arbitrarily and
+    // the ack mutation can't represent the move as a single UPDATE.
+    let hardlinked_in_zone: HashSet<i64> = read_only_db
+        .get_multipath_inodes_for_zone(zone)
+        .unwrap_or_default();
 
     let disk_set: HashSet<i64> = disk_inodes.keys().copied().collect();
     let indexed_set: HashSet<i64> = indexed_inodes.keys().copied().collect();
@@ -250,7 +231,7 @@ fn derive_zone_signals<Z: DeriveZoneSignals>(
                 continue;
             }
 
-            // Check if this inode is indexed in a different zone (cross-zone move)
+            // Check if this inode is indexed in a different zone (cross-zone move).
             if let Ok(Some((old_zone_str, old_path))) =
                 read_only_db.get_file_zone_and_path_by_inode(*inode)
             {
@@ -299,7 +280,24 @@ fn derive_zone_signals<Z: DeriveZoneSignals>(
         let disk_path = disk_inodes.get(inode).map(|m| m.path.as_str()).unwrap_or("");
         let indexed_path = indexed_inodes.get(inode).map(|p| p.as_str()).unwrap_or("");
 
-        if !disk_path.is_empty() && !indexed_path.is_empty() && disk_path != indexed_path {
+        // Skip MovedFile emission for:
+        // - Images: typically hardlinked cover art (front.jpg / cover.jpg /
+        //   scans). The disk_only branch already skips images; mirror that here.
+        // - Hardlinked inodes in this zone: the inode→path HashMap collapse on
+        //   both sides makes the comparison order-dependent, and the ack
+        //   mutation can't disambiguate which row to UPDATE without colliding
+        //   on `(inode, zone, path)`.
+        let skip_move_detection = is_image_file(Path::new(disk_path))
+            || hardlinked_in_zone.contains(inode);
+
+        if skip_move_detection {
+            // If a prior emission left a signal in the table, drop it now —
+            // GC backstop only clears for unknown inodes, but these are known.
+            drop_stale_corpus_signal::<MovedFileSignal>(read_only_db, sender, *inode, witness);
+        } else if !disk_path.is_empty()
+            && !indexed_path.is_empty()
+            && disk_path != indexed_path
+        {
             ensure_typed_signal(
                 read_only_db,
                 sender,
@@ -429,8 +427,8 @@ impl DeriveZoneSignals for CorpusZone {
         known_inodes: &HashSet<i64>,
         witness: &ComputationWitness,
     ) -> usize {
-        // FileInCorpus excluded: it IS the disk observation, always part of known_inodes
         gc_signal_tables!(read_only_db, sender, known_inodes, witness, [
+            FileInCorpusSignal,
             UnindexedFileSignal,
             MissingFileSignal,
             MovedFileSignal,

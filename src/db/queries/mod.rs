@@ -9,6 +9,7 @@
 pub mod auth;
 pub mod external;
 pub mod files;
+mod genre;
 mod health;
 mod library_scan;
 mod metadata;
@@ -387,6 +388,32 @@ impl<'a> ReadOnlyDb<'a> {
     // Signal Queries
     // =========================================================================
 
+    // =========================================================================
+    // Genre Vocabulary + Ledger Queries
+    // =========================================================================
+
+    delegate_read! {
+        fn get_genre_alias_pairs() -> Result<Vec<(String, i64)>>;
+        fn get_corpus_genre_tag_values() -> Result<Vec<(i64, String)>>;
+        fn get_corpus_genre_tag_values_for_inode(inode: i64) -> Result<Vec<String>>;
+        fn count_inode_genres_by_source() -> Result<Vec<(i64, i64)>>;
+        fn get_genre_vocabulary() -> Result<mm_meta::domain_query_types::GenreVocabulary>;
+        fn get_unresolved_genre_observations() -> Result<mm_meta::domain_query_types::UnresolvedGenreObservations>;
+        fn get_unfetched_discogs_release_ids() -> Result<Vec<String>>;
+        fn discogs_release_cached(release_id: &str) -> Result<bool>;
+        fn discogs_release_for_mb_release(mb_release_id: &str) -> Result<Option<String>>;
+        fn get_discogs_release_cache(release_id: &str) -> Result<Option<(Vec<u8>, i64)>>;
+        fn get_discogs_linkage_pairs() -> Result<Vec<(String, String)>>;
+        fn get_discogs_linkage_pairs_since(since: i64) -> Result<Vec<(String, String)>>;
+        fn max_discogs_cache_fetched_at() -> Result<i64>;
+        fn get_app_metadata(key: &str) -> Result<Option<String>>;
+        fn get_genre_promotion_review() -> Result<mm_meta::domain_query_types::GenrePromotionReview>;
+        fn get_genre_promotion_inode_detail(release_id: &str) -> Result<mm_meta::domain_query_types::GenrePromotionInodeDetail>;
+        fn get_genre_coverage_summary() -> Result<mm_meta::domain_query_types::GenreCoverageSummary>;
+        fn get_ledger_for_inodes(inodes: &[i64]) -> Result<std::collections::HashMap<i64, Vec<mm_meta::external::genre_promote::LedgerRow>>>;
+        fn get_canonical_genre_names() -> Result<std::collections::HashMap<i64, String>>;
+    }
+
     delegate_read! {
         fn get_healthy_file_signals() -> Result<Vec<crate::meta::signals::data::HealthyFileSignal>>;
         fn get_tag_canonicity_signal(key: &str) -> Result<Option<crate::meta::signals::data::TagCanonicitySignal>>;
@@ -484,19 +511,20 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_all_inodes::<Z>()
     }
 
+    /// Inodes with multiple `inode_paths` rows in a zone (intra-zone hardlinks).
+    pub fn get_multipath_inodes_for_zone(
+        &self,
+        zone: &str,
+    ) -> Result<std::collections::HashSet<i64>> {
+        self.db.get_multipath_inodes_for_zone(zone)
+    }
+
     /// Get the set of inodes that have an `audio_info` row for a zone.
     pub fn get_audio_inodes_for_zone(
         &self,
         zone: super::types::Zone,
     ) -> Result<std::collections::HashSet<i64>> {
         self.db.get_audio_inodes_for_zone(zone)
-    }
-
-    /// Get all file-presence signal inodes with their paths for a zone.
-    pub fn get_file_presence_inodes<Z: crate::zones::AudioZone>(
-        &self,
-    ) -> Result<std::collections::HashMap<i64, String>> {
-        self.db.get_file_presence_inodes::<Z>()
     }
 
     /// Get distinct tag values with file counts for a tagged zone.
@@ -577,6 +605,7 @@ impl<'a> ReadOnlyDb<'a> {
         fn get_library_stale_files() -> Result<Vec<crate::meta::views::StaleSignalFile>>;
         fn get_library_leftover_files() -> Result<Vec<crate::meta::views::LeftoverSignalFile>>;
         fn get_deploy_conflict_groups() -> Result<Vec<crate::meta::views::ConflictGroup>>;
+        fn get_deploy_conflict_loser_inodes() -> Result<std::collections::HashSet<i64>>;
         fn get_sidecar_conflict_groups() -> Result<Vec<crate::meta::views::SidecarConflictGroup>>;
         fn get_missing_file_paths() -> Result<Vec<String>>;
         fn get_corrupt_file_signals() -> Result<Vec<(i64, String)>>;

@@ -447,6 +447,22 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
                         }
                     }
                 }
+                ExternalMatchingConfig::KDL_DISCOGS_TOKEN => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_string() {
+                            opinions.discogs_token = val.to_string();
+                        }
+                    }
+                }
+                ExternalMatchingConfig::KDL_DISCOGS_REQ_PER_SEC => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_i64() {
+                            if val > 0 {
+                                opinions.discogs_requests_per_second = val as u32;
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -557,6 +573,39 @@ fn parse_mb_tag_names(node: &kdl::KdlNode, config: &mut MbTagNameConfig) {
 /// Parse album-art opinions from KDL node
 fn parse_album_art_opinions(_node: &kdl::KdlNode, _opinions: &mut AlbumArtOpinions) {
     // Album art embed/upgrade fields removed; sidecar_deploy_mode is parsed elsewhere.
+}
+
+/// Parse genre-write-back config block.
+///
+/// Unknown layout strings fall back to the default and are silently ignored
+/// (the parser is lenient by design — a typo shouldn't reject the whole
+/// config). The TUI/web config editor surfaces invalid layouts when present.
+fn parse_genre_write_back(node: &kdl::KdlNode, config: &mut GenreWriteBackConfig) {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            match child.name().value() {
+                GenreWriteBackConfig::KDL_LAYOUT => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_string() {
+                            if let Some(layout) = GenreWriteLayout::from_kdl(val) {
+                                config.layout = layout;
+                            }
+                        }
+                    }
+                }
+                GenreWriteBackConfig::KDL_BULK_CAP => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_i64() {
+                            if val > 0 {
+                                config.bulk_cap = val as usize;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 /// Parse disc-extraction opinions from KDL node
@@ -716,6 +765,12 @@ pub(crate) fn parse_kdl_config(content: &str) -> Result<Config> {
                             }
                             Opinions::KDL_BLOCK_ALBUM_ART => {
                                 parse_album_art_opinions(child, &mut config.opinions.album_art);
+                            }
+                            Opinions::KDL_BLOCK_GENRE_WRITE_BACK => {
+                                parse_genre_write_back(
+                                    child,
+                                    &mut config.opinions.genre_write_back,
+                                );
                             }
                             // "debug" block silently ignored (all debug options removed)
                             _ => {}

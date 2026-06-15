@@ -88,19 +88,35 @@ pub struct MbAlias {
     pub type_: Option<String>,
 }
 
-/// A relation on a recording (artist-recording or work-level).
+/// A relation on a recording or release.
+///
+/// MB serializes many flavors into one shape; the resource pointed at varies
+/// by `type_`. Artist-recording relations populate `artist`; URL relations
+/// (from `inc=url-rels`) populate `url`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MbRelation {
-    /// Relation type: "vocal", "producer", "remixer", "composer", etc.
+    /// Relation type: "vocal", "producer", "remixer", "composer", "discogs",
+    /// "wikidata", "allmusic", etc. For URL relations the type names the
+    /// destination site (e.g. `"discogs"`).
     #[serde(rename = "type")]
     pub type_: String,
-    /// "backward" = artist→recording direction.
+    /// "backward" = artist→recording direction. Direction is meaningless for
+    /// URL relations.
     pub direction: Option<String>,
     /// Qualifiers: ["lead vocals"], ["guitar", "bass"], etc.
     #[serde(default)]
     pub attributes: Vec<String>,
     /// Related artist (present for artist-recording relations).
     pub artist: Option<MbArtistRef>,
+    /// URL target (present for `inc=url-rels` entries).
+    pub url: Option<MbUrlTarget>,
+}
+
+/// Minimal URL target carried by URL-relation entries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MbUrlTarget {
+    /// The URL itself, e.g. `https://www.discogs.com/release/12345`.
+    pub resource: String,
 }
 
 /// A full MusicBrainz release with artist credits and tracklist (from release endpoint).
@@ -119,6 +135,10 @@ pub struct MbRelease {
     /// cached JSON has this as `None` and compilation detection silently skips.
     #[serde(default, rename = "release-group")]
     pub release_group: Option<MbReleaseGroup>,
+    /// URL relations (from `inc=url-rels`), notably the linked Discogs release.
+    /// Empty for old cached JSON fetched without `url-rels`.
+    #[serde(default)]
+    pub relations: Vec<MbRelation>,
 }
 
 /// Release-group classification (from release lookup with `inc=release-groups`).
@@ -313,4 +333,182 @@ pub fn parse_release(raw_json: &[u8]) -> Result<MbRelease> {
         }
     }
     Ok(release)
+}
+
+/// Extract the linked Discogs release id from a relations list, if present.
+///
+/// MB serializes URL relations to Discogs as type `"discogs"` with the
+/// destination URL on `url.resource`. We accept either form:
+///   - `https://www.discogs.com/release/12345`
+///   - `https://www.discogs.com/release/12345-Some-Title-Slug`
+///   - `http://www.discogs.com/release/12345`
+///
+/// Returns `None` if no Discogs release relation exists or the URL doesn't
+/// look like a `/release/<id>` path (we deliberately ignore `/master/<id>`,
+/// `/artist/<id>`, etc., even when they appear under `type="discogs"`).
+pub fn discogs_release_id_from_relations(relations: &[MbRelation]) -> Option<String> {
+    for rel in relations {
+        if rel.type_ != "discogs" {
+            continue;
+        }
+        let Some(ref target) = rel.url else { continue };
+        if let Some(id) = parse_discogs_release_id_from_url(&target.resource) {
+            return Some(id);
+        }
+    }
+    None
+}
+
+/// Extract the Discogs *master* release id from a relations list, if present.
+/// Master releases group multiple regional pressings into one entry on Discogs.
+/// Returns `None` when no master URL is in the relations.
+pub fn discogs_master_id_from_relations(relations: &[MbRelation]) -> Option<String> {
+    for rel in relations {
+        if rel.type_ != "discogs" {
+            continue;
+        }
+        let Some(ref target) = rel.url else { continue };
+        if let Some(id) = parse_discogs_master_id_from_url(&target.resource) {
+            return Some(id);
+        }
+    }
+    None
+}
+
+/// Parse `https://www.discogs.com/release/12345[-slug]` → `Some("12345")`.
+///
+/// Public so callers (and tests) can validate a URL without constructing a
+/// full `MbRelation` graph. Tolerant of trailing slugs and query strings,
+/// strict about the `/release/` path segment.
+pub fn parse_discogs_release_id_from_url(url: &str) -> Option<String> {
+    parse_discogs_id_with_segment(url, "release")
+}
+
+/// Parse `https://www.discogs.com/master/12345[-slug]` → `Some("12345")`.
+pub fn parse_discogs_master_id_from_url(url: &str) -> Option<String> {
+    parse_discogs_id_with_segment(url, "master")
+}
+
+fn parse_discogs_id_with_segment(url: &str, segment: &str) -> Option<String> {
+    // Look for `/<segment>/` anywhere in the URL, then take the next path
+    // component and strip a trailing `-slug` if present. Keep the parser tight
+    // — only accept all-digit ids so we don't accidentally return e.g. a
+    // user/locale-prefixed path component.
+    let needle = format!("/{segment}/");
+    let after_segment = url.find(&needle).map(|i| &url[i + needle.len()..])?;
+    let next_seg = after_segment
+        .split(|c: char| c == '/' || c == '?' || c == '#')
+        .next()?;
+    // Strip slug: "12345-Some-Title" → "12345"
+    let id = next_seg.split('-').next()?;
+    if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) {
+        Some(id.to_string())
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod discogs_link_tests {
+    use super::*;
+
+    #[test]
+    fn parses_release_url_with_slug() {
+        assert_eq!(
+            parse_discogs_release_id_from_url(
+                "https://www.discogs.com/release/12345-Some-Title-Slug"
+            ),
+            Some("12345".to_string()),
+        );
+    }
+
+    #[test]
+    fn parses_release_url_without_slug() {
+        assert_eq!(
+            parse_discogs_release_id_from_url("https://www.discogs.com/release/9876"),
+            Some("9876".to_string()),
+        );
+    }
+
+    #[test]
+    fn parses_http_scheme() {
+        assert_eq!(
+            parse_discogs_release_id_from_url("http://www.discogs.com/release/42"),
+            Some("42".to_string()),
+        );
+    }
+
+    #[test]
+    fn parses_locale_prefixed_url() {
+        // Discogs often serves locale-prefixed paths like /ja/release/123.
+        // Our parser finds `/release/` anywhere — locale prefix is fine.
+        assert_eq!(
+            parse_discogs_release_id_from_url("https://www.discogs.com/ja/release/123"),
+            Some("123".to_string()),
+        );
+    }
+
+    #[test]
+    fn rejects_master_url() {
+        assert!(parse_discogs_release_id_from_url(
+            "https://www.discogs.com/master/12345"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn rejects_artist_url() {
+        assert!(parse_discogs_release_id_from_url(
+            "https://www.discogs.com/artist/12345"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn parses_master_url() {
+        assert_eq!(
+            parse_discogs_master_id_from_url("https://www.discogs.com/master/777-Master-Title"),
+            Some("777".to_string()),
+        );
+    }
+
+    #[test]
+    fn rejects_non_numeric_id() {
+        assert!(
+            parse_discogs_release_id_from_url("https://www.discogs.com/release/abc").is_none()
+        );
+    }
+
+    #[test]
+    fn extracts_from_relations() {
+        let rels = vec![
+            MbRelation {
+                type_: "wikidata".into(),
+                direction: None,
+                attributes: vec![],
+                artist: None,
+                url: Some(MbUrlTarget {
+                    resource: "https://www.wikidata.org/wiki/Q123".into(),
+                }),
+            },
+            MbRelation {
+                type_: "discogs".into(),
+                direction: None,
+                attributes: vec![],
+                artist: None,
+                url: Some(MbUrlTarget {
+                    resource: "https://www.discogs.com/release/42-Slug".into(),
+                }),
+            },
+        ];
+        assert_eq!(
+            discogs_release_id_from_relations(&rels),
+            Some("42".to_string()),
+        );
+    }
+
+    #[test]
+    fn empty_relations_returns_none() {
+        assert!(discogs_release_id_from_relations(&[]).is_none());
+    }
 }

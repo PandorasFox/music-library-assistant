@@ -267,6 +267,13 @@ pub struct Witch {
     /// observed inodes against the index.
     watcher_derivation_needed: bool,
 
+    /// Set at startup when InodesTransition auto-index queues mutations.
+    /// Consumed when those mutations complete: forces content analysis to
+    /// run immediately rather than wait for the linger → fetch chain.
+    /// Without this, dirty corpus_deploy_status inodes persisted across
+    /// restarts never get reclassified at startup, only after fetch.
+    pending_startup_content_analysis: bool,
+
     /// Images observed by the watcher, pending indexing.
     /// Accumulated from ImageFileObserved messages, drained when a batch
     /// is queued as an IndexObservedImages computation.
@@ -405,6 +412,7 @@ impl Witch {
             shared_config: None,
             config_snapshot: arc_swap::ArcSwap::from_pointee(None),
             watcher_derivation_needed: false,
+            pending_startup_content_analysis: false,
             pending_observed_images: Vec::new(),
             fs_watcher: fs_watcher_handle,
             auth_thread_handle: None, // Spawned in run(), not new()

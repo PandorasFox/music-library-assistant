@@ -18,7 +18,7 @@ pub mod login;
 pub mod migrations;
 pub mod vacuum;
 
-pub use first_time_setup::run_directory_picker;
+pub use first_time_setup::{run_first_time_setup, FirstTimeSetupResult};
 
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Style};

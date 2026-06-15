@@ -1167,6 +1167,19 @@ pub fn run_tui(
 ) -> Result<()> {
     mm_meta::logging::log_general("=== MM TUI startup ===");
 
+    // Install panic hook to restore terminal state on crash
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            io::stdout(),
+            LeaveAlternateScreen,
+            DisableMouseCapture,
+            DisableBracketedPaste
+        );
+        original_hook(info);
+    }));
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(
@@ -1186,12 +1199,11 @@ pub fn run_tui(
         // Two states: needs setup (first time) or ready for login.
         let (needs_setup, suggested_root) = startup.setup_status();
         if needs_setup {
-            // First-time setup: pick archive root, create first account
-            let root = startup::run_directory_picker(&mut terminal, suggested_root)?;
-            let first_user = startup::first_time_setup::run_create_account(&mut terminal)?;
+            // First-time setup: collect storage root + admin credentials
+            let setup = startup::run_first_time_setup(&mut terminal, suggested_root)?;
 
             startup
-                .complete_setup(root, Some(first_user))
+                .complete_setup(setup.storage_root, Some((setup.username, setup.password)))
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
 
             // Notify auth thread that DB is now available

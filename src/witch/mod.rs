@@ -610,9 +610,15 @@ impl Witch {
 
             // After any event: run bookkeeping if not awaiting setup
             if self.startup_state != types::WitchStartupState::AwaitingSetup {
+                // Track work_state before update to detect transitions
+                let state_before = WorkStateSnapshot::from(&self.work_state);
                 self.update_state();
                 self.check_startup_transitions();
                 self.maybe_trigger_derivation();
+                // Broadcast on state transitions (Working→Done, Done→Idle) even without activity
+                if WorkStateSnapshot::from(&self.work_state) != state_before {
+                    broadcast_status = true;
+                }
             }
 
             // Update the latest-status watch slot after any real activity.

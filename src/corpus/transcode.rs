@@ -314,7 +314,7 @@ fn copy_pictures(source: &Path, dest: &Path) -> Result<()> {
         .unwrap_or_default();
 
     if dest_ext == "flac" {
-        use lofty::config::{ParseOptions, WriteOptions};
+        use lofty::config::WriteOptions;
         use lofty::file::AudioFile;
         use lofty::ogg::OggPictureStorage;
 
@@ -322,7 +322,7 @@ fn copy_pictures(source: &Path, dest: &Path) -> Result<()> {
             format!("Failed to open dest FLAC for pictures: {}", dest.display())
         })?;
         let mut reader = std::io::BufReader::new(file);
-        let mut flac = lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default())
+        let mut flac = lofty::flac::FlacFile::read_from(&mut reader, super::tags::parse_options())
             .with_context(|| format!("Failed to read dest FLAC: {}", dest.display()))?;
 
         for pic in &pictures {

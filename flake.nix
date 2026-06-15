@@ -1,0 +1,210 @@
+{
+  description = "Music Magic - music library management tool";
+
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    flake-parts.url = "github:hercules-ci/flake-parts";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
+
+  outputs = inputs@{ self, nixpkgs, flake-parts, rust-overlay }:
+    flake-parts.lib.mkFlake { inherit inputs; } {
+      systems = [ "x86_64-linux" ];  # Other platforms untested
+
+      flake = {
+        nixosModules.default = { config, lib, pkgs, ... }:
+          let
+            cfg = config.services.music-magic;
+            pkg = self.packages.${pkgs.system}.default;
+          in {
+            options.services.music-magic = {
+              enable = lib.mkEnableOption "Music Magic server";
+
+              storageRoot = lib.mkOption {
+                type = lib.types.path;
+                description = "Path to the music corpus directory";
+                example = "/srv/media/audio/Music";
+              };
+
+              librariesRoot = lib.mkOption {
+                type = lib.types.nullOr lib.types.path;
+                default = null;
+                description = "Path for library deployments (defaults to storageRoot/../libraries)";
+              };
+
+              stashRoot = lib.mkOption {
+                type = lib.types.nullOr lib.types.path;
+                default = null;
+                description = "Path for stashed files (defaults to storageRoot/../stash)";
+              };
+
+              serviceUser = lib.mkOption {
+                type = lib.types.str;
+                default = "mm";
+                description = "System user to run Music Magic service as";
+              };
+
+              serviceGroup = lib.mkOption {
+                type = lib.types.str;
+                default = "mm";
+                description = "System group to run Music Magic service as";
+              };
+
+              dataDir = lib.mkOption {
+                type = lib.types.path;
+                default = "/var/lib/music-magic";
+                description = "Directory for database and state";
+              };
+
+              adminUser = lib.mkOption {
+                type = lib.types.str;
+                default = "admin";
+                description = "Username for initial admin account in Music Magic";
+              };
+
+              adminPasswordFile = lib.mkOption {
+                type = lib.types.nullOr lib.types.path;
+                default = null;
+                description = ''
+                  Path to file containing the initial admin password.
+                  Use with sops-nix or agenix for secure secret management.
+                  If null, first-time setup must be completed interactively via mm-tui.
+                '';
+                example = "/run/secrets/mm-admin-password";
+              };
+            };
+
+            config = lib.mkIf cfg.enable {
+              users.users.${cfg.serviceUser} = {
+                isSystemUser = true;
+                group = cfg.serviceGroup;
+                home = cfg.dataDir;
+                createHome = true;
+              };
+
+              users.groups.${cfg.serviceGroup} = {};
+
+              systemd.services.music-magic = {
+                description = "Music Magic Server";
+                after = [ "network.target" ];
+                wantedBy = [ "multi-user.target" ];
+
+                environment = {
+                  XDG_CONFIG_HOME = "${cfg.dataDir}/.config";
+                  XDG_DATA_HOME = "${cfg.dataDir}/.local/share";
+                };
+
+                serviceConfig = {
+                  Type = "simple";
+                  User = cfg.serviceUser;
+                  Group = cfg.serviceGroup;
+                  ExecStart = "${pkg}/bin/mm";
+                  Restart = "on-failure";
+                  RestartSec = "5s";
+
+                  # Hardening
+                  NoNewPrivileges = true;
+                  ProtectSystem = "strict";
+                  ProtectHome = true;
+                  PrivateTmp = true;
+                  ReadWritePaths = [
+                    cfg.dataDir
+                    cfg.storageRoot
+                  ] ++ lib.optional (cfg.librariesRoot != null) cfg.librariesRoot
+                    ++ lib.optional (cfg.stashRoot != null) cfg.stashRoot;
+                };
+
+                preStart = ''
+                  # Generate config.kdl
+                  mkdir -p ${cfg.dataDir}/.config/mm
+                  cat > ${cfg.dataDir}/.config/mm/config.kdl <<EOF
+                  storage-root "${cfg.storageRoot}"
+                  ${lib.optionalString (cfg.librariesRoot != null) ''libraries-root "${cfg.librariesRoot}"''}
+                  ${lib.optionalString (cfg.stashRoot != null) ''stash-root "${cfg.stashRoot}"''}
+                  EOF
+
+                  ${lib.optionalString (cfg.adminPasswordFile != null) ''
+                    # Initialize database with admin user if it doesn't exist
+                    if [ ! -f ${cfg.dataDir}/.local/share/mm/mm.db ]; then
+                      ${pkg}/bin/mm --init-user ${cfg.adminUser} --password-file ${cfg.adminPasswordFile}
+                    fi
+                  ''}
+                '';
+              };
+            };
+          };
+      };
+
+      perSystem = { config, self', pkgs, system, ... }:
+        let
+          rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+            extensions = [ "rust-src" "rust-analyzer" ];
+          };
+
+          nativeBuildInputs = with pkgs; [
+            rustToolchain
+            pkg-config
+            cmake
+          ];
+
+          buildInputs = with pkgs; [
+            # Audio encoding/decoding
+            libopus
+
+            # Chromaprint FFT backend
+            fftwFloat
+
+            # Memory allocator
+            jemalloc
+
+            # TLS for reqwest
+            openssl
+          ];
+        in
+        {
+          _module.args.pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ (import rust-overlay) ];
+          };
+
+          devShells.default = pkgs.mkShell {
+            inherit nativeBuildInputs buildInputs;
+
+            RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
+            JEMALLOC_SYS_WITH_LG_PAGE = "12";
+
+            shellHook = ''
+              echo "Music Magic dev shell"
+              echo "Run: cargo build --release"
+            '';
+          };
+
+          packages.default = pkgs.rustPlatform.buildRustPackage {
+            pname = "mm";
+            version = "0.1.0";
+            src = ./.;
+
+            cargoLock.lockFile = ./Cargo.lock;
+
+            inherit nativeBuildInputs buildInputs;
+
+            JEMALLOC_SYS_WITH_LG_PAGE = "12";
+
+            meta = {
+              description = "Music library management tool";
+              homepage = "https://github.com/PandorasFox/music-magic";
+              # license = TODO (add with pkgs.lib; when decided)
+            };
+          };
+
+          # mm-tui is the user-facing app
+          apps.default = {
+            type = "app";
+            program = "${self'.packages.default}/bin/mm-tui";
+          };
+        };
+    };
+}

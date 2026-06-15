@@ -51,9 +51,31 @@ mod witch;
 pub mod zones;
 
 use anyhow::Result;
+use clap::Parser;
+use std::path::PathBuf;
+
+/// Music Magic server
+#[derive(Parser)]
+#[command(name = "mm", about = "Music Magic server daemon")]
+struct Cli {
+    /// Initialize database with a user and exit (for declarative NixOS setup)
+    #[arg(long)]
+    init_user: Option<String>,
+
+    /// Path to file containing password for --init-user
+    #[arg(long, requires = "init_user")]
+    password_file: Option<PathBuf>,
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    // Handle --init-user mode: create config, DB, user, then exit
+    if let Some(username) = cli.init_user {
+        return init_user_and_exit(&username, cli.password_file);
+    }
+
     // Initialize log channel FIRST (before any logging happens)
     let log_rx = logging::init_log_channel();
 
@@ -63,6 +85,58 @@ async fn main() -> Result<()> {
 
     // Witch owns the main thread. Clients connect over Unix socket.
     witch::Witch::run(Some(log_rx)).await;
+
+    Ok(())
+}
+
+/// Initialize database and create first user, then exit.
+/// Used for declarative NixOS setup where secrets are provided via files.
+fn init_user_and_exit(username: &str, password_file: Option<PathBuf>) -> Result<()> {
+    use mm_meta::auth::FirstTimeSetupToken;
+
+    let password_file = password_file
+        .ok_or_else(|| anyhow::anyhow!("--password-file is required with --init-user"))?;
+
+    let password = std::fs::read_to_string(&password_file)
+        .map_err(|e| anyhow::anyhow!("Failed to read password file: {}", e))?
+        .trim()
+        .to_string();
+
+    if password.is_empty() {
+        anyhow::bail!("Password file is empty");
+    }
+
+    // Load config (must exist)
+    let cfg = config::load_config()
+        .map_err(|e| anyhow::anyhow!("Failed to load config: {}", e))?;
+
+    // Check if DB already exists
+    let db_path = config::get_db_path()?;
+    if db_path.exists() {
+        eprintln!("Database already exists at {}", db_path.display());
+        eprintln!("User initialization skipped (already set up)");
+        return Ok(());
+    }
+
+    // Create directories
+    std::fs::create_dir_all(&cfg.storage_root)?;
+    std::fs::create_dir_all(cfg.libraries_dir())?;
+    std::fs::create_dir_all(cfg.stash_dir())?;
+
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Create database
+    let token = FirstTimeSetupToken::new();
+    let db = db::create_database(&db_path, &token)?;
+
+    // Hash password and create user
+    let password_hash = auth::hash_password(&password)?;
+    db.create_user(username, &password_hash)?;
+
+    eprintln!("Initialized database at {}", db_path.display());
+    eprintln!("Created user '{}'", username);
 
     Ok(())
 }

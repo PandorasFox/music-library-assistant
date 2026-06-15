@@ -464,7 +464,7 @@ impl FieldFormState {
     // Scroll helpers
     // ========================================================================
 
-    fn scroll_to_cursor(&mut self) {
+    pub fn scroll_to_cursor(&mut self) {
         if self.visible_height == 0 {
             return;
         }

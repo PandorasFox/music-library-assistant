@@ -3,11 +3,16 @@
 //! Looks up audio fingerprints against the AcoustID database to identify
 //! recordings. Used by the fetch thread for background metadata enrichment.
 //!
-//! ## Response Types
+//! ## Scope
 //!
-//! AcoustID returns MusicBrainz MBIDs but uses its **own JSON serialization
-//! format** — different field names and nesting from the MusicBrainz API.
-//! We define our own serde structs here rather than using musicbrainz_rs types.
+//! AcoustID is treated as a fingerprint → recording-MBID linkage service ONLY.
+//! It returns metadata blobs (titles, artists, releases) alongside each match,
+//! but that metadata is unreliable: AcoustID picks an arbitrary track that the
+//! recording *might* be, un-localized and frequently incorrect. We deliberately
+//! ignore those fields and pull authoritative recording metadata from the
+//! MusicBrainz cache (`mb_recording_cache`) instead. The typed structs below
+//! intentionally only deserialize what we trust: the recording MBID and the
+//! per-result confidence score.
 //!
 //! API docs: https://acoustid.org/webservice
 
@@ -15,71 +20,38 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 // ============================================================================
-// Typed AcoustID Response Structs
+// Typed AcoustID Response Structs (linkage-only — no metadata)
 // ============================================================================
 
 /// Top-level AcoustID API response.
 #[derive(Debug, Deserialize)]
-pub struct AcoustIdResponse {
-    pub status: String,
-    pub error: Option<AcoustIdError>,
+struct AcoustIdResponse {
+    status: String,
+    error: Option<AcoustIdError>,
     #[serde(default)]
-    pub results: Vec<AcoustIdResult>,
+    results: Vec<AcoustIdResult>,
 }
 
 /// AcoustID API error detail.
 #[derive(Debug, Deserialize)]
-pub struct AcoustIdError {
-    pub message: String,
+struct AcoustIdError {
+    message: String,
 }
 
-/// One fingerprint match result (may contain multiple recordings).
+/// One fingerprint match result (may contain multiple candidate recordings).
 #[derive(Debug, Deserialize)]
-pub struct AcoustIdResult {
+struct AcoustIdResult {
     /// Match confidence 0.0–1.0.
-    pub score: f64,
+    score: f64,
     #[serde(default)]
-    pub recordings: Vec<AcoustIdRecording>,
+    recordings: Vec<AcoustIdRecordingLink>,
 }
 
-/// A MusicBrainz recording returned by AcoustID.
+/// Linkage-only recording reference: MBID only.
 #[derive(Debug, Deserialize)]
-pub struct AcoustIdRecording {
+struct AcoustIdRecordingLink {
     /// MusicBrainz recording MBID.
-    pub id: String,
-    pub title: Option<String>,
-    #[serde(default)]
-    pub artists: Vec<AcoustIdArtist>,
-    /// Present if meta includes +releases.
-    #[serde(default)]
-    pub releases: Vec<AcoustIdRelease>,
-    /// Present if meta includes +releasegroups.
-    #[serde(default)]
-    pub releasegroups: Vec<AcoustIdReleaseGroup>,
-}
-
-/// An artist credit in AcoustID's format.
-#[derive(Debug, Deserialize)]
-pub struct AcoustIdArtist {
-    pub name: String,
-    /// Join phrase between this artist and the next (e.g., " & ", " feat. ").
-    #[serde(default)]
-    pub joinphrase: Option<String>,
-}
-
-/// A MusicBrainz release returned by AcoustID.
-#[derive(Debug, Deserialize)]
-pub struct AcoustIdRelease {
-    /// MusicBrainz release MBID.
-    pub id: String,
-    pub title: Option<String>,
-}
-
-/// A MusicBrainz release group returned by AcoustID.
-#[derive(Debug, Deserialize)]
-pub struct AcoustIdReleaseGroup {
-    /// MusicBrainz release group MBID.
-    pub id: String,
+    id: String,
 }
 
 // ============================================================================
@@ -124,16 +96,21 @@ impl AcoustIDClient {
         compress_fingerprint(fingerprint, CHROMAPRINT_ALGORITHM)
     }
 
-    /// Look up a fingerprint against AcoustID and return both parsed results and raw JSON.
-    pub async fn lookup_with_raw(
+    /// Look up a fingerprint against AcoustID. Returns linkage-only results
+    /// (recording MBIDs + confidence scores); response metadata is discarded.
+    pub async fn lookup(
         &self,
         fingerprint: &[u32],
         duration_secs: u32,
-    ) -> Result<(LookupOutcome, Option<Vec<u8>>)> {
+    ) -> Result<LookupOutcome> {
         let fp_encoded = Self::encode_fingerprint(fingerprint);
 
+        // `meta=recordings` is the minimum that returns recording MBIDs.
+        // We intentionally do NOT request `releases`/`releasegroups`/`recordingids`
+        // metadata because AcoustID's per-track metadata is unreliable — we resolve
+        // recordings against `mb_recording_cache` downstream instead.
         let form_body = format!(
-            "client={}&fingerprint={}&duration={}&meta=recordings+releases+releasegroups",
+            "client={}&fingerprint={}&duration={}&meta=recordings",
             urlencoded(&self.api_key),
             urlencoded(&fp_encoded),
             duration_secs,
@@ -151,7 +128,7 @@ impl AcoustIDClient {
             Ok(resp) => {
                 let status = resp.status();
                 if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                    return Ok((LookupOutcome::RateLimited, None));
+                    return Ok(LookupOutcome::RateLimited);
                 }
                 if !status.is_success() {
                     let body = resp.text().await.unwrap_or_default();
@@ -164,14 +141,12 @@ impl AcoustIDClient {
             }
         };
 
-        let raw = response
+        let body = response
             .bytes()
             .await
-            .context("Failed to read AcoustID response body")?
-            .to_vec();
+            .context("Failed to read AcoustID response body")?;
 
-        let outcome = parse_acoustid_response(&raw)?;
-        Ok((outcome, Some(raw)))
+        parse_acoustid_response(&body)
     }
 }
 
@@ -179,8 +154,8 @@ impl AcoustIDClient {
 // Response Parsing
 // ============================================================================
 
-/// Parse AcoustID JSON response bytes into a typed `AcoustIdResponse`.
-pub fn parse_acoustid_response(body: &[u8]) -> Result<LookupOutcome> {
+/// Parse an AcoustID JSON response into a linkage-only outcome.
+fn parse_acoustid_response(body: &[u8]) -> Result<LookupOutcome> {
     let response: AcoustIdResponse =
         serde_json::from_slice(body).context("Failed to parse AcoustID JSON response")?;
 
@@ -212,21 +187,6 @@ pub fn parse_acoustid_response(body: &[u8]) -> Result<LookupOutcome> {
     } else {
         Ok(LookupOutcome::Matches(matches))
     }
-}
-
-/// Find a specific recording by MBID in a stored AcoustID response.
-///
-/// Used by the signal derivation computation to extract metadata for
-/// the matched recording from the stored raw response JSON.
-pub fn find_recording_in_response<'a>(
-    response: &'a AcoustIdResponse,
-    recording_id: &str,
-) -> Option<&'a AcoustIdRecording> {
-    response
-        .results
-        .iter()
-        .flat_map(|r| r.recordings.iter())
-        .find(|rec| rec.id == recording_id)
 }
 
 // ============================================================================

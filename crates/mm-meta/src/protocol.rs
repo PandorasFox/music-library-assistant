@@ -280,6 +280,27 @@ pub enum TransactionPayload {
     BatchApplyVaOverrides {
         applications: Vec<VaOverrideApplication>,
     },
+    /// Server-side staging of a batch of genre-vocabulary edits.
+    /// Wraps the ops into a single `EditGenreVocabularyMutation`, builds a
+    /// `Decision` keyed on `GenreVocabularyEdit` (singleton — re-issuing
+    /// within a transaction replaces the prior batch), and stages it.
+    /// Opens a fresh transaction if none is active. Does NOT confirm; the
+    /// operator reviews and confirms separately via `/tx/confirm`.
+    BatchEditGenreVocabulary {
+        ops: Vec<crate::mutations::genre_vocabulary::GenreVocabularyOp>,
+    },
+    /// Per-release explicit promotion. The chip-edit UI sends every release
+    /// with its operator-curated exclusion list; the server loads ledgers,
+    /// runs the pure builder, and stages one decision per release.
+    /// Decisions keyed `GenrePromote { release_id }` — re-staging replaces.
+    BatchPromoteGenres {
+        applications: Vec<crate::external::genre_promote::GenrePromotionApplication>,
+    },
+    /// Inode-list bulk promotion. The server fans the inode list out to
+    /// per-release applications (full promote, no exclusions), then runs
+    /// the same builder. Over `bulk_cap` inodes → `TransactionError::Other`.
+    /// Useful for "search→inode list→one-button promote" flows.
+    BatchPromoteGenresForInodes { inodes: Vec<i64> },
 }
 
 /// One operator-approved VA-override application: a release whose
@@ -311,8 +332,33 @@ pub enum TransactionResponse {
     /// staged successfully vs. were skipped because the release is no longer
     /// packed (no inodes to fan out to).
     VaOverridesStaged(crate::external::va_override::VaOverrideSummary),
+    /// Result of `BatchEditGenreVocabulary`: total ops staged. Vocabulary
+    /// edits don't fan out — every op in the batch survives staging.
+    GenreVocabularyStaged(GenreVocabularySummary),
+    /// Result of `BatchPromoteGenres` / `BatchPromoteGenresForInodes`.
+    GenrePromotionStaged(GenrePromotionStagingSummary),
     /// Transaction-specific error.
     Error(TransactionError),
+}
+
+/// Summary returned by the two promotion endpoints. Combines the pure
+/// builder's `GenrePromotionSummary` with bulk-path-specific counts.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct GenrePromotionStagingSummary {
+    pub staged_releases: usize,
+    pub staged_inodes: usize,
+    pub already_matching_inodes: usize,
+    pub inodes_without_ledger: usize,
+    pub skipped_empty_applications: usize,
+    /// Inode-list bulk only: inodes the operator supplied that aren't packed
+    /// to any release. Always 0 for `BatchPromoteGenres`.
+    pub skipped_unpacked_inodes: usize,
+}
+
+/// Summary for `BatchEditGenreVocabulary`.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct GenreVocabularySummary {
+    pub staged_ops: usize,
 }
 
 /// Detail record for a single decision in the active transaction.

@@ -70,6 +70,16 @@ impl super::Witch {
                         Some("Auto-index unindexed files".to_string()),
                     );
                     self.pending_work.insert(super::types::PendingWork::FETCH);
+
+                    // At Inodes→Full, the post-mutation content analysis pass
+                    // owes the deploy/release pipeline a recompute even if
+                    // fetch produces no EXTERNAL scope. Branch A (no mutations)
+                    // already fires it directly; mirror that here so dirty
+                    // corpus_deploy_status inodes carried across a restart
+                    // get reclassified without waiting on the linger gate.
+                    if matches!(source, AutoIndexSource::InodesTransition) {
+                        self.pending_startup_content_analysis = true;
+                    }
                 } else if matches!(source, AutoIndexSource::InodesTransition) {
                     // No unindexed files at Inodes→Full — go straight to content analysis.
                     let witness = ContentAnalysisWitness::new();

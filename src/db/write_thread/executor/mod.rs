@@ -4,8 +4,13 @@
 //! and all `execute_*` functions that perform the actual SQL operations.
 
 mod external_ops;
+mod genre_ops;
 mod index_ops;
 mod packing_ops;
+
+pub use genre_ops::{
+    execute_apply_genre_vocabulary_edits, InodeGenreRow, UnresolvedGenreObservation,
+};
 
 use rusqlite::params;
 
@@ -156,8 +161,13 @@ fn execute_upsert_library_file(
 ) -> anyhow::Result<()> {
     let scanned_at = index_ops::current_unix_secs();
 
-    // Upsert inode-level metadata (mtime, size, etc.).
-    db.conn().execute(
+    // Wrap both writes in one transaction — without this each `execute` call
+    // auto-commits separately, costing one fsync per statement. Single
+    // transaction = single fsync, which moved this op from ~330 ms outliers
+    // down to the typical 1–2 ms range during library-scan bursts.
+    let tx = db.conn().unchecked_transaction()?;
+
+    tx.execute(
         "INSERT INTO inodes (inode, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
          VALUES (?1, 0, ?2, ?3, ?4, ?5)
          ON CONFLICT(inode) DO UPDATE SET
@@ -169,44 +179,48 @@ fn execute_upsert_library_file(
         params![inode, mtime_secs, mtime_nanos, file_size, scanned_at],
     )?;
 
-    // Insert path mapping (idempotent on conflict).
-    db.conn().execute(
+    tx.execute(
         "INSERT OR IGNORE INTO inode_paths (inode, zone, path) VALUES (?1, 'library', ?2)",
         params![inode, stored_path],
     )?;
 
+    tx.commit()?;
     Ok(())
 }
 
 /// Execute DeleteLibraryFile: remove a stale library file from the files table.
 fn execute_delete_library_file(db: &Database, stored_path: &str) -> anyhow::Result<()> {
+    // Wrap the find+delete+orphan-cleanup sequence in one transaction —
+    // up to four statements that were previously auto-committing individually.
+    let tx = db.conn().unchecked_transaction()?;
+
     // Find the inode for this library path before deleting, so we can clean
     // up the inode row if no paths remain.
-    let inode_opt: Option<i64> = db.conn().query_row(
-        "SELECT inode FROM inode_paths WHERE zone = 'library' AND path = ?1",
-        params![stored_path],
-        |row| row.get(0),
-    ).ok();
+    let inode_opt: Option<i64> = tx
+        .query_row(
+            "SELECT inode FROM inode_paths WHERE zone = 'library' AND path = ?1",
+            params![stored_path],
+            |row| row.get(0),
+        )
+        .ok();
 
-    db.conn().execute(
+    tx.execute(
         "DELETE FROM inode_paths WHERE zone = 'library' AND path = ?1",
         params![stored_path],
     )?;
 
     if let Some(inode) = inode_opt {
-        let remaining: i64 = db.conn().query_row(
+        let remaining: i64 = tx.query_row(
             "SELECT COUNT(*) FROM inode_paths WHERE inode = ?1",
             params![inode],
             |row| row.get(0),
         )?;
         if remaining == 0 {
-            db.conn().execute(
-                "DELETE FROM inodes WHERE inode = ?1",
-                params![inode],
-            )?;
+            tx.execute("DELETE FROM inodes WHERE inode = ?1", params![inode])?;
         }
     }
 
+    tx.commit()?;
     Ok(())
 }
 
@@ -315,14 +329,24 @@ pub(super) fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             }
         }
         DbWriteOp::WriteTypedSignalBatch { signals } => {
-            for signal in signals {
-                if let Err(e) = signal.clone().insert(db.conn()) {
-                    crate::logging::log_error(format!(
-                        "[DB_THREAD] write_typed_signal_batch item failed: {}",
-                        e
-                    ));
+            // Wrap the whole batch in a single transaction so we get one fsync
+            // for the lot instead of one per signal. Per-signal failures are
+            // logged but don't abort the batch — matches prior best-effort
+            // semantics. SQLite WAL + synchronous=NORMAL fsyncs only on COMMIT,
+            // so this collapses N fsyncs into 1 for batches of any size.
+            with_retry("write_typed_signal_batch_tx", "batch", || {
+                let tx = db.conn().unchecked_transaction()?;
+                for signal in signals {
+                    if let Err(e) = signal.clone().insert(&tx) {
+                        crate::logging::log_error(format!(
+                            "[DB_THREAD] write_typed_signal_batch item failed: {}",
+                            e
+                        ));
+                    }
                 }
-            }
+                tx.commit()?;
+                Ok(())
+            });
         }
         DbWriteOp::UpdateFileMtime {
             zone,
@@ -530,7 +554,6 @@ pub(super) fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             source,
             recording_id,
             confidence,
-            raw_response,
             fetched_at,
         } => {
             with_retry("insert_external_match", recording_id, || {
@@ -541,7 +564,6 @@ pub(super) fn execute_signal_op(db: &Database, op: &DbWriteOp) {
                     *source,
                     recording_id,
                     *confidence,
-                    raw_response.as_deref(),
                     *fetched_at,
                 )
             });
@@ -606,6 +628,30 @@ pub(super) fn execute_signal_op(db: &Database, op: &DbWriteOp) {
                     discovered_from.as_deref(),
                     *discovered_at,
                 )
+            });
+        }
+
+        DbWriteOp::UpsertDiscogsReleaseCache {
+            release_id,
+            raw_json,
+            fetched_at,
+        } => {
+            with_retry("upsert_discogs_release_cache", release_id, || {
+                external_ops::execute_upsert_discogs_release_cache(
+                    db, release_id, raw_json, *fetched_at,
+                )
+            });
+        }
+
+        DbWriteOp::SetAppMetadata { key, value } => {
+            with_retry("set_app_metadata", key, || {
+                db.conn().execute(
+                    "INSERT INTO app_metadata (key, value, updated_at) \
+                     VALUES (?1, ?2, datetime('now')) \
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                    rusqlite::params![key, value],
+                )?;
+                Ok(())
             });
         }
 
@@ -692,6 +738,27 @@ pub(super) fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             });
         }
 
+        DbWriteOp::WriteInodeGenres { rows } => {
+            with_retry("write_inode_genres", "batch", || {
+                genre_ops::execute_write_inode_genres(db, rows)
+            });
+        }
+
+        DbWriteOp::ClearInodeGenresForSource { inode, source } => {
+            with_retry("clear_inode_genres_for_source", "single", || {
+                genre_ops::execute_clear_inode_genres_for_source(db, *inode, *source)
+            });
+        }
+
+        DbWriteOp::BumpUnresolvedGenreObservations { observations } => {
+            with_retry("bump_unresolved_genre_observations", "batch", || {
+                genre_ops::execute_bump_unresolved_genre_observations(db, observations)
+            });
+        }
+
+        DbWriteOp::ApplyGenreVocabularyEdits { .. } => {
+            unreachable!("ApplyGenreVocabularyEdits handled in run_db_thread loop")
+        }
         DbWriteOp::SetCacheSize { .. } => unreachable!("SetCacheSize handled in run_db_thread loop"),
         DbWriteOp::Shutdown => unreachable!("Shutdown handled in run_db_thread loop"),
     }

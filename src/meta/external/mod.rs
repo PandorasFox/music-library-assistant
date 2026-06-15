@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 pub enum ExternalSource {
     AcoustID = 1,
     MusicBrainz = 2,
+    Discogs = 3,
 }
 
 impl ExternalSource {
@@ -27,6 +28,7 @@ impl ExternalSource {
         match self {
             ExternalSource::AcoustID => "AcoustID",
             ExternalSource::MusicBrainz => "MusicBrainz",
+            ExternalSource::Discogs => "Discogs",
         }
     }
 }

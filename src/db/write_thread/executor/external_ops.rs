@@ -11,7 +11,6 @@ use super::index_ops::current_unix_secs;
 // ============================================================================
 
 /// Execute InsertExternalMatch: insert a match from an external API.
-#[allow(clippy::too_many_arguments)] // args map 1:1 to SQL columns
 pub(super) fn execute_insert_external_match(
     db: &Database,
     inode: i64,
@@ -19,21 +18,18 @@ pub(super) fn execute_insert_external_match(
     source: i64,
     recording_id: &str,
     confidence: f64,
-    raw_response: Option<&[u8]>,
     fetched_at: i64,
 ) -> anyhow::Result<()> {
-
     db.conn().execute(
         r#"INSERT OR REPLACE INTO external_matches
-           (inode, fingerprint, source, recording_id, confidence, raw_response, fetched_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"#,
+           (inode, fingerprint, source, recording_id, confidence, fetched_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)"#,
         params![
             inode,
             fingerprint,
             source,
             recording_id,
             confidence,
-            raw_response,
             fetched_at
         ],
     )?;
@@ -104,6 +100,11 @@ pub(super) fn execute_drop_external_match(db: &Database, inode: i64) -> anyhow::
 }
 
 /// Execute an MB cache upsert for any entity type.
+///
+/// For `mb_release_cache` writes, additionally parses `url-rels` from the
+/// JSON and refreshes `mb_release_discogs_links` rows in the same
+/// transaction. This keeps the MB→Discogs linkage in sync as cache rows
+/// land, without requiring a separate periodic scan over every cached blob.
 pub(super) fn execute_upsert_mb_cache(
     db: &Database,
     table: &str,
@@ -112,11 +113,54 @@ pub(super) fn execute_upsert_mb_cache(
     raw_json: &[u8],
     fetched_at: i64,
 ) -> anyhow::Result<()> {
+    let conn = db.conn();
+    let tx = conn.unchecked_transaction()?;
 
     let sql = format!(
         "INSERT OR REPLACE INTO {table} ({id_col}, raw_json, fetched_at) VALUES (?1, ?2, ?3)"
     );
-    db.conn().execute(&sql, params![id, raw_json, fetched_at])?;
+    tx.execute(&sql, params![id, raw_json, fetched_at])?;
+
+    if table == "mb_release_cache" {
+        // Drop and re-insert linkage rows for this MB release. We re-extract
+        // every time so a corrected url-rels payload removes stale links.
+        tx.execute(
+            "DELETE FROM mb_release_discogs_links WHERE mb_release_id = ?1",
+            params![id],
+        )?;
+
+        if let Ok(release) = mm_meta::external::musicbrainz::parse_release(raw_json) {
+            if let Some(discogs_id) =
+                mm_meta::external::musicbrainz::discogs_release_id_from_relations(
+                    &release.relations,
+                )
+            {
+                tx.execute(
+                    "INSERT OR IGNORE INTO mb_release_discogs_links
+                        (mb_release_id, discogs_release_id, discovered_at)
+                     VALUES (?1, ?2, ?3)",
+                    params![id, discogs_id, fetched_at],
+                )?;
+            }
+        }
+    }
+
+    tx.commit()?;
+    Ok(())
+}
+
+/// Execute UpsertDiscogsReleaseCache: persist a fetched Discogs release JSON blob.
+pub(super) fn execute_upsert_discogs_release_cache(
+    db: &Database,
+    release_id: &str,
+    raw_json: &[u8],
+    fetched_at: i64,
+) -> anyhow::Result<()> {
+    db.conn().execute(
+        "INSERT OR REPLACE INTO discogs_release_cache (release_id, raw_json, fetched_at)
+         VALUES (?1, ?2, ?3)",
+        params![release_id, raw_json, fetched_at],
+    )?;
     Ok(())
 }
 

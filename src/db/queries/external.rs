@@ -20,12 +20,13 @@ pub struct PackingAssignment {
 /// An unassigned corpus audio file in a directory: (inode, path, fingerprint_hex, duration_ms).
 pub type UnassignedAudioFile = (i64, String, Option<String>, Option<i64>);
 
-/// A row from external_matches joined with files, for signal derivation.
+/// A row from external_matches joined with inode_paths, for signal derivation
+/// and release packing scoring. Metadata for the matched recording is resolved
+/// downstream via `mb_recording_cache`.
 pub struct ExternalMatchRow {
     pub inode: i64,
     pub recording_id: String,
     pub confidence: f64,
-    pub raw_response: Option<Vec<u8>>,
     pub path: String,
 }
 
@@ -78,16 +79,17 @@ pub struct ExternalLookupCandidate {
 }
 
 impl Database {
-    /// Get external matches for corpus files, for signal derivation.
+    /// Get external matches for corpus files, ordered by (inode, confidence DESC).
     ///
-    /// Returns rows ordered by (inode, confidence DESC) so the caller can
-    /// group by inode and take the first per group (highest confidence).
-    pub fn get_external_matches_for_derivation(
+    /// Used by both `DeriveExternalMatches` (signal derivation against MB cache)
+    /// and the release packing pipeline. Callers group by inode and typically
+    /// take the highest-confidence row per group.
+    pub fn get_external_matches_for_corpus(
         &self,
         source_key: i64,
     ) -> Result<Vec<ExternalMatchRow>> {
         let mut stmt = self.conn().prepare(
-            r#"SELECT em.inode, em.recording_id, em.confidence, em.raw_response, p.path
+            r#"SELECT em.inode, em.recording_id, em.confidence, p.path
                FROM external_matches em
                JOIN inode_paths p ON em.inode = p.inode
                WHERE p.zone = 'corpus' AND em.source = ?1
@@ -99,35 +101,7 @@ impl Database {
                 inode: row.get(0)?,
                 recording_id: row.get(1)?,
                 confidence: row.get(2)?,
-                raw_response: row.get(3)?,
-                path: row.get(4)?,
-            })
-        })?;
-
-        Ok(rows.flatten().collect())
-    }
-
-    /// Get external matches for corpus files, without raw_response blobs.
-    ///
-    /// Slim variant of `get_external_matches_for_derivation` for the release
-    /// packing pipeline which never reads raw_response. Avoids loading kilobytes
-    /// of AcoustID JSON per row.
-    pub fn get_external_matches_slim(&self, source_key: i64) -> Result<Vec<ExternalMatchRow>> {
-        let mut stmt = self.conn().prepare(
-            r#"SELECT em.inode, em.recording_id, em.confidence, NULL, p.path
-               FROM external_matches em
-               JOIN inode_paths p ON em.inode = p.inode
-               WHERE p.zone = 'corpus' AND em.source = ?1
-               ORDER BY em.inode, em.confidence DESC"#,
-        )?;
-
-        let rows = stmt.query_map(params![source_key], |row| {
-            Ok(ExternalMatchRow {
-                inode: row.get(0)?,
-                recording_id: row.get(1)?,
-                confidence: row.get(2)?,
-                raw_response: row.get(3)?,
-                path: row.get(4)?,
+                path: row.get(3)?,
             })
         })?;
 

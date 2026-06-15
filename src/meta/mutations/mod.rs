@@ -29,6 +29,7 @@
 pub mod config_edit;
 pub mod dir_config_edit;
 pub mod file_ops;
+pub mod genre_vocabulary;
 pub mod indexing;
 pub mod tag_edit;
 pub mod traits;

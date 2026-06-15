@@ -350,6 +350,38 @@ pub struct SearchWithConditions {
 }
 
 // ============================================================================
+// Genre Vocabulary Queries (Phase 2)
+// ============================================================================
+
+/// Load the full genre vocabulary: canonical names, their aliases, and
+/// outgoing implication edges. Per-entry ledger row counts are included so
+/// the editor can show coverage without a follow-up query.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetGenreVocabulary;
+
+/// Load the queue of raw genre strings observed during ingestion that
+/// didn't resolve to any canonical id. Sorted by `observation_count` desc.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetUnresolvedGenreObservations;
+
+/// Promotion review: every packed release with at least one ledger row
+/// across its packed inodes. Returns aggregated chip strip + current-tag
+/// summary per release. Lazily expanded via `GetGenrePromotionInodeDetail`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetGenrePromotionReview;
+
+/// Per-inode chip breakdown for one release — fetched only when the
+/// promotion UI expands a row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetGenrePromotionInodeDetail {
+    pub release_id: String,
+}
+
+/// Aggregate coverage counters for the Health/promotion-view header.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetGenreCoverageSummary;
+
+// ============================================================================
 // Protocol Bridge Macro
 // ============================================================================
 
@@ -465,6 +497,11 @@ domain_query_protocol! {
     GetPackingBrowserData("packing-browser-data") => crate::domain_query_types::PackingBrowserData,
     GetUnsolvedPackingData("unsolved-packing-data") => Vec<(i64, String, crate::signals::data::UnmatchedCorpusTrackData)>,
     GetVaOverrideReview("va-override-review") => crate::domain_query_types::VaOverrideReview,
+    GetGenreVocabulary("genre-vocabulary") => crate::domain_query_types::GenreVocabulary,
+    GetUnresolvedGenreObservations("unresolved-genre-observations") => crate::domain_query_types::UnresolvedGenreObservations,
+    GetGenrePromotionReview("genre-promotion-review") => crate::domain_query_types::GenrePromotionReview,
+    GetGenrePromotionInodeDetail("genre-promotion-inode-detail") => crate::domain_query_types::GenrePromotionInodeDetail,
+    GetGenreCoverageSummary("genre-coverage-summary") => crate::domain_query_types::GenreCoverageSummary,
 
     // Detail queries (Wave 4: composite)
     GetAudioFilesByInodes("audio-files-by-inodes") => Vec<crate::db_types::AudioFile>,

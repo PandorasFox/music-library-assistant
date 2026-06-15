@@ -445,14 +445,22 @@ impl super::Witch {
     fn handle_fetch_requests(&mut self, requests: Vec<crate::meta::computations::FetchRequest>) {
         let mut need_fetch = false;
         for req in requests {
-            if !req.mb_release_ids.is_empty() {
-                // Seed the known entities table so the scheduler discovers these releases.
+            if !req.mb_release_ids.is_empty() || !req.mb_recording_ids.is_empty() {
+                // Seed the known entities table so the scheduler discovers these entities.
                 if let Some(sender) = crate::db::write_thread::signal_sender() {
                     let now = chrono::Utc::now().timestamp();
                     for release_id in &req.mb_release_ids {
                         sender.insert_mb_known_entity(
                             release_id,
                             "release",
+                            Some("pinned_release"),
+                            now,
+                        );
+                    }
+                    for recording_id in &req.mb_recording_ids {
+                        sender.insert_mb_known_entity(
+                            recording_id,
+                            "recording",
                             Some("pinned_release"),
                             now,
                         );

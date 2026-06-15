@@ -14,6 +14,7 @@ use super::file_ops::{
     HardLinkMutation, LibraryMoveMutation, MoveMutation, StashFromZoneMutation,
     StashLeftoversMutation,
 };
+use super::genre_vocabulary::EditGenreVocabularyMutation;
 use super::indexing::{
     AcknowledgeMtimeOnlyMutation, ApplyDbTagsToDiskMutation, AssimilateDiskTagsToDbMutation,
     DropDirectoryFromIndexMutation, DropExternalMatchMutation, DropFromIndexMutation,
@@ -329,6 +330,9 @@ pub enum Mutation {
     ApplyDirConfigEdit(Box<ApplyDirConfigEditMutation>),
     /// Batch-apply multiple source directory config edits atomically.
     ApplyBatchDirConfigEdits(Box<ApplyBatchDirConfigEditsMutation>),
+    /// Apply a batch of genre vocabulary edits (add/remove canonical names,
+    /// aliases, implications; merge genres). DB-only — no disk side effects.
+    EditGenreVocabulary(EditGenreVocabularyMutation),
 }
 
 /// Fieldless mirror of `Mutation` for compile-time-enforced mapping tables.
@@ -362,6 +366,7 @@ pub enum MutationKind {
     ApplyConfigEdits,
     ApplyDirConfigEdit,
     ApplyBatchDirConfigEdits,
+    EditGenreVocabulary,
 }
 
 impl Mutation {
@@ -391,6 +396,7 @@ impl Mutation {
             Mutation::ApplyConfigEdits(_) => MutationKind::ApplyConfigEdits,
             Mutation::ApplyDirConfigEdit(_) => MutationKind::ApplyDirConfigEdit,
             Mutation::ApplyBatchDirConfigEdits(_) => MutationKind::ApplyBatchDirConfigEdits,
+            Mutation::EditGenreVocabulary(_) => MutationKind::EditGenreVocabulary,
         }
     }
 
@@ -420,6 +426,7 @@ impl Mutation {
             Mutation::ApplyConfigEdits(_) => "Config update",
             Mutation::ApplyDirConfigEdit(_) => "Dir config update",
             Mutation::ApplyBatchDirConfigEdits(_) => "Dir config batch update",
+            Mutation::EditGenreVocabulary(_) => "Genre vocabulary edit",
         }
     }
 
@@ -452,6 +459,7 @@ impl Mutation {
             Mutation::ApplyConfigEdits(m) => m.diff_entries(),
             Mutation::ApplyDirConfigEdit(m) => m.diff_entries(),
             Mutation::ApplyBatchDirConfigEdits(m) => m.diff_entries(),
+            Mutation::EditGenreVocabulary(m) => m.diff_entries(),
         }
     }
 }

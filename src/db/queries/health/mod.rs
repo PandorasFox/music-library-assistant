@@ -8,7 +8,6 @@ use anyhow::Result;
 use rusqlite::params;
 
 use super::Database;
-use crate::meta::signals::store::CorpusSignalStore;
 
 /// Generate a typed signal query method on Database.
 macro_rules! signal_query {
@@ -217,28 +216,6 @@ impl Database {
     /// Get missing directory signal paths (for UI resolution modal).
     pub fn get_missing_directory_paths(&self) -> Result<Vec<String>> {
         self.query_signal_paths("signal_missing_directory")
-    }
-
-    /// Get all file-presence signal inodes with their paths, zone-generic.
-    pub fn get_file_presence_inodes<Z: crate::zones::AudioZone>(
-        &self,
-    ) -> Result<std::collections::HashMap<i64, String>> {
-        self.get_signal_inode_paths(Z::FilePresenceSignal::TABLE_NAME)
-    }
-
-    /// Get all signal inodes with their paths from a given signal table.
-    fn get_signal_inode_paths(&self, table: &str) -> Result<std::collections::HashMap<i64, String>> {
-        let sql = format!("SELECT inode, path FROM {}", table);
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(params![], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-        })?;
-        let mut result = std::collections::HashMap::new();
-        for row in rows {
-            let (inode, path) = row?;
-            result.insert(inode, path);
-        }
-        Ok(result)
     }
 
     /// Query all `path` values from a signal table, sorted.

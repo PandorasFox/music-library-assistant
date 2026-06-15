@@ -47,8 +47,11 @@ export interface SourceProgress {
 export interface FetchProgress {
   acoustid: SourceProgress;
   mb: SourceProgress;
+  discogs: SourceProgress;
   acoustid_rps: number;
   mb_rps: number;
+  discogs_rps: number;
+  discogs_enabled: boolean;
 }
 
 export interface CoverArtProgress {
@@ -546,4 +549,109 @@ export interface VaOverrideStageSummary {
   staged_inodes: number;
   skipped_releases: number;
   already_matching_inodes: number;
+}
+
+// -- Genre vocabulary (Phase 2 vocabulary editor) --
+
+export interface GenreNameEntry {
+  id: number;
+  canonical_name: string;
+  display_name: string;
+  aliases: string[];
+  implies_parents: number[];
+  ledger_row_count: number;
+}
+
+export interface GenreVocabulary {
+  entries: GenreNameEntry[];
+}
+
+export interface UnresolvedGenreRow {
+  raw_value: string;
+  /** GenreSource discriminant (1=FileTagImport, 2=MusicBrainz, 3=Discogs, 4=AudiomuseInferred, 5=Manual, 6=Implied) */
+  source: number;
+  observation_count: number;
+  last_seen_at: number;
+}
+
+export interface UnresolvedGenreObservations {
+  rows: UnresolvedGenreRow[];
+}
+
+/** Mirror of `mm_meta::mutations::genre_vocabulary::GenreVocabularyOp`.
+ *  Serde serializes enum-with-data variants as `{ Variant: { ... } }`. */
+export type GenreVocabularyOp =
+  | { AddName: { canonical_name: string; display_name: string } }
+  | { AddAlias: { alias: string; genre_id: number } }
+  | { RemoveAlias: { alias: string } }
+  | { AddImplication: { child_id: number; parent_id: number } }
+  | { RemoveImplication: { child_id: number; parent_id: number } }
+  | { MergeGenres: { from_id: number; into_id: number } };
+
+// -- Phase 6: genre promotion --
+
+/** One chip in the promotion review.
+ *  `kind`: 0 = Genre, 1 = Style.
+ *  `sources_bits`: packed bitset over GenreSource discriminants (bit n-1 set
+ *  when source enum value n contributed). 1=FileTagImport, 2=MusicBrainz,
+ *  3=Discogs, 4=AudiomuseInferred, 5=Manual. */
+export interface GenrePromotionChip {
+  genre_id: number;
+  canonical_name: string;
+  kind: number;
+  inode_count: number;
+  sources_bits: number;
+}
+
+export interface GenrePromotionReviewRow {
+  release_id: string;
+  release_title: string;
+  release_artist: string;
+  packed_inode_count: number;
+  proposed_chips: GenrePromotionChip[];
+  current_genre_summary: string | null;
+  current_genre_uniform: boolean;
+  sources_bits: number;
+}
+
+export interface GenrePromotionReview {
+  rows: GenrePromotionReviewRow[];
+}
+
+export interface GenrePromotionInodeRow {
+  inode: number;
+  path: string;
+  chips: GenrePromotionChip[];
+}
+
+export interface GenrePromotionInodeDetail {
+  release_id: string;
+  rows: GenrePromotionInodeRow[];
+}
+
+export interface GenreCoverageSummary {
+  total_audio_inodes: number;
+  inodes_with_any_ledger: number;
+  inodes_with_discogs_ledger: number;
+  inodes_with_filetag_ledger: number;
+  inodes_already_promoted: number;
+  pending_promotion: number;
+  unresolved_observations: number;
+}
+
+/** Wire shape for `POST /tx/promote-genres`. */
+export interface GenrePromotionApplication {
+  release_id: string;
+  inodes: number[];
+  /** Pairs of (genre_id, kind) the operator toggled OFF in the chip strip. */
+  excluded: [number, number][];
+}
+
+export interface GenrePromotionStagingSummary {
+  staged_releases: number;
+  staged_inodes: number;
+  already_matching_inodes: number;
+  inodes_without_ledger: number;
+  skipped_empty_applications: number;
+  skipped_unpacked_inodes: number;
 }

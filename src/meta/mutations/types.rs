@@ -135,6 +135,7 @@ impl MutationDispatch for Mutation {
             Mutation::ApplyConfigEdits(m) => m.as_ref(),
             Mutation::ApplyDirConfigEdit(m) => m.as_ref(),
             Mutation::ApplyBatchDirConfigEdits(m) => m.as_ref(),
+            Mutation::EditGenreVocabulary(m) => m,
         }
     }
 

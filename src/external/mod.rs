@@ -6,5 +6,6 @@
 pub mod acoustid;
 pub mod coverart;
 pub mod deezer;
+pub mod discogs;
 pub mod musicbrainz;
 pub mod tag_generation;

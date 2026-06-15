@@ -121,20 +121,23 @@ fn render_fetch_line(is_cursor: bool, snap: &RenderSnapshot) -> Line<'static> {
         ("No API Key".to_string(), Color::Red)
     } else if snap.fetch_active {
         if let Some(p) = &snap.fetch_progress {
-            let a = &p.acoustid;
-            let m = &p.mb;
-            if m.total > 0 && a.total > 0 {
-                (
-                    format!(
-                        "{}/{} + MB {}/{}",
-                        a.processed, a.total, m.processed, m.total
-                    ),
-                    Color::Yellow,
-                )
-            } else if m.total > 0 {
-                (format!("MB {}/{}", m.processed, m.total), Color::Yellow)
+            // Show each source that has work. Discogs only renders if enabled
+            // (token present) and has either active work or completed work to
+            // report — an inert Discogs queue stays out of the line entirely.
+            let mut parts: Vec<String> = Vec::new();
+            if p.acoustid.total > 0 {
+                parts.push(format!("AID {}/{}", p.acoustid.processed, p.acoustid.total));
+            }
+            if p.mb.total > 0 {
+                parts.push(format!("MB {}/{}", p.mb.processed, p.mb.total));
+            }
+            if p.discogs_enabled && p.discogs.total > 0 {
+                parts.push(format!("DG {}/{}", p.discogs.processed, p.discogs.total));
+            }
+            if parts.is_empty() {
+                ("Active".to_string(), Color::Yellow)
             } else {
-                (format!("{}/{}", a.processed, a.total), Color::Yellow)
+                (parts.join(" + "), Color::Yellow)
             }
         } else {
             ("Active".to_string(), Color::Yellow)
@@ -149,7 +152,7 @@ fn render_fetch_line(is_cursor: bool, snap: &RenderSnapshot) -> Line<'static> {
         Span::styled(marker, label_style),
         Span::styled("Cache external metadata matches  ", label_style),
         Span::styled(
-            format!("{:<12}", status_label),
+            format!("{:<24}", status_label),
             Style::default().fg(status_color),
         ),
     ])

@@ -43,6 +43,12 @@ struct PrecomputedFile {
 // ============================================================================
 
 /// Execute DetectDeployConflicts - bulk detection of deploy path collisions.
+///
+/// Audio-only: image sidecars have no tags and would all collapse to a single
+/// `[no album artist]/cover.jpg` deploy path under `compute_deployment_path_with_tags`,
+/// producing one huge conflict that flags every sidecar except the alphabetical
+/// winner as a conflict-loser. Sidecar deploy collisions are tracked separately
+/// via `signal_sidecar_deploy_conflict` keyed by (album, role).
 pub fn execute_detect_deploy_conflicts(
     ctx: &ComputationContext<'_>,
 ) -> Result {
@@ -66,9 +72,34 @@ pub fn execute_detect_deploy_conflicts(
         }
     };
 
-    let mut deploy_path_to_tracks: HashMap<String, Vec<i64>> = HashMap::new();
+    // Restrict to audio inodes. HealthyFile is emitted for any indexed file
+    // without an OOB flag — including cover.jpg/folder.jpg sidecars — but only
+    // audio files have tag maps that produce meaningful deploy paths.
+    let corpus_audio_inodes: HashSet<i64> = match read_only_db
+        .get_audio_inodes_for_zone(crate::db::types::Zone::Corpus)
+    {
+        Ok(set) => set,
+        Err(e) => {
+            log_error(format!(
+                "[COMPUTE] DetectDeployConflicts: get_audio_inodes_for_zone failed: {}",
+                e
+            ));
+            return Result::failure(
+                computation,
+                format!("get_audio_inodes_for_zone: {}", e),
+            );
+        }
+    };
+
+    // Track (inode, corpus_path) per deploy path so we can pick the tiebreak winner.
+    // `inodes[0]` in the emitted DeployConflictSignal is the alphabetically-first
+    // corpus path, mirroring `DeriveCorpusDeployStatus`'s winner selection.
+    let mut deploy_path_to_tracks: HashMap<String, Vec<(i64, String)>> = HashMap::new();
 
     for signal in &healthy_signals {
+        if !corpus_audio_inodes.contains(&signal.inode) {
+            continue;
+        }
         let tags = match read_only_db.get_tags::<crate::zones::CorpusZone>(signal.inode) {
             Ok(v) => v,
             Err(e) => {
@@ -88,15 +119,22 @@ pub fn execute_detect_deploy_conflicts(
         deploy_path_to_tracks
             .entry(deploy_path)
             .or_default()
-            .push(signal.inode);
+            .push((signal.inode, signal.path.clone()));
     }
 
     let mut computed: Vec<ComputedAggregateSignal> = Vec::new();
-    for (deploy_path, inodes) in &deploy_path_to_tracks {
-        if inodes.len() > 1 {
+    for (deploy_path, entries) in &deploy_path_to_tracks {
+        if entries.len() > 1 {
+            // Sort by corpus_path ascending so inodes[0] is the tiebreak winner.
+            // DeriveCorpusDeployStatus uses the same `min_by_key(corpus_path)` rule;
+            // keeping them aligned ensures library-side classification (which reads
+            // loser inodes from this signal) treats the same files as losers.
+            let mut sorted = entries.clone();
+            sorted.sort_by(|a, b| a.1.cmp(&b.1));
+            let inodes: Vec<i64> = sorted.into_iter().map(|(inode, _)| inode).collect();
             let signal = TypedSignalWrite::DeployConflict(DeployConflictSignal {
                 key: deploy_path.clone(),
-                inodes: inodes.clone(),
+                inodes,
             });
             computed.push(ComputedAggregateSignal::new(deploy_path.clone(), signal));
         }
@@ -384,6 +422,32 @@ pub fn execute_derive_deploy_health_signals(
         corpus_inodes.len(),
     ));
 
+    // Preload the set of corpus inodes that have audio_info rows. This replaces
+    // a per-file `get_audio_file_by_path(corpus_path)` lookup inside the hot loop
+    // (87k 3-table joins for the music library) with a HashSet membership test.
+    // Library files are hardlinked to their corpus origins, so library_inode is
+    // the corpus inode and `audio_info` membership answers "is this audio?".
+    let corpus_audio_inodes: HashSet<i64> = match read_only_db
+        .get_audio_inodes_for_zone(crate::db::types::Zone::Corpus)
+    {
+        Ok(set) => set,
+        Err(e) => {
+            log_error(format!(
+                "[COMPUTE] DeriveDeployHealthSignals '{}': get_audio_inodes_for_zone failed: {}",
+                library_name, e,
+            ));
+            return Result::failure(
+                computation,
+                format!("get_audio_inodes_for_zone: {}", e),
+            );
+        }
+    };
+    log_general(format!(
+        "[COMPUTE] DeriveDeployHealthSignals '{}': {} corpus audio inodes preloaded",
+        library_name,
+        corpus_audio_inodes.len(),
+    ));
+
     // Build path→inode index for conflict detection.
     // When a stale file's expected path is already occupied by a different inode,
     // it's a stale-conflict (tag edit moved the expected path onto an occupied slot).
@@ -432,9 +496,46 @@ pub fn execute_derive_deploy_health_signals(
         corpus_tag_maps.len(),
     ));
 
-    // Lazy cache: corpus directory → Option<album_dir> for sidecar stale detection.
-    // Populated on first image encounter per directory, avoids redundant lookups.
+    // Lazy cache: corpus directory → Option<album_dir>, used by audio-stale
+    // expected-path computation (`compute_expected_library_path`). Sidecar
+    // classification no longer needs this map.
     let mut dir_to_album_dir: HashMap<String, Option<String>> = HashMap::new();
+
+    // Set of library album directories that contain at least one audio file.
+    // Sidecar covers are healthy iff their album dir is in this set — that's the
+    // only test the sidecar lifecycle needs, and it sidesteps the ambiguity of
+    // mapping a single (possibly hardlinked) corpus cover back to one specific
+    // album dir.
+    let library_album_dirs_with_audio: HashSet<PathBuf> = library_files
+        .iter()
+        .filter(|(_, inode)| corpus_audio_inodes.contains(inode))
+        .filter_map(|(path, _)| path.parent().map(|p| p.to_path_buf()))
+        .collect();
+    log_general(format!(
+        "[COMPUTE] DeriveDeployHealthSignals '{}': {} library album dirs contain audio",
+        library_name,
+        library_album_dirs_with_audio.len(),
+    ));
+
+    // Conflict losers: corpus inodes that share a deploy_path with a winner.
+    // Library files hardlinked to a loser inode must be reclassified Leftover
+    // so the deploy pipeline stashes them before deploying the winner. Without
+    // this, the loser's library file occupies the winner's destination and
+    // DeployLink fails with "Destination already exists (different inode)".
+    let conflict_loser_inodes: HashSet<i64> = read_only_db
+        .get_deploy_conflict_loser_inodes()
+        .unwrap_or_else(|e| {
+            log_error(format!(
+                "[COMPUTE] DeriveDeployHealthSignals '{}': get_deploy_conflict_loser_inodes failed: {}",
+                library_name, e,
+            ));
+            HashSet::new()
+        });
+    log_general(format!(
+        "[COMPUTE] DeriveDeployHealthSignals '{}': {} conflict-loser inodes loaded",
+        library_name,
+        conflict_loser_inodes.len(),
+    ));
 
     let mut healthy_count: usize = 0;
     let mut stale_count: usize = 0;
@@ -465,9 +566,11 @@ pub fn execute_derive_deploy_health_signals(
                     library_path,
                     *library_inode,
                     corpus_path,
+                    &corpus_audio_inodes,
                     &library_path_to_inode,
-                    &mut dir_to_album_dir,
+                    &library_album_dirs_with_audio,
                     &corpus_tag_maps,
+                    &conflict_loser_inodes,
                 );
                 (phase, Some(corpus_path))
             }
@@ -485,6 +588,7 @@ pub fn execute_derive_deploy_health_signals(
                     library_name,
                     *library_inode,
                     corpus_path,
+                    &corpus_audio_inodes,
                     &mut dir_to_album_dir,
                     &corpus_tag_maps,
                 );
@@ -590,19 +694,30 @@ fn classify_library_file(
     library_path: &Path,
     library_inode: i64,
     corpus_path: &str,
+    corpus_audio_inodes: &HashSet<i64>,
     library_path_to_inode: &HashMap<PathBuf, i64>,
-    dir_to_album_dir: &mut HashMap<String, Option<String>>,
+    library_album_dirs_with_audio: &HashSet<PathBuf>,
     corpus_tag_maps: &HashMap<i64, HashMap<String, String>>,
+    conflict_loser_inodes: &HashSet<i64>,
 ) -> DeployLifecyclePhase {
-    // Try audio file path first
-    if let Ok(Some(audio_file)) = read_only_db.get_audio_file_by_path(corpus_path) {
+    // Conflict-loser short-circuit: the corpus inode lost the deploy-path
+    // tiebreak, so a different corpus file now owns this library path. Treat
+    // the library file as a Leftover regardless of tag-derived expected path —
+    // otherwise it would be Healthy from its own tags but block the winner's
+    // hard link with "Destination already exists (different inode)".
+    if conflict_loser_inodes.contains(&library_inode) {
+        return DeployLifecyclePhase::Leftover;
+    }
+
+    // Library files are hardlinked to corpus, so library_inode == corpus inode.
+    // A membership check on the preloaded audio set replaces a per-file 3-table join.
+    if corpus_audio_inodes.contains(&library_inode) {
         return classify_audio_stale(
             read_only_db,
             library_name,
             library_path,
             library_inode,
             corpus_path,
-            audio_file.inode(),
             library_path_to_inode,
             corpus_tag_maps,
         );
@@ -613,17 +728,11 @@ fn classify_library_file(
         return DeployLifecyclePhase::Healthy; // Unknown file type, treat as healthy
     }
 
-    // Image file: derive expected path from audio siblings' tags
-    check_sidecar_stale(
-        read_only_db,
-        library_name,
-        library_path,
-        library_inode,
-        corpus_path,
-        library_path_to_inode,
-        dir_to_album_dir,
-        corpus_tag_maps,
-    )
+    // Image file: healthy iff its album dir contains at least one library audio file.
+    // A single cover inode can be hardlinked into many library album dirs (CAA dedupe
+    // + hardlink deploy), so we can't derive a unique "expected" library path from
+    // the corpus side; what matters is whether the cover is sitting next to audio.
+    check_sidecar_stale(library_name, library_path, library_album_dirs_with_audio)
 }
 
 /// Look up a corpus inode's tag map, preferring the precomputed batch and
@@ -644,16 +753,16 @@ fn corpus_tags_for(
 
 /// Classify an audio library file as stale or healthy by comparing deploy paths.
 fn classify_audio_stale(
-    _read_only_db: &ReadOnlyDb<'_>,
+    read_only_db: &ReadOnlyDb<'_>,
     library_name: &str,
     library_path: &Path,
     library_inode: i64,
     corpus_path: &str,
-    inode: i64,
     library_path_to_inode: &HashMap<PathBuf, i64>,
     corpus_tag_maps: &HashMap<i64, HashMap<String, String>>,
 ) -> DeployLifecyclePhase {
-    let tag_map = corpus_tags_for(_read_only_db, inode, corpus_tag_maps);
+    // Library inode == corpus inode for hardlinked deployments.
+    let tag_map = corpus_tags_for(read_only_db, library_inode, corpus_tag_maps);
 
     let expected_relative = compute_deployment_path_with_tags(corpus_path, &tag_map);
     let library_path_suffix = library_path
@@ -684,69 +793,34 @@ fn classify_audio_stale(
 /// Derives the expected library path by finding an audio sibling in the same
 /// corpus directory, computing its deploy album directory from tags, then
 /// comparing against the actual library path.
+/// Classify a library sidecar image as Healthy or Leftover.
+///
+/// A library cover.jpg is healthy iff the album directory it sits in contains
+/// at least one audio file. Anything else (an album dir that no longer holds
+/// any tracks) means the cover is orphaned — Leftover.
+///
+/// This deliberately ignores the corpus-side source path. A single cover-art
+/// inode can be hardlinked into many library album directories (CAA fetch
+/// dedupes by bytes, deploy hardlinks share inodes across albums), so the
+/// previous approach of computing an "expected" library path from the corpus
+/// dir's audio sibling produced false Leftovers whenever the corpus dir had
+/// audio from multiple albums or was a "Misc" pool.
 fn check_sidecar_stale(
-    read_only_db: &ReadOnlyDb<'_>,
     library_name: &str,
     library_path: &Path,
-    library_inode: i64,
-    corpus_path: &str,
-    library_path_to_inode: &HashMap<PathBuf, i64>,
-    dir_to_album_dir: &mut HashMap<String, Option<String>>,
-    corpus_tag_maps: &HashMap<i64, HashMap<String, String>>,
+    library_album_dirs_with_audio: &HashSet<PathBuf>,
 ) -> DeployLifecyclePhase {
-    let corpus_dir = Path::new(corpus_path)
-        .parent()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
+    let library_album_dir = match library_path.parent() {
+        Some(p) => p.to_path_buf(),
+        None => return DeployLifecyclePhase::Healthy, // no parent — defensive default
+    };
 
-    // Lazily populate album_dir for this corpus directory
-    let album_dir = if let Some(v) = dir_to_album_dir.get(&corpus_dir) {
-        v.clone()
+    let _ = library_name; // retained for future per-library logic if needed
+    if library_album_dirs_with_audio.contains(&library_album_dir) {
+        DeployLifecyclePhase::Healthy
     } else {
-        let v = lookup_album_dir_from_sibling(read_only_db, &corpus_dir, corpus_tag_maps);
-        dir_to_album_dir.entry(corpus_dir).or_insert(v).clone()
-    };
-
-    let album_dir = match album_dir {
-        Some(dir) => dir,
-        None => return DeployLifecyclePhase::Healthy, // No audio siblings — can't determine expected path
-    };
-
-    // Expected library path: album_dir/filename
-    let filename = Path::new(corpus_path)
-        .file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_default();
-
-    if filename.is_empty() {
-        return DeployLifecyclePhase::Healthy;
+        DeployLifecyclePhase::Leftover
     }
-
-    let expected_relative = format!("{}/{}", album_dir, filename);
-    let library_path_suffix = library_path
-        .strip_prefix(library_name)
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| library_path.to_string_lossy().to_string());
-
-    // Normalize: strip leading slash from suffix if present
-    let library_path_suffix = library_path_suffix.trim_start_matches('/');
-
-    if library_path_suffix == expected_relative {
-        return DeployLifecyclePhase::Healthy;
-    }
-
-    // Path mismatch — check for stale-conflict or duplicate hardlink
-    let expected_with_prefix = Path::new(library_name).join(&expected_relative);
-    if let Some(&occupant_inode) = library_path_to_inode.get(&expected_with_prefix) {
-        if occupant_inode != library_inode {
-            return DeployLifecyclePhase::Healthy; // Stale-conflict: mask as healthy
-        } else {
-            // Same inode already exists at the correct path — this old path is cruft
-            return DeployLifecyclePhase::Leftover;
-        }
-    }
-
-    DeployLifecyclePhase::Stale
 }
 
 /// Look up the deploy album directory for a corpus directory by finding an audio
@@ -789,11 +863,13 @@ fn compute_expected_library_path(
     library_name: &str,
     library_inode: i64,
     corpus_path: &str,
+    corpus_audio_inodes: &HashSet<i64>,
     dir_to_album_dir: &mut HashMap<String, Option<String>>,
     corpus_tag_maps: &HashMap<i64, HashMap<String, String>>,
 ) -> Option<String> {
-    // Audio file: compute from tags directly
-    if let Ok(Some(_audio_file)) = read_only_db.get_audio_file_by_path(corpus_path) {
+    // Audio file: compute from tags directly. Audio membership is the inode set
+    // (library_inode == corpus inode for hardlinks), no per-file SQL needed.
+    if corpus_audio_inodes.contains(&library_inode) {
         let tag_map = corpus_tags_for(read_only_db, library_inode, corpus_tag_maps);
         let expected_relative = compute_deployment_path_with_tags(corpus_path, &tag_map);
         let expected_with_prefix = Path::new(library_name).join(&expected_relative);

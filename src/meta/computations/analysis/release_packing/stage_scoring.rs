@@ -245,7 +245,7 @@ pub fn execute_pack_releases(
     let source_key = ExternalSource::AcoustID.to_key();
 
     // === Load all external matches (corpus only) ===
-    let all_rows = match read_only_db.get_external_matches_slim(source_key) {
+    let all_rows = match read_only_db.get_external_matches_for_corpus(source_key) {
         Ok(rows) => rows,
         Err(e) => {
             return Result::failure(
@@ -959,7 +959,11 @@ fn score_candidates_against_tracklist(
 
                 candidates.push(CandidateAssignment {
                     inode: *inode,
-                    recording_id: rec_match.recording_id.clone(),
+                    // Use the slot's MB recording, not the candidate's source
+                    // recording — for synthetic/pinned candidates the source
+                    // is empty, but Hungarian's assignment to this slot makes
+                    // the slot's recording authoritative either way.
+                    recording_id: track.recording.id.clone(),
                     release_id: release_id.to_string(),
                     medium_pos: medium.position,
                     track_pos: track.position,

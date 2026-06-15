@@ -46,6 +46,10 @@ pub struct Opinions {
     pub disc_extraction: DiscExtractionOpinions,
     /// Album art embedding/upgrade configuration.
     pub album_art: AlbumArtOpinions,
+    /// Genre write-back policy: how `inode_genres` ledger rows are flattened
+    /// into corpus_tags GENRE/STYLE values when an operator promotes them via
+    /// `BatchPromoteGenres` / `BatchPromoteGenresForInodes`.
+    pub genre_write_back: GenreWriteBackConfig,
     /// Debug/diagnostic options (reserved, currently empty).
     pub debug: DebugOpinions,
     /// Poll interval in seconds for the filesystem watcher fallback mode.
@@ -78,6 +82,7 @@ impl Opinions {
     pub const KDL_BLOCK_EXTERNAL_MATCHING: &str = "external-matching";
     pub const KDL_BLOCK_DISC_EXTRACTION: &str = "disc-extraction";
     pub const KDL_BLOCK_ALBUM_ART: &str = "album-art";
+    pub const KDL_BLOCK_GENRE_WRITE_BACK: &str = "genre-write-back";
 }
 
 /// Opinions for quality-based auto-resolution
@@ -515,6 +520,15 @@ pub struct ExternalMatchingConfig {
     pub deezer_enabled: bool,
     /// Conservative cap for Deezer API requests per second.
     pub deezer_requests_per_second: u32,
+    /// Discogs personal access token. Empty disables Discogs fetching entirely
+    /// (the scheduler skips the Discogs queue). With a token Discogs allows
+    /// 60 requests/min; unauthenticated is 25/min and unreliable, so empty
+    /// = disabled is the safer default.
+    pub discogs_token: String,
+    /// Conservative cap for Discogs API requests per second. With auth Discogs
+    /// allows ~1 req/sec sustained (60/min). 1 is the safe default; bump
+    /// only if you have rate-headroom intelligence.
+    pub discogs_requests_per_second: u32,
 }
 
 impl Default for ExternalMatchingConfig {
@@ -533,6 +547,8 @@ impl Default for ExternalMatchingConfig {
             cover_art_types: vec!["Front".to_string(), "Back".to_string()],
             deezer_enabled: true,
             deezer_requests_per_second: 5,
+            discogs_token: String::new(),
+            discogs_requests_per_second: 1,
         }
     }
 }
@@ -552,6 +568,8 @@ impl ExternalMatchingConfig {
     pub const KDL_COVER_ART_TYPES: &str = "cover-art-types";
     pub const KDL_DEEZER_ENABLED: &str = "deezer-enabled";
     pub const KDL_DEEZER_REQ_PER_SEC: &str = "deezer-requests-per-second";
+    pub const KDL_DISCOGS_TOKEN: &str = "discogs-token";
+    pub const KDL_DISCOGS_REQ_PER_SEC: &str = "discogs-requests-per-second";
 }
 
 /// Opinions for disc extraction from ALBUM and TRACKNUMBER tags.
@@ -573,6 +591,73 @@ impl Default for DiscExtractionOpinions {
 impl DiscExtractionOpinions {
     pub const KDL_DISC_TAG_NAME: &str = "disc-tag-name";
     pub const KDL_MAP_LETTERS: &str = "map-letters-to-numbers";
+}
+
+/// How `inode_genres` ledger rows are flattened into corpus_tags GENRE/STYLE
+/// values during operator-gated promotion. The layout is recorded on each
+/// `GenrePromote` decision so an audit can show which policy was active when
+/// the bytes were written.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum GenreWriteLayout {
+    /// All Discogs Genres + Styles flatten into multi-value GENRE, genres first
+    /// then styles, deduplicated by canonical id. No STYLE tag written.
+    #[default]
+    MergedGenresFirst,
+    /// Genres → GENRE, Styles → STYLE (Picard-style two-tag layout).
+    SeparateGenreStyle,
+    /// Recursive-CTE umbrella closure → GENRE; specific asserted genres + all
+    /// styles → STYLE. Requires a well-populated `genre_implies` graph; until
+    /// that's curated, behaves like `MergedGenresFirst`.
+    UmbrellasGenreSpecificsStyle,
+}
+
+impl GenreWriteLayout {
+    /// KDL string form.
+    pub fn as_kdl(self) -> &'static str {
+        match self {
+            Self::MergedGenresFirst => "merged-genres-first",
+            Self::SeparateGenreStyle => "separate-genre-style",
+            Self::UmbrellasGenreSpecificsStyle => "umbrellas-genre-specifics-style",
+        }
+    }
+
+    /// Parse a KDL string. Returns `None` for unknown values; callers should
+    /// fall back to `Default` and log a warning so a typo doesn't silently
+    /// pick a different layout.
+    pub fn from_kdl(s: &str) -> Option<Self> {
+        match s {
+            "merged-genres-first" => Some(Self::MergedGenresFirst),
+            "separate-genre-style" => Some(Self::SeparateGenreStyle),
+            "umbrellas-genre-specifics-style" => Some(Self::UmbrellasGenreSpecificsStyle),
+            _ => None,
+        }
+    }
+}
+
+/// Promotion / write-back configuration.
+///
+/// `layout` controls how ledger rows flatten to disk tags. `bulk_cap` is the
+/// hard cap on the inode-list bulk endpoint (`POST /tx/promote-genres-for-inodes`)
+/// — over-cap returns an error so the operator either splits the batch or
+/// raises the cap intentionally.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GenreWriteBackConfig {
+    pub layout: GenreWriteLayout,
+    pub bulk_cap: usize,
+}
+
+impl Default for GenreWriteBackConfig {
+    fn default() -> Self {
+        Self {
+            layout: GenreWriteLayout::default(),
+            bulk_cap: 5000,
+        }
+    }
+}
+
+impl GenreWriteBackConfig {
+    pub const KDL_LAYOUT: &str = "layout";
+    pub const KDL_BULK_CAP: &str = "bulk-cap";
 }
 
 /// How to handle existing sidecar art when Cover Art Archive has art available.
@@ -648,6 +733,7 @@ impl Default for Opinions {
             external_matching: ExternalMatchingConfig::default(),
             disc_extraction: DiscExtractionOpinions::default(),
             album_art: AlbumArtOpinions::default(),
+            genre_write_back: GenreWriteBackConfig::default(),
             debug: DebugOpinions::default(),
             watcher_poll_interval_secs: 900,
             session_lifetime_days: Some(30),

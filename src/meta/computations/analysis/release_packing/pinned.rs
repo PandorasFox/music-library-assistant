@@ -62,6 +62,7 @@ pub fn execute_resolve_pin_for_dir(
                 computation,
                 vec![crate::meta::computations::FetchRequest {
                     mb_release_ids: vec![release_id.to_string()],
+                    mb_recording_ids: Vec::new(),
                     then: vec![crate::meta::computations::Computation::Analysis(
                         Computation::ResolvePinForDir {
                             release_id: release_id.to_string(),

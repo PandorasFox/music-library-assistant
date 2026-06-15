@@ -251,6 +251,8 @@ unit_web_query!(
     GetSubparDuplicateData, GetDirectoryClusterData, GetReleaseOverlapData,
     GetLosslessRemuxData, GetMissingTagAudioFiles,
     GetVaOverrideReview,
+    GetGenreVocabulary, GetUnresolvedGenreObservations,
+    GetGenrePromotionReview, GetGenreCoverageSummary,
 );
 
 // -- Body-deserialized queries --
@@ -290,6 +292,12 @@ impl WebQuery for GetManualReviewData {
 impl WebQuery for GetCorpusTags {
     fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
         Ok(Self { inode: parse_param(params, "inode")? })
+    }
+}
+
+impl WebQuery for GetGenrePromotionInodeDetail {
+    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self { release_id: require_param(params, "release_id")? })
     }
 }
 
@@ -419,6 +427,8 @@ fn build_domain_payload(
         GetTagCanonicityResolution, GetCompoundSplitResolution,
         GetAcoustidMatches, GetReleaseReview,
         GetVaOverrideReview,
+        GetGenreVocabulary, GetUnresolvedGenreObservations,
+        GetGenrePromotionReview, GetGenrePromotionInodeDetail, GetGenreCoverageSummary,
     )
 }
 

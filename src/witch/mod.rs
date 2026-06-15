@@ -231,9 +231,15 @@ pub struct Witch {
     /// Increments when config is mutated.
     config_generation: u64,
 
-    /// Broadcast channel for pushing status events to all connected clients.
-    /// Per-connection handlers subscribe via the socket listener.
-    event_tx: tokio::sync::broadcast::Sender<mm_meta::witch_types::WitchEvent>,
+    /// Watch channel holding the latest published `WitchStatus`. New socket
+    /// connections see the current value immediately; slow clients always
+    /// converge to the latest snapshot rather than staying frozen on a stale
+    /// pre-overflow event (the prior `broadcast` channel had capacity 16 and
+    /// silently dropped intermediate snapshots, so a writer that briefly
+    /// blocked could appear permanently stuck until any new event arrived).
+    /// Inner `Option` is `None` only until the first state change publishes —
+    /// socket handlers skip `None` values and wait for the first real status.
+    status_tx: tokio::sync::watch::Sender<Option<mm_meta::witch_types::WitchStatus>>,
 
     /// Decision key kinds with staged decisions in the active transaction.
     /// Used by the insights view to hide entries already handled.
@@ -260,6 +266,13 @@ pub struct Witch {
     /// When true and Witch is idle, queues a derivation pass to reconcile
     /// observed inodes against the index.
     watcher_derivation_needed: bool,
+
+    /// Set at startup when InodesTransition auto-index queues mutations.
+    /// Consumed when those mutations complete: forces content analysis to
+    /// run immediately rather than wait for the linger → fetch chain.
+    /// Without this, dirty corpus_deploy_status inodes persisted across
+    /// restarts never get reclassified at startup, only after fetch.
+    pending_startup_content_analysis: bool,
 
     /// Images observed by the watcher, pending indexing.
     /// Accumulated from ImageFileObserved messages, drained when a batch
@@ -392,13 +405,14 @@ impl Witch {
             computations_generation: 0,
             error_generation: 0,
             config_generation: 0,
-            event_tx: tokio::sync::broadcast::channel(16).0,
+            status_tx: tokio::sync::watch::channel(None).0,
             handled_sources: std::collections::HashSet::new(),
             observed_inodes: ObservedInodes::new(),
             log_thread_handle,
             shared_config: None,
             config_snapshot: arc_swap::ArcSwap::from_pointee(None),
             watcher_derivation_needed: false,
+            pending_startup_content_analysis: false,
             pending_observed_images: Vec::new(),
             fs_watcher: fs_watcher_handle,
             auth_thread_handle: None, // Spawned in run(), not new()
@@ -514,7 +528,7 @@ impl Witch {
 
         // Spawn the Unix domain socket listener. Binds synchronously — the
         // socket is ready for connections when this returns.
-        she.socket_listener_handle = socket::spawn_listener(cmd_tx, she.event_tx.clone());
+        she.socket_listener_handle = socket::spawn_listener(cmd_tx, she.status_tx.clone());
 
         if she.socket_listener_handle.is_none() {
             eprintln!("ERROR: Failed to bind socket (is XDG_RUNTIME_DIR set?)");
@@ -601,10 +615,12 @@ impl Witch {
                 self.maybe_trigger_derivation();
             }
 
-            // Push status snapshot to all connected clients after any real activity
+            // Update the latest-status watch slot after any real activity.
+            // `send_replace` overwrites the value unconditionally — slow socket
+            // writers always observe the most recent snapshot on next wake,
+            // even if many state changes occurred while they were busy.
             if broadcast_status {
-                use mm_meta::witch_types::WitchEvent;
-                let _ = self.event_tx.send(WitchEvent::StatusChanged(self.publish_status()));
+                let _ = self.status_tx.send_replace(Some(self.publish_status()));
             }
         }
     }

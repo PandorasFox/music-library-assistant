@@ -26,13 +26,16 @@ mod executor;
 pub mod types;
 mod sender;
 
+pub use executor::{InodeGenreRow, UnresolvedGenreObservation};
 pub use sender::SignalWriteSender;
 pub use types::*;
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use crate::config;
 use crate::corpus::tags::TagSet;
@@ -367,7 +370,6 @@ enum DbWriteOp {
         source: i64,
         recording_id: String,
         confidence: f64,
-        raw_response: Option<Vec<u8>>,
         fetched_at: i64,
     },
 
@@ -436,6 +438,49 @@ enum DbWriteOp {
         discovered_at: i64,
     },
 
+    /// Upsert a Discogs release cache entry.
+    UpsertDiscogsReleaseCache {
+        release_id: String,
+        raw_json: Vec<u8>,
+        fetched_at: i64,
+    },
+
+    /// Upsert a row in the `app_metadata` key/value table. Used for
+    /// computation watermarks (e.g. last Discogs ledger run timestamp).
+    SetAppMetadata {
+        key: String,
+        value: String,
+    },
+
+    // =========================================================================
+    // Genre Ledger Operations (provenance-tracked per-inode genre assertions)
+    // =========================================================================
+    /// Bulk insert/upsert rows into `inode_genres` (the genre ledger).
+    WriteInodeGenres {
+        rows: Vec<executor::InodeGenreRow>,
+    },
+
+    /// Delete `inode_genres` rows for one (inode, source) pair before re-ingest.
+    /// Removed-tag values stop lingering after the importer re-runs.
+    ClearInodeGenresForSource {
+        inode: i64,
+        source: i64,
+    },
+
+    /// Bump the (raw_value, source) row in `unresolved_genre_observations`,
+    /// inserting count=1 on conflict.
+    BumpUnresolvedGenreObservations {
+        observations: Vec<executor::UnresolvedGenreObservation>,
+    },
+
+    /// Apply a batch of genre-vocabulary edits in one transaction and report
+    /// success back to the calling mutation executor. Sync-result, modeled
+    /// after `ExecuteVacuum`/`ApplyReconciliation`.
+    ApplyGenreVocabularyEdits {
+        ops: Vec<mm_meta::mutations::genre_vocabulary::GenreVocabularyOp>,
+        result_tx: std::sync::mpsc::SyncSender<Result<(), String>>,
+    },
+
     // =========================================================================
     // Shutdown
     // =========================================================================
@@ -492,6 +537,85 @@ enum DbWriteOp {
     SetCacheSize { kb: i64 },
 
     Shutdown,
+}
+
+impl DbWriteOp {
+    /// Static label identifying this op for diagnostics/logging. Borrows nothing
+    /// from `self` — safe to capture before `execute_signal_op` consumes the op.
+    fn kind(&self) -> &'static str {
+        match self {
+            DbWriteOp::ClearCorpusSignalByInode { .. } => "ClearCorpusSignalByInode",
+            DbWriteOp::ClearAllCorpusSignals { .. } => "ClearAllCorpusSignals",
+            DbWriteOp::ClearMutableCorpusSignals { .. } => "ClearMutableCorpusSignals",
+            DbWriteOp::ClearAggregateSignalByKey { .. } => "ClearAggregateSignalByKey",
+            DbWriteOp::ClearAggregateByKeyPrefix { .. } => "ClearAggregateByKeyPrefix",
+            DbWriteOp::ClearSignalTable { .. } => "ClearSignalTable",
+            DbWriteOp::UpsertLibraryFile { .. } => "UpsertLibraryFile",
+            DbWriteOp::DeleteLibraryFile { .. } => "DeleteLibraryFile",
+            DbWriteOp::WriteTypedSignal { .. } => "WriteTypedSignal",
+            DbWriteOp::WriteTypedSignalBatch { .. } => "WriteTypedSignalBatch",
+            DbWriteOp::UpdateFileMtime { .. } => "UpdateFileMtime",
+            DbWriteOp::IndexAudioFile { .. } => "IndexAudioFile",
+            DbWriteOp::DropFromIndex { .. } => "DropFromIndex",
+            DbWriteOp::SetIndexTrackTags { .. } => "SetIndexTrackTags",
+            DbWriteOp::ApplyIndexTagOps { .. } => "ApplyIndexTagOps",
+            DbWriteOp::UpdateTrackPathWithMetadata { .. } => "UpdateTrackPathWithMetadata",
+            DbWriteOp::UpsertFileEntry { .. } => "UpsertFileEntry",
+            DbWriteOp::DropFileIndexByInode { .. } => "DropFileIndexByInode",
+            DbWriteOp::UpdateFilePath { .. } => "UpdateFilePath",
+            DbWriteOp::IndexDirectory { .. } => "IndexDirectory",
+            DbWriteOp::IndexImageFile { .. } => "IndexImageFile",
+            DbWriteOp::UpsertImageInfo { .. } => "UpsertImageInfo",
+            DbWriteOp::SetNeedsDiskFlush { .. } => "SetNeedsDiskFlush",
+            DbWriteOp::ClearDirtyInode { .. } => "ClearDirtyInode",
+            DbWriteOp::MarkDirtyInodes { .. } => "MarkDirtyInodes",
+            DbWriteOp::ClearAllDirtyInodes { .. } => "ClearAllDirtyInodes",
+            DbWriteOp::InsertExternalMatch { .. } => "InsertExternalMatch",
+            DbWriteOp::InsertExternalNoMatch { .. } => "InsertExternalNoMatch",
+            DbWriteOp::UpsertExternalRetry { .. } => "UpsertExternalRetry",
+            DbWriteOp::DeleteExternalRetry { .. } => "DeleteExternalRetry",
+            DbWriteOp::DropExternalMatch { .. } => "DropExternalMatch",
+            DbWriteOp::UpsertMbCache { .. } => "UpsertMbCache",
+            DbWriteOp::UpsertCaaReleaseCache { .. } => "UpsertCaaReleaseCache",
+            DbWriteOp::UpsertDeezerIsrcCache { .. } => "UpsertDeezerIsrcCache",
+            DbWriteOp::InsertMbKnownEntity { .. } => "InsertMbKnownEntity",
+            DbWriteOp::UpsertDiscogsReleaseCache { .. } => "UpsertDiscogsReleaseCache",
+            DbWriteOp::SetAppMetadata { .. } => "SetAppMetadata",
+            DbWriteOp::WriteInodeGenres { .. } => "WriteInodeGenres",
+            DbWriteOp::ClearInodeGenresForSource { .. } => "ClearInodeGenresForSource",
+            DbWriteOp::BumpUnresolvedGenreObservations { .. } => "BumpUnresolvedGenreObservations",
+            DbWriteOp::ApplyGenreVocabularyEdits { .. } => "ApplyGenreVocabularyEdits",
+            DbWriteOp::ExecuteVacuum { .. } => "ExecuteVacuum",
+            DbWriteOp::ApplyReconciliation { .. } => "ApplyReconciliation",
+            DbWriteOp::TruncatePackingTables => "TruncatePackingTables",
+            DbWriteOp::WritePackingManifest { .. } => "WritePackingManifest",
+            DbWriteOp::WritePackingScores { .. } => "WritePackingScores",
+            DbWriteOp::WritePackingCandidates { .. } => "WritePackingCandidates",
+            DbWriteOp::WritePendingAcoustIdSubmissions { .. } => "WritePendingAcoustIdSubmissions",
+            DbWriteOp::DeletePackingDataForRelease { .. } => "DeletePackingDataForRelease",
+            DbWriteOp::SetCacheSize { .. } => "SetCacheSize",
+            DbWriteOp::Shutdown => "Shutdown",
+        }
+    }
+
+    /// Variant-specific size hint used to disambiguate "the batch was big" from
+    /// "one statement was slow" in slow-op logs. Returns the inner Vec length
+    /// for ops carrying a payload, else 1.
+    fn payload_size(&self) -> usize {
+        match self {
+            DbWriteOp::WriteTypedSignalBatch { signals } => signals.len(),
+            DbWriteOp::MarkDirtyInodes { inodes, .. } => inodes.len(),
+            DbWriteOp::ApplyIndexTagOps { ops, .. } => ops.len(),
+            DbWriteOp::WritePackingManifest { rows } => rows.len(),
+            DbWriteOp::WritePackingScores { rows } => rows.len(),
+            DbWriteOp::WritePackingCandidates { rows } => rows.len(),
+            DbWriteOp::WritePendingAcoustIdSubmissions { rows } => rows.len(),
+            DbWriteOp::WriteInodeGenres { rows } => rows.len(),
+            DbWriteOp::BumpUnresolvedGenreObservations { observations } => observations.len(),
+            DbWriteOp::ApplyGenreVocabularyEdits { ops, .. } => ops.len(),
+            _ => 1,
+        }
+    }
 }
 
 // ============================================================================
@@ -593,6 +717,53 @@ fn run_db_thread(signal_rx: Receiver<DbWriteOp>, stats: Arc<SharedStats>) {
 
     crate::logging::log_general("[DB_THREAD] Started");
 
+    // Stuck-op watchdog: lets us see *what* the db thread is currently chewing
+    // on when the queue stalls (the per-op timing instrumentation below only
+    // fires *after* an op completes — useless if a single op blocks for minutes).
+    //
+    // The watchdog thread polls a shared slot every 2s and logs any op that
+    // has been in flight ≥ 5s. The db thread itself updates the slot before
+    // each op and clears it after. Mutex contention is bounded: ~2 lock/unlock
+    // pairs per op on the db thread, ~1 per 2s on the watchdog.
+    let current_op: Arc<Mutex<Option<(&'static str, Instant, usize)>>> =
+        Arc::new(Mutex::new(None));
+    let watchdog_state = Arc::clone(&current_op);
+    let watchdog_stats = Arc::clone(&stats);
+    let _watchdog_handle = thread::Builder::new()
+        .name("db_thread/watchdog".to_string())
+        .spawn(move || loop {
+            thread::sleep(Duration::from_secs(2));
+            let snapshot = {
+                let guard = match watchdog_state.lock() {
+                    Ok(g) => g,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                *guard
+            };
+            if let Some((kind, start, payload)) = snapshot {
+                let elapsed = start.elapsed();
+                if elapsed >= Duration::from_secs(5) {
+                    crate::logging::log_general(format!(
+                        "[DB_THREAD/watchdog] op {} (payload={}) in flight for {:.1}s; queue_depth={}",
+                        kind,
+                        payload,
+                        elapsed.as_secs_f64(),
+                        watchdog_stats.queue_depth.load(Ordering::Relaxed),
+                    ));
+                }
+            }
+        });
+
+    // Periodic stats: ops/sec by kind, p50/p99 op duration, current queue depth.
+    // Lets us see which op kinds dominate without per-op log spam.
+    let mut window_started = Instant::now();
+    let mut window_ops: u64 = 0;
+    let mut window_durations: HashMap<&'static str, (u64, u128)> = HashMap::new();
+    const STATS_WINDOW: Duration = Duration::from_secs(30);
+    // Per-op slow threshold — anything above this gets a one-liner with the op
+    // kind. Helps narrow "what's stuck" without us guessing.
+    const SLOW_OP_THRESHOLD_MS: u128 = 100;
+
     // Process signal operations
     // Note: Using recv() which blocks until a message arrives or channel closes
     loop {
@@ -627,6 +798,16 @@ fn run_db_thread(signal_rx: Receiver<DbWriteOp>, stats: Arc<SharedStats>) {
                     stats.queue_empty.store(true, Ordering::Release);
                 }
             }
+            Ok(DbWriteOp::ApplyGenreVocabularyEdits { ops, result_tx }) => {
+                let result =
+                    executor::execute_apply_genre_vocabulary_edits(&db, &ops)
+                        .map_err(|e| format!("{:#}", e));
+                let _ = result_tx.send(result);
+                stats.queue_depth.fetch_sub(1, Ordering::Relaxed);
+                if stats.queue_depth.load(Ordering::Relaxed) == 0 {
+                    stats.queue_empty.store(true, Ordering::Release);
+                }
+            }
             Ok(DbWriteOp::SetCacheSize { kb }) => {
                 let _ = db.conn().execute_batch(&format!("PRAGMA cache_size = {};", kb));
                 crate::logging::log_general(format!(
@@ -645,7 +826,69 @@ fn run_db_thread(signal_rx: Receiver<DbWriteOp>, stats: Arc<SharedStats>) {
                 break;
             }
             Ok(op) => {
+                let kind = op.kind();
+                let payload = op.payload_size();
+                let start = Instant::now();
+                {
+                    let mut guard = match current_op.lock() {
+                        Ok(g) => g,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    *guard = Some((kind, start, payload));
+                }
                 executor::execute_signal_op(&db, &op);
+                {
+                    let mut guard = match current_op.lock() {
+                        Ok(g) => g,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    *guard = None;
+                }
+                let elapsed = start.elapsed();
+                let elapsed_ms = elapsed.as_millis();
+
+                if elapsed_ms >= SLOW_OP_THRESHOLD_MS {
+                    crate::logging::log_general(format!(
+                        "[DB_THREAD] slow op: {} (payload={}) took {}ms; queue_depth={}",
+                        kind,
+                        payload,
+                        elapsed_ms,
+                        stats.queue_depth.load(Ordering::Relaxed).saturating_sub(1),
+                    ));
+                }
+
+                window_ops += 1;
+                let entry = window_durations.entry(kind).or_insert((0, 0));
+                entry.0 += 1;
+                entry.1 += elapsed.as_micros();
+
+                if window_started.elapsed() >= STATS_WINDOW {
+                    let depth = stats.queue_depth.load(Ordering::Relaxed);
+                    let mut summary: Vec<(&'static str, u64, u128)> = window_durations
+                        .iter()
+                        .map(|(k, (n, us))| (*k, *n, *us))
+                        .collect();
+                    // Sort by total micros desc — surfaces wall-time hogs first.
+                    summary.sort_by(|a, b| b.2.cmp(&a.2));
+                    let top: Vec<String> = summary
+                        .iter()
+                        .take(6)
+                        .map(|(k, n, us)| {
+                            let avg_us = if *n > 0 { us / *n as u128 } else { 0 };
+                            format!("{}={}×{}µs", k, n, avg_us)
+                        })
+                        .collect();
+                    crate::logging::log_general(format!(
+                        "[DB_THREAD] window: {} ops in {:.1}s, queue_depth={} | top: {}",
+                        window_ops,
+                        window_started.elapsed().as_secs_f64(),
+                        depth,
+                        top.join(", "),
+                    ));
+                    window_started = Instant::now();
+                    window_ops = 0;
+                    window_durations.clear();
+                }
 
                 // Update queue management (needed for shutdown coordination)
                 stats.queue_depth.fetch_sub(1, Ordering::Relaxed);

@@ -59,7 +59,7 @@ pub fn socket_path() -> Option<PathBuf> {
 /// is not set (no socket in that case — in-process only).
 pub(super) fn spawn_listener(
     cmd_tx: tokio::sync::mpsc::UnboundedSender<HandleCommand>,
-    event_tx: tokio::sync::broadcast::Sender<WitchEvent>,
+    status_tx: tokio::sync::watch::Sender<Option<mm_meta::witch_types::WitchStatus>>,
 ) -> Option<SocketListenerHandle> {
     let path = socket_path()?;
 
@@ -102,7 +102,7 @@ pub(super) fn spawn_listener(
         .expect("Failed to convert UnixListener to tokio");
 
     let task = tokio::spawn(async move {
-        run_listener(listener, cmd_tx, event_tx).await;
+        run_listener(listener, cmd_tx, status_tx).await;
     });
 
     Some(SocketListenerHandle {
@@ -115,21 +115,21 @@ pub(super) fn spawn_listener(
 async fn run_listener(
     listener: tokio::net::UnixListener,
     cmd_tx: tokio::sync::mpsc::UnboundedSender<HandleCommand>,
-    event_tx: tokio::sync::broadcast::Sender<WitchEvent>,
+    status_tx: tokio::sync::watch::Sender<Option<mm_meta::witch_types::WitchStatus>>,
 ) {
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
                 let cmd_tx = cmd_tx.clone();
-                // NOTE: event subscription starts before authentication.
+                // NOTE: status subscription starts before authentication.
                 // mm-web connects over this socket without per-request auth
                 // and relies on status pushes to feed its own web clients.
                 // Mild info leak (status snapshots to unauthenticated connections)
                 // accepted: socket is local-only ($XDG_RUNTIME_DIR), leaked
                 // data is operational status not corpus content.
-                let event_rx = event_tx.subscribe();
+                let status_rx = status_tx.subscribe();
                 tokio::spawn(async move {
-                    handle_connection(stream, cmd_tx, event_rx).await;
+                    handle_connection(stream, cmd_tx, status_rx).await;
                 });
             }
             Err(e) => {
@@ -143,7 +143,7 @@ async fn run_listener(
 async fn handle_connection(
     stream: tokio::net::UnixStream,
     cmd_tx: tokio::sync::mpsc::UnboundedSender<HandleCommand>,
-    mut event_rx: tokio::sync::broadcast::Receiver<WitchEvent>,
+    mut status_rx: tokio::sync::watch::Receiver<Option<mm_meta::witch_types::WitchStatus>>,
 ) {
     let (read_half, write_half) = tokio::io::split(stream);
     let mut reader = tokio::io::BufReader::new(read_half);
@@ -174,8 +174,27 @@ async fn handle_connection(
             }
         } => {}
 
-        // Writer: interleave completed responses and pushed events.
+        // Writer: interleave completed responses and pushed status snapshots.
+        //
+        // Status arrives via a watch channel — only the latest value matters,
+        // so a writer that briefly blocks on the socket simply observes the
+        // current snapshot when it next wakes (intermediate states are coalesced,
+        // not lost mid-stream as with the prior bounded broadcast channel).
         _ = async {
+            // If a status was already published before this connection
+            // established, ship it immediately so a brand-new client sees
+            // current state without waiting for the next state change.
+            //
+            // The watch borrow guard isn't `Send`, so explicitly scope the
+            // borrow before any `.await` — clone out then drop the guard.
+            let initial = status_rx.borrow_and_update().clone();
+            if let Some(status) = initial {
+                let frame = WireResponse::Event(WitchEvent::StatusChanged(status));
+                if wire::write_frame_async(&mut writer, &frame).await.is_err() {
+                    return;
+                }
+            }
+
             loop {
                 tokio::select! {
                     Some(response) = resp_rx.recv() => {
@@ -183,18 +202,20 @@ async fn handle_connection(
                             return;
                         }
                     }
-                    result = event_rx.recv() => {
-                        match result {
-                            Ok(event) => {
-                                let frame = WireResponse::Event(event);
-                                if wire::write_frame_async(&mut writer, &frame).await.is_err() {
-                                    return;
-                                }
+                    changed = status_rx.changed() => {
+                        if changed.is_err() {
+                            // Sender dropped — Witch is shutting down.
+                            return;
+                        }
+                        // Scope the borrow guard so it's dropped before any
+                        // `.await` (the guard isn't `Send`). Skip `None` (only
+                        // seen before the first publish on a freshly started Witch).
+                        let snapshot = status_rx.borrow_and_update().clone();
+                        if let Some(status) = snapshot {
+                            let frame = WireResponse::Event(WitchEvent::StatusChanged(status));
+                            if wire::write_frame_async(&mut writer, &frame).await.is_err() {
+                                return;
                             }
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                                // Client fell behind — stale snapshots skipped, next recv is fresh
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                         }
                     }
                 }

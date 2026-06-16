@@ -24,7 +24,16 @@
 //! - Duplicate any of this logic
 
 use anyhow::{Context, Result};
-use lofty::config::{ParseOptions, WriteOptions};
+use lofty::config::{ParseOptions, ParsingMode, WriteOptions};
+
+/// ParseOptions that preserve tag values exactly as stored (no implicit conversions).
+///
+/// lofty's default ParseOptions converts TRACKNUMBER "01" to "1" by parsing as integer.
+/// This breaks round-trip tag comparison. Disable implicit conversions to preserve
+/// leading zeros and other formatting.
+pub(crate) fn parse_options() -> ParseOptions {
+    ParseOptions::new().parsing_mode(ParsingMode::Relaxed).implicit_conversions(false)
+}
 use lofty::file::AudioFile;
 use lofty::ogg::OggPictureStorage;
 use std::path::Path;
@@ -78,26 +87,26 @@ pub fn from_file(path: &Path) -> Result<TagSet> {
     match path_ext(path).as_str() {
         "flac" => {
             let mut reader = open_buffered(path)?;
-            let flac = lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default())
+            let flac = lofty::flac::FlacFile::read_from(&mut reader, parse_options())
                 .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
             Ok(tagset_from_vorbis_comments(flac.vorbis_comments()))
         }
         "opus" => {
             let mut reader = open_buffered(path)?;
-            let opus = lofty::ogg::OpusFile::read_from(&mut reader, ParseOptions::default())
+            let opus = lofty::ogg::OpusFile::read_from(&mut reader, parse_options())
                 .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
             Ok(tagset_from_vorbis_comments(Some(opus.vorbis_comments())))
         }
         "ogg" => {
             let mut reader = open_buffered(path)?;
             let vorbis =
-                lofty::ogg::VorbisFile::read_from(&mut reader, ParseOptions::default())
+                lofty::ogg::VorbisFile::read_from(&mut reader, parse_options())
                     .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
             Ok(tagset_from_vorbis_comments(Some(vorbis.vorbis_comments())))
         }
         "mp3" => {
             let mut reader = open_buffered(path)?;
-            let mp3 = lofty::mpeg::MpegFile::read_from(&mut reader, ParseOptions::default())
+            let mp3 = lofty::mpeg::MpegFile::read_from(&mut reader, parse_options())
                 .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
             Ok(tagset_from_id3v2(mp3.id3v2()))
         }
@@ -118,7 +127,7 @@ pub fn extract_picture_info(path: &Path) -> Option<PictureInfo> {
             let file = std::fs::File::open(path).ok()?;
             let mut reader = std::io::BufReader::new(file);
             let flac =
-                lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default()).ok()?;
+                lofty::flac::FlacFile::read_from(&mut reader, parse_options()).ok()?;
 
             let mut all_pics: Vec<&(
                 lofty::picture::Picture,
@@ -133,14 +142,14 @@ pub fn extract_picture_info(path: &Path) -> Option<PictureInfo> {
             let file = std::fs::File::open(path).ok()?;
             let mut reader = std::io::BufReader::new(file);
             let opus =
-                lofty::ogg::OpusFile::read_from(&mut reader, ParseOptions::default()).ok()?;
+                lofty::ogg::OpusFile::read_from(&mut reader, parse_options()).ok()?;
             pick_picture_info(opus.vorbis_comments().pictures())
         }
         "ogg" => {
             let file = std::fs::File::open(path).ok()?;
             let mut reader = std::io::BufReader::new(file);
             let vorbis =
-                lofty::ogg::VorbisFile::read_from(&mut reader, ParseOptions::default()).ok()?;
+                lofty::ogg::VorbisFile::read_from(&mut reader, parse_options()).ok()?;
             pick_picture_info(vorbis.vorbis_comments().pictures())
         }
         "mp3" => {
@@ -150,7 +159,7 @@ pub fn extract_picture_info(path: &Path) -> Option<PictureInfo> {
             let file = std::fs::File::open(path).ok()?;
             let mut reader = std::io::BufReader::new(file);
             let mp3 =
-                lofty::mpeg::MpegFile::read_from(&mut reader, ParseOptions::default()).ok()?;
+                lofty::mpeg::MpegFile::read_from(&mut reader, parse_options()).ok()?;
             let id3v2 = mp3.id3v2()?;
 
             let apic_pics: Vec<&lofty::picture::Picture> = id3v2
@@ -479,7 +488,7 @@ fn write_vorbis_tags_flac(path: &Path, tags: &TagSet) -> Result<()> {
     use lofty::ogg::VorbisComments;
 
     let mut reader = open_buffered(path)?;
-    let mut flac = lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default())
+    let mut flac = lofty::flac::FlacFile::read_from(&mut reader, parse_options())
         .with_context(|| format!("Failed to read FLAC: {}", path.display()))?;
 
     // Strip any non-standard ID3v2 tag: lofty can only remove (not write) ID3v2 in FLAC,
@@ -507,7 +516,7 @@ macro_rules! write_vorbis_ogg_format {
     ($fn_name:ident, $file_type:ty, $format_name:expr) => {
         fn $fn_name(path: &Path, tags: &TagSet) -> Result<()> {
             let mut reader = open_buffered(path)?;
-            let mut file = <$file_type>::read_from(&mut reader, ParseOptions::default())
+            let mut file = <$file_type>::read_from(&mut reader, parse_options())
                 .with_context(|| format!("Failed to read {}: {}", $format_name, path.display()))?;
             populate_vorbis_comments(file.vorbis_comments_mut(), tags);
             file.save_to_path(path, WriteOptions::default())
@@ -783,7 +792,7 @@ fn write_id3v2_tags_mp3(path: &Path, tags: &TagSet) -> Result<()> {
     ));
 
     let mut reader = open_buffered(path)?;
-    let mut mp3 = lofty::mpeg::MpegFile::read_from(&mut reader, ParseOptions::default())
+    let mut mp3 = lofty::mpeg::MpegFile::read_from(&mut reader, parse_options())
         .with_context(|| format!("Failed to read MP3: {}", path.display()))?;
 
     let pre_frames = mp3.id3v2().map(|t| t.into_iter().count()).unwrap_or(0);
@@ -1417,7 +1426,7 @@ mod tests {
         // Verify lofty can still read the file as valid FLAC
         let file = std::fs::File::open(&path).unwrap();
         let mut reader = std::io::BufReader::new(file);
-        let flac = lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default());
+        let flac = lofty::flac::FlacFile::read_from(&mut reader, parse_options());
         assert!(
             flac.is_ok(),
             "FLAC file corrupted after tag write: {:?}",
@@ -1954,7 +1963,7 @@ mod tests {
         // Verify lofty can still read the file as valid MPEG
         let file = std::fs::File::open(&path).unwrap();
         let mut reader = std::io::BufReader::new(file);
-        let mp3 = lofty::mpeg::MpegFile::read_from(&mut reader, ParseOptions::default());
+        let mp3 = lofty::mpeg::MpegFile::read_from(&mut reader, parse_options());
         assert!(
             mp3.is_ok(),
             "MP3 file corrupted after tag write: {:?}",

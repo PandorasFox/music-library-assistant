@@ -30,7 +30,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 symphonia = { version = "0.5", features = ["all"] }
 symphonia-core = "0.5"  # For custom codec registry
 symphonia-adapter-libopus = "0.2"  # Opus decoder via libopus
-lofty = "0.23.2"  # For reading/writing all tags
+lofty = "0.24"  # For reading/writing all tags
 
 # Audio encoding
 flac-codec = "1.3"     # Pure Rust FLAC encoder (zero C deps)

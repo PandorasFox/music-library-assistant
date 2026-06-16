@@ -1345,6 +1345,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lofty"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dec4feeff6c7d75093278133a06e827d7af6d2bfe20b0f331f9d10338a5ec7ca"
+dependencies = [
+ "byteorder",
+ "data-encoding",
+ "flate2",
+ "lofty_attr",
+ "log",
+ "ogg_pager",
+ "paste",
+]
+
+[[package]]
 name = "lofty_attr"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1480,7 +1495,7 @@ dependencies = [
  "imagesize",
  "indexmap",
  "kdl",
- "lofty",
+ "lofty 0.24.0",
  "mm-derive",
  "mm-meta",
  "mm-utils",
@@ -1525,7 +1540,7 @@ dependencies = [
  "bincode",
  "chrono",
  "indexmap",
- "lofty",
+ "lofty 0.23.2",
  "mm-utils",
  "serde",
  "serde_json",
@@ -1543,7 +1558,7 @@ dependencies = [
  "crossterm",
  "humantime",
  "image",
- "lofty",
+ "lofty 0.23.2",
  "mm-meta",
  "mm-ui",
  "mm-utils",

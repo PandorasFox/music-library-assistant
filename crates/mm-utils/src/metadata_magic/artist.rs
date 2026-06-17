@@ -5,6 +5,8 @@
 //! - Trimming whitespace
 //! - Collapsing multiple spaces
 //! - Converting underscores to spaces
+//! - Converting " & " to " and " (band name separator normalization)
+//! - Stripping leading "the " article so "The X" and "X" collide
 
 /// Normalize an artist name for collision detection.
 ///
@@ -12,6 +14,8 @@
 /// - Trim whitespace
 /// - Collapse multiple spaces
 /// - Normalize underscores to spaces
+/// - Normalize " & " to " and "
+/// - Strip leading "the " so "The Black Keys" and "Black Keys" collide
 ///
 /// # Example
 ///
@@ -20,6 +24,10 @@
 ///
 /// assert_eq!(normalize_artist("nervous_testpilot"), "nervous testpilot");
 /// assert_eq!(normalize_artist("Nervous Testpilot"), "nervous testpilot");
+/// assert_eq!(normalize_artist("Toots & the Maytals"), "toots and the maytals");
+/// assert_eq!(normalize_artist("Toots and the Maytals"), "toots and the maytals");
+/// assert_eq!(normalize_artist("The Black Keys"), "black keys");
+/// assert_eq!(normalize_artist("Black Keys"), "black keys");
 /// ```
 pub fn normalize_artist(s: &str) -> String {
     normalize_name_tag(s)
@@ -32,11 +40,13 @@ pub fn normalize_album_artist(s: &str) -> String {
 
 /// Shared normalization for name-like tags (artist, album_artist).
 fn normalize_name_tag(s: &str) -> String {
-    s.to_lowercase()
+    let normalized = s.to_lowercase()
         .replace('_', " ")
+        .replace(" & ", " and ")
         .split_whitespace()
         .collect::<Vec<_>>()
-        .join(" ")
+        .join(" ");
+    normalized.strip_prefix("the ").unwrap_or(&normalized).to_string()
 }
 
 #[cfg(test)]
@@ -52,6 +62,27 @@ mod tests {
             normalize_artist("  Nervous  Testpilot  "),
             "nervous testpilot"
         );
+    }
+
+    #[test]
+    fn test_normalize_artist_ampersand() {
+        assert_eq!(normalize_artist("Toots & the Maytals"), "toots and the maytals");
+        assert_eq!(normalize_artist("Toots and the Maytals"), "toots and the maytals");
+        assert_eq!(normalize_artist("Toots & The Maytals"), "toots and the maytals");
+        // & without surrounding spaces (e.g. "R&B" in a name) is not converted
+        assert_eq!(normalize_artist("Me&You"), "me&you");
+    }
+
+    #[test]
+    fn test_normalize_artist_the_prefix() {
+        assert_eq!(normalize_artist("The Black Keys"), "black keys");
+        assert_eq!(normalize_artist("Black Keys"), "black keys");
+        assert_eq!(normalize_artist("The Roots"), "roots");
+        // "The The" strips one article, leaving "the"
+        assert_eq!(normalize_artist("The The"), "the");
+        // "theatre", "then", etc. are not stripped (no trailing space after "the")
+        assert_eq!(normalize_artist("Thee Oh Sees"), "thee oh sees");
+        assert_eq!(normalize_artist("Theatre of Hate"), "theatre of hate");
     }
 
     #[test]

@@ -18,5 +18,5 @@ pub use album::{
     albums_equivalent, edition_rank, is_superior_edition, normalize_album, AlbumFormat,
     NormalizedAlbum,
 };
-pub use artist::{normalize_album_artist, normalize_artist};
+pub use artist::{article_sort_form, normalize_album_artist, normalize_artist};
 pub use genre::normalize_genre;

@@ -995,10 +995,17 @@ pub fn load_tag_canonicity_resolution(
             let Some(signal) = db.get_tag_canonicity_signal(key).ok().flatten() else {
                 continue;
             };
-            // Suggested canonical = most common variant (first in sorted-by-count list)
+            // Suggested canonical = most common variant, transformed to article-sort form
+            // for artist/album_artist tags ("The Black Keys" → "Black Keys, The").
             let suggested = signal.data.variants
                 .first()
-                .map(|(v, _)| v.clone());
+                .map(|(v, _)| {
+                    if matches!(tag_name, "artist" | "album_artist") {
+                        mm_utils::metadata_magic::article_sort_form(v)
+                    } else {
+                        v.clone()
+                    }
+                });
 
             // Query actual tag values per inode to build accurate variant→file mapping
             let tag_values_map = db

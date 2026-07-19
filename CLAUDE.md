@@ -230,6 +230,10 @@ When modifying computations (`meta::computations`), mutations (`meta::mutations`
 
 These documents are the source of truth for understanding system behavior. The source code comments reference them, and discrepancies should be treated as bugs.
 
+### Git Commits
+
+**Do not add Co-Authored-By lines or any other AI attribution to commit messages.** Just write the commit message describing the change.
+
 ### Dead Code Policy
 
 **Do not write dead code. Do not write "forward-looking" infrastructure that isn't immediately connected.** If you write it, it must be called. Period.
